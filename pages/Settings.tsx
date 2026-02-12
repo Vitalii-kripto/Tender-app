@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Building2, Users, Save, Trash2, Plus, FileText, Upload, Briefcase, Pencil, X } from 'lucide-react';
+import { Building2, Users, Save, Trash2, Plus, FileText, Upload, Briefcase, Pencil, X, Server, Key, ExternalLink, ShieldCheck, AlertTriangle } from 'lucide-react';
 import { CompanyProfile, Employee, CompanyDocument } from '../types';
-import { getCompanyProfile, saveCompanyProfile, getEmployees, saveEmployee, deleteEmployee } from '../services/geminiService';
+import { getCompanyProfile, saveCompanyProfile, getEmployees, saveEmployee, deleteEmployee, checkBackendHealth, API_BASE_URL } from '../services/geminiService';
 
 const Settings = () => {
-  const [activeTab, setActiveTab] = useState<'company' | 'team'>('company');
+  const [activeTab, setActiveTab] = useState<'company' | 'team' | 'system'>('company');
   const [company, setCompany] = useState<CompanyProfile>(getCompanyProfile());
   const [employees, setEmployees] = useState<Employee[]>(getEmployees());
+  const [isBackendOnline, setIsBackendOnline] = useState(false);
   
   // Form State
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -18,6 +19,7 @@ const Settings = () => {
     // Refresh data on mount
     setCompany(getCompanyProfile());
     setEmployees(getEmployees());
+    checkBackendHealth().then(setIsBackendOnline);
   }, []);
 
   const handleSaveCompany = () => {
@@ -118,6 +120,13 @@ const Settings = () => {
               >
                   <Users size={18} />
                   Управление командой
+              </button>
+              <button 
+                onClick={() => setActiveTab('system')}
+                className={`flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors ${activeTab === 'system' ? 'bg-white shadow text-blue-600' : 'text-slate-500 hover:bg-slate-100'}`}
+              >
+                  <Server size={18} />
+                  Система и API
               </button>
           </div>
 
@@ -291,6 +300,78 @@ const Settings = () => {
                                </table>
                            </div>
                        </div>
+                  </div>
+              )}
+
+              {activeTab === 'system' && (
+                  <div className="space-y-8 animate-in fade-in">
+                      
+                      {/* Server Status */}
+                      <div>
+                          <h3 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2">Статус сервера Backend</h3>
+                          <div className={`p-4 rounded-lg border flex items-start gap-4 ${isBackendOnline ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                              <div className={`p-2 rounded-full ${isBackendOnline ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                                  <Server size={24} />
+                              </div>
+                              <div>
+                                  <h4 className={`font-bold text-lg ${isBackendOnline ? 'text-emerald-800' : 'text-red-800'}`}>
+                                      {isBackendOnline ? 'Сервер подключен' : 'Сервер недоступен (Демо режим)'}
+                                  </h4>
+                                  <p className="text-sm text-slate-600 mt-1 mb-2">
+                                      {isBackendOnline 
+                                          ? `Подключение установлено по адресу: ${API_BASE_URL}` 
+                                          : 'Приложение работает в режиме демонстрации. Функции ИИ имитируются.'}
+                                  </p>
+                                  {!isBackendOnline && (
+                                      <div className="text-xs bg-white p-2 rounded border border-red-100 font-mono text-red-600">
+                                          Убедитесь, что запущен `python backend.py` и адрес в `services/geminiService.ts` указан верно.
+                                      </div>
+                                  )}
+                              </div>
+                          </div>
+                      </div>
+
+                      {/* API Key Instructions */}
+                      <div>
+                          <h3 className="text-lg font-bold text-slate-800 mb-4 border-b pb-2 flex items-center gap-2">
+                              <Key size={20} className="text-blue-600"/>
+                              Конфигурация Google Gemini API
+                          </h3>
+                          
+                          <div className="bg-blue-50 p-6 rounded-xl border border-blue-100">
+                              <h4 className="font-bold text-blue-900 mb-3">Где взять API ключ?</h4>
+                              <ol className="list-decimal list-inside space-y-3 text-sm text-blue-800 mb-6">
+                                  <li>Перейдите в <strong>Google AI Studio</strong>.</li>
+                                  <li>Создайте новый проект или выберите существующий.</li>
+                                  <li>Нажмите кнопку <strong>"Create API key"</strong>.</li>
+                                  <li>Скопируйте ключ и вставьте его в файл <code>.env</code> в корне проекта.</li>
+                              </ol>
+                              
+                              <a 
+                                href="https://aistudio.google.com/app/apikey" 
+                                target="_blank" 
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-lg font-bold hover:bg-blue-700 transition-colors shadow-sm"
+                              >
+                                  <ExternalLink size={18} />
+                                  Получить ключ в Google AI Studio
+                              </a>
+                          </div>
+                          
+                          <div className="mt-6 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                               <h4 className="font-bold text-slate-700 text-sm mb-2">Пример файла .env</h4>
+                               <code className="block bg-slate-800 text-slate-200 p-4 rounded text-xs font-mono">
+                                   API_KEY=AIzaSyB**************************<br/>
+                                   HOST=0.0.0.0<br/>
+                                   PORT=8000
+                               </code>
+                               <p className="text-xs text-slate-500 mt-2 flex items-center gap-1">
+                                   <ShieldCheck size={12}/>
+                                   Ваш ключ хранится только на вашем сервере (в файле .env) и никогда не передается клиенту.
+                               </p>
+                          </div>
+                      </div>
+
                   </div>
               )}
 
