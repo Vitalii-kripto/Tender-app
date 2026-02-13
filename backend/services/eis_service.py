@@ -3,8 +3,16 @@ from bs4 import BeautifulSoup
 import re
 import logging
 
-# Настройка логгера
-logger = logging.getLogger(__name__)
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("eis_service_log.txt", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("EIS_Service")
 
 class EisService:
     """
@@ -32,10 +40,10 @@ class EisService:
             with sync_playwright() as p:
                 try:
                     # Запускаем браузер
-                    # ВАЖНО: Если тут падает, значит не сделан `playwright install`
+                    logger.info("Launching Chromium...")
                     browser = p.chromium.launch(headless=True)
                 except Exception as browser_err:
-                    logger.error(f"CRITICAL: Failed to launch browser. Error: {browser_err}")
+                    logger.critical(f"Failed to launch browser. Error: {browser_err}")
                     print("HINT: Run 'playwright install' or 'python -m playwright install' in terminal.")
                     return []
                 
@@ -59,6 +67,7 @@ class EisService:
                     ]
                     full_url = f"{self.SEARCH_URL}?{'&'.join(params)}"
                     
+                    logger.info(f"Navigating to: {full_url}")
                     # Переход на страницу с увеличенным таймаутом
                     page.goto(full_url, timeout=45000, wait_until="domcontentloaded")
                     
@@ -66,7 +75,7 @@ class EisService:
                     try:
                         page.wait_for_selector("div.search-registry-entry-block", timeout=10000)
                     except:
-                        logger.info("No results found selector appeared.")
+                        logger.warning("No results found selector appeared or timeout.")
 
                     html_content = page.content()
                 except Exception as nav_err:
@@ -74,10 +83,12 @@ class EisService:
                     return []
                 finally:
                     browser.close()
+                    logger.info("Browser closed.")
 
                 # Парсинг
                 soup = BeautifulSoup(html_content, 'html.parser')
                 items = soup.find_all('div', class_='search-registry-entry-block')
+                logger.info(f"Found {len(items)} items on page.")
 
                 for item in items:
                     try:
@@ -114,10 +125,12 @@ class EisService:
                             "url": url
                         })
                     except Exception as parse_err:
+                        logger.error(f"Error parsing item: {parse_err}")
                         continue
 
         except Exception as e:
-            logger.error(f"Playwright Global Error: {e}")
+            logger.error(f"Playwright Global Error: {e}", exc_info=True)
             return []
 
+        logger.info(f"Returning {len(results)} tenders.")
         return results

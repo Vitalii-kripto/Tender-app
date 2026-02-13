@@ -6,9 +6,16 @@ from pdf2image import convert_from_path
 import platform
 import logging
 
-# Настройка логгера
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("doc_service_log.txt", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("DocumentService")
 
 # Безопасный импорт pytesseract
 try:
@@ -31,10 +38,13 @@ class DocumentService:
             tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
             if os.path.exists(tesseract_path):
                 pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            else:
+                logger.warning(f"Tesseract executable not found at: {tesseract_path}")
 
     async def save_file(self, file: UploadFile) -> str:
         """Сохраняет загруженный файл"""
         file_path = os.path.join(self.UPLOAD_DIR, file.filename)
+        logger.info(f"Saving file to: {file_path}")
         async with aiofiles.open(file_path, 'wb') as out_file:
             content = await file.read()
             await out_file.write(content)
@@ -47,6 +57,7 @@ class DocumentService:
         2. Если текста мало (<50 символов), пробуем OCR, но безопасно.
         """
         full_text = ""
+        logger.info(f"Extracting text from: {file_path}")
         
         # Шаг 1: Быстрое чтение (текстовый слой)
         try:
@@ -57,6 +68,7 @@ class DocumentService:
                 if extracted:
                     text_pages.append(extracted)
             full_text = "\n".join(text_pages)
+            logger.info(f"PyPDF extracted {len(full_text)} characters.")
         except Exception as e:
             logger.error(f"PyPDF Error: {e}")
 
@@ -65,6 +77,7 @@ class DocumentService:
             logger.info("Detected scanned document or empty text layer. Attempting OCR...")
             
             if not pytesseract:
+                logger.warning("OCR requested but Pytesseract is not available.")
                 return f"{full_text}\n\n[SYSTEM INFO] Текст не распознан: требуется библиотека Pytesseract."
 
             try:
@@ -74,6 +87,7 @@ class DocumentService:
                 except Exception as poppler_error:
                     error_str = str(poppler_error).lower()
                     if "poppler" in error_str or "not found" in error_str:
+                         logger.error("Poppler not found.")
                          return f"{full_text}\n\n[SYSTEM INFO] Для распознавания сканов установите Poppler (и добавьте в PATH)."
                     raise poppler_error
 
@@ -90,11 +104,13 @@ class DocumentService:
                 
                 if ocr_text:
                     full_text = "\n".join(ocr_text)
+                    logger.info("OCR successful.")
                 else:
+                    logger.warning("OCR ran but found no text.")
                     full_text += "\n\n[INFO] OCR отработал, но текст не найден (возможно, качество изображения низкое)."
 
             except Exception as e:
-                logger.error(f"OCR Global Error: {e}")
+                logger.error(f"OCR Global Error: {e}", exc_info=True)
                 return f"{full_text}\n\n[OCR ERROR] Не удалось выполнить распознавание: {str(e)}"
 
         return full_text

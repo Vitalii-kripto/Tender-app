@@ -4,6 +4,18 @@ from fake_useragent import UserAgent
 from sqlalchemy.orm import Session
 from ..models import ProductModel
 import re
+import logging
+
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("parser_service_log.txt", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("GidroizolParser")
 
 class GidroizolParser:
     """
@@ -17,6 +29,7 @@ class GidroizolParser:
             self.ua = UserAgent()
         except:
             self.ua = None
+            logger.warning("fake_useragent not initialized.")
 
     def _get_headers(self):
         user_agent = self.ua.random if self.ua else "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
@@ -40,11 +53,11 @@ class GidroizolParser:
         """
         Основной метод: парсит страницу и сохраняет/обновляет товары в БД.
         """
-        print(f"Parsing catalog: {self.BASE_URL}")
+        logger.info(f"Parsing catalog started: {self.BASE_URL}")
         try:
             response = requests.get(self.BASE_URL, headers=self._get_headers(), timeout=15)
             if response.status_code != 200:
-                print(f"Error fetching catalog: {response.status_code}")
+                logger.error(f"Error fetching catalog: Status Code {response.status_code}")
                 return []
 
             soup = BeautifulSoup(response.text, 'html.parser')
@@ -56,8 +69,11 @@ class GidroizolParser:
             parsed_products = []
 
             if not items:
+                logger.warning("Primary selectors failed. Trying fallbacks...")
                 # Fallback: если специфичные классы не найдены, ищем более общие
                 items = soup.find_all('div', class_=re.compile(r'item|product'))
+
+            logger.info(f"Found {len(items)} potential product elements.")
 
             for item in items:
                 try:
@@ -102,13 +118,13 @@ class GidroizolParser:
                     parsed_products.append(product)
 
                 except Exception as e:
-                    print(f"Error parsing item: {e}")
+                    logger.error(f"Error parsing specific item: {e}")
                     continue
 
             db.commit()
-            print(f"Successfully parsed {len(parsed_products)} items.")
+            logger.info(f"Successfully parsed and saved {len(parsed_products)} items.")
             return parsed_products
 
         except Exception as e:
-            print(f"Global parser error: {e}")
+            logger.critical(f"Global parser error: {e}", exc_info=True)
             return []

@@ -4,6 +4,18 @@ from google.genai import types
 from dotenv import load_dotenv
 import json
 import re
+import logging
+
+# --- LOGGING SETUP ---
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("ai_service_log.txt", encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("AiService")
 
 # Загружаем переменные окружения (.env)
 load_dotenv()
@@ -12,19 +24,23 @@ class AiService:
     """
     Сервис для работы с Google Gemini API.
     Выполняет анализ рисков, подбор аналогов и проверку соответствия.
+    Используется стабильная модель gemini-1.5-flash.
     """
     def __init__(self):
         self.api_key = os.getenv("API_KEY")
         if not self.api_key:
-            print("WARNING: API_KEY not found in environment variables.")
+            logger.warning("API_KEY not found in environment variables.")
             self.client = None
         else:
             self.client = genai.Client(api_key=self.api_key)
+            logger.info("Gemini Client initialized.")
 
     def analyze_legal_risks(self, text: str):
         if not self.client:
+            logger.error("Analyze Legal Risks called without API Key.")
             return [{"risk_level": "High", "description": "API Key не настроен на сервере."}]
 
+        logger.info(f"Analyzing legal risks. Text length: {len(text)}")
         prompt = f"""
         Роль: Юрист по тендерному праву РФ (44-ФЗ, 223-ФЗ).
         Задача: Проанализируй текст тендерной документации и найди риски.
@@ -38,7 +54,7 @@ class AiService:
         
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -46,13 +62,15 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
-            print(f"AI Error: {e}")
+            logger.error(f"AI Error (analyze_legal_risks): {e}", exc_info=True)
             return []
 
     def find_product_equivalent(self, tender_specs: str, catalog: list):
         if not self.client:
+            logger.error("Find product equivalent called without API Key.")
             return [{"id": "error", "match_reason": "API Key missing", "similarity_score": 0}]
 
+        logger.info(f"Finding product equivalent. Specs: {tender_specs[:50]}... Catalog size: {len(catalog)}")
         # Превращаем каталог в легкий контекст
         catalog_context = json.dumps([{"id": p['id'], "title": p['title'], "specs": p['specs']} for p in catalog])
 
@@ -75,7 +93,7 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -83,7 +101,7 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
-            print(f"AI Error: {e}")
+            logger.error(f"AI Error (find_product_equivalent): {e}", exc_info=True)
             return []
 
     def search_products_internet(self, query: str):
@@ -91,6 +109,7 @@ class AiService:
         if not self.client:
             return "API Key missing"
 
+        logger.info(f"Searching internet for product: {query}")
         # Промпт усилен для поиска АНАЛОГОВ и ЦЕН
         prompt = f"""
         ЗАДАЧА: Выполни поиск в Google и найди доступные в РФ гидроизоляционные материалы по запросу: "{query}".
@@ -113,7 +132,7 @@ class AiService:
         try:
             # Используем Google Search Tool
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -121,6 +140,7 @@ class AiService:
             )
             return response.text
         except Exception as e:
+            logger.error(f"Error searching internet: {e}", exc_info=True)
             return f"Error searching internet: {e}"
 
     def enrich_product_specs(self, product_name: str):
@@ -128,6 +148,7 @@ class AiService:
         if not self.client:
             return "API Key missing"
 
+        logger.info(f"Enriching specs for: {product_name}")
         prompt = f"""
         ЗАДАЧА: Найти официальный Технический Лист (TDS) или страницу товара в магазине для: "{product_name}".
         ОБЯЗАТЕЛЬНО ИСПОЛЬЗУЙ GOOGLE SEARCH. Мне нужны точные цифры, а не галлюцинации.
@@ -148,7 +169,7 @@ class AiService:
         
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -162,6 +183,7 @@ class AiService:
             text = response.text.strip().replace('**', '').replace('*', '')
             return text
         except Exception as e:
+            logger.error(f"Error enriching specs: {e}", exc_info=True)
             return f"Ошибка поиска характеристик: {e}"
 
     def extract_products_from_text(self, text: str):
@@ -169,6 +191,7 @@ class AiService:
         if not self.client:
             return []
 
+        logger.info(f"Extracting products from text. Length: {len(text)}")
         prompt = f"""
         Роль: Парсер строительных смет.
         Задача: Извлеки из текста список гидроизоляционных материалов и их характеристики.
@@ -188,7 +211,7 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -196,7 +219,7 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
-            print(f"Extraction Error: {e}")
+            logger.error(f"Extraction Error: {e}", exc_info=True)
             return []
 
     def compare_requirements_vs_proposal(self, requirements_text: str, proposal_json_str: str):
@@ -209,6 +232,7 @@ class AiService:
         if not self.client:
             return {"score": 0, "summary": "API Key missing", "items": []}
 
+        logger.info("Comparing requirements vs proposal.")
         prompt = f"""
         Роль: Строгий технадзор и аудитор.
         Задача: Проведи аудит предложения поставщика на соответствие ТЗ.
@@ -245,7 +269,7 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -254,12 +278,14 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
+            logger.error(f"Comparison Error: {e}", exc_info=True)
             return {"score": 0, "summary": f"Error: {e}", "items": []}
 
     def check_compliance(self, title: str, description: str, filenames: list):
         if not self.client:
             return {"overallStatus": "failed", "summary": "API Key missing"}
             
+        logger.info(f"Checking compliance for: {title}")
         prompt = f"""
         Role: Tender Compliance Officer (Russian FZ-44/223).
         Analyze if uploaded files match requirements for: "{title}".
@@ -271,7 +297,7 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -279,6 +305,7 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
+            logger.error(f"Compliance Check Error: {e}", exc_info=True)
             return {"overallStatus": "failed", "summary": str(e)}
 
     def extract_tender_details(self, text: str):
@@ -286,6 +313,7 @@ class AiService:
         if not self.client:
             return {}
 
+        logger.info(f"Extracting details from text. Length: {len(text)}")
         prompt = f"""
         Ты - ассистент по закупкам. Извлеки данные из текста документации.
         
@@ -311,7 +339,7 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.0-flash',
+                model='gemini-1.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -319,5 +347,5 @@ class AiService:
             )
             return json.loads(response.text)
         except Exception as e:
-            print(f"Extraction Error: {e}")
+            logger.error(f"Extraction Error: {e}", exc_info=True)
             return {}

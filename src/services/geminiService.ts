@@ -5,8 +5,8 @@ import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceR
 // =========================================================================================
 
 // Включаем принудительный демо-режим для деплоя без бэкенда.
-// Если false - пытается подключиться к API.
-const IS_DEMO_MODE = true; 
+// Если false - пытается подключиться к API (localhost:8000).
+const IS_DEMO_MODE = false; 
 
 export const API_BASE_URL = 'http://localhost:8000'; 
 

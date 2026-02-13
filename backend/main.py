@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
 import os
+import logging
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
@@ -12,8 +13,29 @@ from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
 
+# --- LOGGING SETUP ---
+log_file = "fastapi_app_log.txt"
+# Удаляем существующие хендлеры, если они есть, чтобы избежать дублирования при релоаде
+for handler in logging.root.handlers[:]:
+    logging.root.removeHandler(handler)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("FastAPI_Main")
+
 # --- SETUP ---
-Base.metadata.create_all(bind=engine)
+try:
+    logger.info("Initializing Database...")
+    Base.metadata.create_all(bind=engine)
+    logger.info("Database initialized successfully.")
+except Exception as e:
+    logger.critical(f"Database initialization failed: {e}", exc_info=True)
 
 app = FastAPI(title="TenderSmart Gidroizol API", version="2.0.0")
 
@@ -26,15 +48,21 @@ app.add_middleware(
 )
 
 # Services
-eis_service = EisService()
-parser_service = GidroizolParser()
-doc_service = DocumentService()
-ai_service = AiService()
+try:
+    logger.info("Initializing Services...")
+    eis_service = EisService()
+    parser_service = GidroizolParser()
+    doc_service = DocumentService()
+    ai_service = AiService()
+    logger.info("Services initialized.")
+except Exception as e:
+    logger.error(f"Service initialization error: {e}", exc_info=True)
 
 # --- ENDPOINTS ---
 
 @app.get("/")
 def read_root():
+    logger.info("Health check endpoint hit.")
     return {"status": "online", "system": "TenderSmart PRO Backend"}
 
 # --- CRM ENDPOINTS (Database Sync) ---
@@ -42,40 +70,47 @@ def read_root():
 @app.get("/api/crm/tenders")
 def get_crm_tenders(db: Session = Depends(get_db)):
     """Получить все тендеры из базы"""
+    logger.info("Fetching all CRM tenders.")
     return db.query(TenderModel).all()
 
 @app.post("/api/crm/tenders")
 def add_update_tender(tender: dict = Body(...), db: Session = Depends(get_db)):
     """Добавить или обновить тендер в CRM"""
-    existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
-    
-    if existing:
-        # Обновляем статус и поля
-        existing.status = tender.get('status', existing.status)
-        existing.risk_level = tender.get('risk_level', existing.risk_level)
-    else:
-        # Создаем новый
-        new_tender = TenderModel(
-            id=tender['id'],
-            eis_number=tender.get('eis_number', 'Unknown'),
-            title=tender['title'],
-            description=tender.get('description', ''),
-            initial_price=tender.get('initial_price', 0),
-            deadline=tender.get('deadline', '-'),
-            status=tender.get('status', 'Found'),
-            risk_level=tender.get('risk_level', 'Low'),
-            region=tender.get('region', 'РФ'),
-            law_type=tender.get('law_type', '44-ФЗ'),
-            url=tender.get('url', '')
-        )
-        db.add(new_tender)
-    
-    db.commit()
-    return {"status": "success"}
+    logger.info(f"Add/Update tender request: {tender.get('id')}")
+    try:
+        existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
+        
+        if existing:
+            existing.status = tender.get('status', existing.status)
+            existing.risk_level = tender.get('risk_level', existing.risk_level)
+            logger.info(f"Updated existing tender: {tender['id']}")
+        else:
+            new_tender = TenderModel(
+                id=tender['id'],
+                eis_number=tender.get('eis_number', 'Unknown'),
+                title=tender['title'],
+                description=tender.get('description', ''),
+                initial_price=tender.get('initial_price', 0),
+                deadline=tender.get('deadline', '-'),
+                status=tender.get('status', 'Found'),
+                risk_level=tender.get('risk_level', 'Low'),
+                region=tender.get('region', 'РФ'),
+                law_type=tender.get('law_type', '44-ФЗ'),
+                url=tender.get('url', '')
+            )
+            db.add(new_tender)
+            logger.info(f"Created new tender: {tender['id']}")
+        
+        db.commit()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error saving tender: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.delete("/api/crm/tenders/{tender_id}")
 def delete_tender(tender_id: str, db: Session = Depends(get_db)):
     """Удалить тендер из базы"""
+    logger.info(f"Deleting tender: {tender_id}")
     tender = db.query(TenderModel).filter(TenderModel.id == tender_id).first()
     if tender:
         db.delete(tender)
@@ -87,11 +122,13 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 @app.get("/api/search-tenders")
 async def search_tenders_endpoint(query: str):
     """Поиск через Playwright"""
+    logger.info(f"Search request received: {query}")
     return eis_service.search_tenders(query)
 
 @app.get("/api/products")
 def get_products_endpoint(db: Session = Depends(get_db)):
     """Получение сохраненных товаров из БД без запуска парсера"""
+    logger.info("Fetching products from DB.")
     products = db.query(ProductModel).all()
     result = []
     for p in products:
@@ -109,6 +146,7 @@ def get_products_endpoint(db: Session = Depends(get_db)):
 @app.get("/api/parse-catalog")
 async def parse_catalog_endpoint(db: Session = Depends(get_db)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
+    logger.info("Starting catalog parser manually.")
     products = parser_service.parse_and_save(db)
     result = []
     for p in products:
@@ -127,24 +165,28 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 
 @app.post("/api/ai/analyze-risks")
 async def api_analyze_risks(data: dict = Body(...)):
+    logger.info("AI Analysis request received.")
     text = data.get('text', '')
     return ai_service.analyze_legal_risks(text)
 
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):
     """Извлечение данных о тендере из текста"""
+    logger.info("AI Extract Details request.")
     text = data.get('text', '')
     return ai_service.extract_tender_details(text)
 
 @app.post("/api/ai/extract-products")
 async def api_extract_products(data: dict = Body(...)):
     """Извлечение списка товаров из сметы/КП"""
+    logger.info("AI Extract Products request.")
     text = data.get('text', '')
     return ai_service.extract_products_from_text(text)
 
 @app.post("/api/ai/enrich-specs")
 async def api_enrich_specs(data: dict = Body(...)):
     """Поиск характеристик товара в интернете"""
+    logger.info("AI Enrich Specs request.")
     product_name = data.get('product_name', '')
     result = ai_service.enrich_product_specs(product_name)
     return {"specs": result}
@@ -153,6 +195,7 @@ async def api_enrich_specs(data: dict = Body(...)):
 async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db)):
     specs = data.get('specs', '')
     mode = data.get('mode', 'database') # 'database' or 'internet'
+    logger.info(f"AI Match Product request. Mode: {mode}, Query len: {len(specs)}")
 
     if mode == 'internet':
         # Поиск в интернете через Grounding
@@ -168,6 +211,7 @@ async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db
 @app.post("/api/ai/validate-compliance")
 async def api_validate_compliance(data: dict = Body(...)):
     """Валидация ТЗ vs Материал (Complex)"""
+    logger.info("AI Compliance Validation request.")
     requirements = data.get('requirements', '')
     proposal = data.get('proposal', '[]')
     return ai_service.compare_requirements_vs_proposal(requirements, proposal)
@@ -175,21 +219,25 @@ async def api_validate_compliance(data: dict = Body(...)):
 @app.post("/api/ai/check-compliance")
 async def api_check_compliance(data: dict = Body(...)):
     """Проверка пакета документов"""
+    logger.info("AI Document Package Check request.")
     return ai_service.check_compliance(data['title'], data['description'], data['filenames'])
 
 @app.post("/api/tenders/upload")
 async def upload_file(file: UploadFile = File(...)):
+    logger.info(f"File upload request: {file.filename}")
     try:
         file_path = await doc_service.save_file(file)
         # Запускаем OCR или извлечение текста
         text = doc_service.extract_text_from_pdf(file_path)
+        logger.info("File processed successfully.")
         return {"text": text, "path": file_path}
     except Exception as e:
-        print(f"Upload Error: {e}")
+        logger.error(f"Upload Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/dashboard-stats")
 async def get_dashboard_stats(db: Session = Depends(get_db)):
+    logger.info("Dashboard stats requested.")
     count = db.query(TenderModel).count()
     return {
         "active_tenders": count,
