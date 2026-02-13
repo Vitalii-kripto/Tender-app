@@ -1,17 +1,14 @@
 import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceResult, Employee, CompanyProfile } from "../types";
 
 // =========================================================================================
-// КОНФИГУРАЦИЯ СЕРВЕРА
-// 
-// 1. Для работы на одном компьютере оставьте: 'http://localhost:8000'
-// 2. Если вы запускаете через NGROK (для доступа с другого ПК):
-//    - Запустите backend: ngrok http 8000
-//    - Скопируйте ссылку (https://....ngrok-free.app)
-//    - Вставьте её ниже вместо localhost
+// КОНФИГУРАЦИЯ
 // =========================================================================================
 
+// Включаем принудительный демо-режим для деплоя без бэкенда.
+// Если false - пытается подключиться к API.
+const IS_DEMO_MODE = true; 
+
 export const API_BASE_URL = 'http://localhost:8000'; 
-// Пример для Ngrok: export const API_BASE_URL = 'https://abcd-123.ngrok-free.app';
 
 const LOCAL_STORAGE_KEY_CRM = 'TENDER_SMART_CRM_DATA';
 const LOCAL_STORAGE_KEY_PRODUCTS = 'TENDER_SMART_PRODUCTS_DATA';
@@ -22,6 +19,7 @@ const LOCAL_STORAGE_KEY_COMPANY = 'TENDER_SMART_COMPANY';
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const checkBackendHealth = async (): Promise<boolean> => {
+    if (IS_DEMO_MODE) return false;
     try {
         const res = await fetch(`${API_BASE_URL}/`);
         return res.ok;
@@ -188,39 +186,48 @@ const deleteLocalTender = (id: string) => {
 // --- API CLIENT ---
 
 export const fetchDashboardStats = async (): Promise<DashboardStats> => {
+    const demoStats: DashboardStats = {
+        active_tenders: 124,
+        margin_val: "₽14.2M",
+        risks_count: 5,
+        contracts_count: 12,
+        chart_data: [
+            { name: 'Пн', Тендеры: 12, Выиграно: 2 },
+            { name: 'Вт', Тендеры: 19, Выиграно: 4 },
+            { name: 'Ср', Тендеры: 15, Выиграно: 1 },
+            { name: 'Чт', Тендеры: 22, Выиграно: 5 },
+            { name: 'Пт', Тендеры: 28, Выиграно: 7 },
+            { name: 'Сб', Тендеры: 10, Выиграно: 2 },
+            { name: 'Вс', Тендеры: 5, Выиграно: 0 },
+        ],
+        tasks: [
+            { id: '1', title: 'Подать заявку: Ремонт кровли МКД', time: 'Сегодня, 14:00', type: 'urgent' },
+            { id: '2', title: 'Отправить КП: Технониколь', time: 'Завтра, 10:00', type: 'warning' },
+            { id: '3', title: 'Проверить контракт №44-ФЗ', time: '12 окт', type: 'info' }
+        ],
+        is_demo: true
+    };
+
+    if (IS_DEMO_MODE) {
+        await delay(500);
+        return demoStats;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/dashboard-stats`);
         if (!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
-        console.warn("Backend unavailable, using DEMO data for Dashboard");
-        return {
-            active_tenders: 124,
-            margin_val: "₽14.2M",
-            risks_count: 5,
-            contracts_count: 12,
-            chart_data: [
-                { name: 'Пн', Тендеры: 12, Выиграно: 2 },
-                { name: 'Вт', Тендеры: 19, Выиграно: 4 },
-                { name: 'Ср', Тендеры: 15, Выиграно: 1 },
-                { name: 'Чт', Тендеры: 22, Выиграно: 5 },
-                { name: 'Пт', Тендеры: 28, Выиграно: 7 },
-                { name: 'Сб', Тендеры: 10, Выиграно: 2 },
-                { name: 'Вс', Тендеры: 5, Выиграно: 0 },
-            ],
-            tasks: [
-                { id: '1', title: 'Подать заявку: Ремонт кровли МКД', time: 'Сегодня, 14:00', type: 'urgent' },
-                { id: '2', title: 'Отправить КП: Технониколь', time: 'Завтра, 10:00', type: 'warning' },
-                { id: '3', title: 'Проверить контракт №44-ФЗ', time: '12 окт', type: 'info' }
-            ],
-            is_demo: true
-        };
+        return demoStats;
     }
 };
 
 // --- PRODUCT CATALOG ---
 
 export const getProductsFromBackend = async (): Promise<Product[]> => {
+    if (IS_DEMO_MODE) {
+        return getLocalProducts();
+    }
     try {
         const res = await fetch(`${API_BASE_URL}/api/products`);
         if (!res.ok) throw new Error("Backend error");
@@ -228,12 +235,47 @@ export const getProductsFromBackend = async (): Promise<Product[]> => {
         if (products.length > 0) saveLocalProducts(products);
         return products;
     } catch (e) {
-        console.warn("Backend unavailable, returning Local/Demo Products");
         return getLocalProducts();
     }
 };
 
 export const runBackendParser = async (): Promise<Product[]> => {
+    const demoData: Product[] = [
+        {
+            id: 'demo_cat_1',
+            title: 'Техноэласт ЭПП (ДЕМО)',
+            category: 'Битумно-полимерные',
+            material_type: 'Рулонный',
+            price: 385,
+            specs: { thickness_mm: 4.0, weight_kg_m2: 4.95, flexibility_temp_c: -25, tensile_strength_n: 600 },
+            url: 'https://gidroizol.ru'
+        },
+        {
+            id: 'demo_cat_2',
+            title: 'Унифлекс ТКП (ДЕМО)',
+            category: 'Битумно-полимерные',
+            material_type: 'Рулонный',
+            price: 295,
+            specs: { thickness_mm: 3.8, weight_kg_m2: 4.0, flexibility_temp_c: -20, tensile_strength_n: 500 },
+            url: 'https://gidroizol.ru'
+        },
+        {
+            id: 'demo_cat_3',
+            title: 'Биполь ЭПП (ДЕМО)',
+            category: 'Битумные',
+            material_type: 'Рулонный',
+            price: 220,
+            specs: { thickness_mm: 3.0, weight_kg_m2: 3.5, flexibility_temp_c: -15, tensile_strength_n: 400 },
+            url: 'https://gidroizol.ru'
+        }
+    ];
+
+    if (IS_DEMO_MODE) {
+        await delay(1500);
+        saveLocalProducts(demoData);
+        return demoData;
+    }
+
     try {
         const res = await fetch(`${API_BASE_URL}/api/parse-catalog`);
         if (!res.ok) throw new Error("Backend error");
@@ -241,37 +283,6 @@ export const runBackendParser = async (): Promise<Product[]> => {
         saveLocalProducts(products);
         return products;
     } catch (e) {
-        console.warn("Backend unavailable, using Demo Products simulation");
-        await delay(2000); 
-        const demoData: Product[] = [
-            {
-                id: 'demo_cat_1',
-                title: 'Техноэласт ЭПП (ДЕМО)',
-                category: 'Битумно-полимерные',
-                material_type: 'Рулонный',
-                price: 385,
-                specs: { thickness_mm: 4.0, weight_kg_m2: 4.95, flexibility_temp_c: -25, tensile_strength_n: 600 },
-                url: 'https://gidroizol.ru'
-            },
-            {
-                id: 'demo_cat_2',
-                title: 'Унифлекс ТКП (ДЕМО)',
-                category: 'Битумно-полимерные',
-                material_type: 'Рулонный',
-                price: 295,
-                specs: { thickness_mm: 3.8, weight_kg_m2: 4.0, flexibility_temp_c: -20, tensile_strength_n: 500 },
-                url: 'https://gidroizol.ru'
-            },
-            {
-                id: 'demo_cat_3',
-                title: 'Биполь ЭПП (ДЕМО)',
-                category: 'Битумные',
-                material_type: 'Рулонный',
-                price: 220,
-                specs: { thickness_mm: 3.0, weight_kg_m2: 3.5, flexibility_temp_c: -15, tensile_strength_n: 400 },
-                url: 'https://gidroizol.ru'
-            }
-        ];
         saveLocalProducts(demoData);
         return demoData;
     }
@@ -280,41 +291,46 @@ export const runBackendParser = async (): Promise<Product[]> => {
 // --- OTHER API CALLS ---
 
 export const searchTenders = async (query: string, catalogContext: string, isActiveOnly: boolean): Promise<Tender[]> => {
+    const demoTenders: Tender[] = [
+        {
+            id: 'demo_1',
+            eis_number: '0373200041521000001',
+            title: 'Капитальный ремонт кровли здания поликлиники №1 (ДЕМО)',
+            description: 'Выполнение работ по капитальному ремонту мягкой кровли с использованием битумно-полимерных материалов в два слоя. Требуется Техноэласт ЭПП.',
+            initial_price: 4500000,
+            deadline: '25.12.2023',
+            status: 'Found',
+            risk_level: 'Medium',
+            region: 'Москва',
+            law_type: '44-ФЗ',
+            url: 'https://zakupki.gov.ru'
+        },
+        {
+            id: 'demo_2',
+            eis_number: '0123200000321000055',
+            title: 'Поставка гидроизоляционных материалов для нужд ГУП "Водоканал" (ДЕМО)',
+            description: 'Требуется поставка: Техноэласт ЭПП или эквивалент. Объем: 5000 м2.',
+            initial_price: 1250000,
+            deadline: '28.12.2023',
+            status: 'Found',
+            risk_level: 'Low',
+            region: 'Санкт-Петербург',
+            law_type: '223-ФЗ',
+            url: 'https://zakupki.gov.ru'
+        }
+    ];
+
+    if (IS_DEMO_MODE) {
+        await delay(1000);
+        return demoTenders;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/search-tenders?query=${encodeURIComponent(query)}`);
         if (!response.ok) throw new Error("Server error");
         return await response.json();
     } catch (error) {
-        console.warn("Backend unavailable, using DEMO data for Search");
-        await delay(1000);
-        return [
-            {
-                id: 'demo_1',
-                eis_number: '0373200041521000001',
-                title: 'Капитальный ремонт кровли здания поликлиники №1 (ДЕМО)',
-                description: 'Выполнение работ по капитальному ремонту мягкой кровли с использованием битумно-полимерных материалов в два слоя. Требуется Техноэласт ЭПП.',
-                initial_price: 4500000,
-                deadline: '25.12.2023',
-                status: 'Found',
-                risk_level: 'Medium',
-                region: 'Москва',
-                law_type: '44-ФЗ',
-                url: 'https://zakupki.gov.ru'
-            },
-            {
-                id: 'demo_2',
-                eis_number: '0123200000321000055',
-                title: 'Поставка гидроизоляционных материалов для нужд ГУП "Водоканал" (ДЕМО)',
-                description: 'Требуется поставка: Техноэласт ЭПП или эквивалент. Объем: 5000 м2.',
-                initial_price: 1250000,
-                deadline: '28.12.2023',
-                status: 'Found',
-                risk_level: 'Low',
-                region: 'Санкт-Петербург',
-                law_type: '223-ФЗ',
-                url: 'https://zakupki.gov.ru'
-            }
-        ];
+        return demoTenders;
     }
 };
 
@@ -336,6 +352,21 @@ export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string):
 // --- AI CALLS (VIA BACKEND) ---
 
 export const analyzeLegalRisks = async (tenderText: string): Promise<LegalRisk[]> => {
+    const demoRisks: LegalRisk[] = [
+        {
+            document: "Проект контракта (п. 4.2)",
+            requirement: "Срок поставки: 2 дня с момента заявки",
+            deadline: "2 дня",
+            risk_level: "High",
+            description: "Критически малый срок поставки. Высокий риск не успеть с логистикой."
+        }
+    ];
+
+    if (IS_DEMO_MODE) {
+        await delay(2000);
+        return demoRisks;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/analyze-risks`, {
             method: 'POST',
@@ -345,21 +376,25 @@ export const analyzeLegalRisks = async (tenderText: string): Promise<LegalRisk[]
         if(!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
-        console.warn("Backend unavailable, using DEMO data for Legal Analysis");
-        await delay(2000);
-        return [
-            {
-                document: "Проект контракта (п. 4.2)",
-                requirement: "Срок поставки: 2 дня с момента заявки",
-                deadline: "2 дня",
-                risk_level: "High",
-                description: "Критически малый срок поставки. Высокий риск не успеть с логистикой."
-            }
-        ];
+        return demoRisks;
     }
 };
 
 export const findProductEquivalent = async (tenderSpecs: string): Promise<any> => {
+    const demoMatch = {
+             is_equivalent: true,
+             confidence: 0.95,
+             recommended_product_id: '1',
+             reasoning: "Материал 'Техноэласт ЭПП' полностью соответствует заявленным требованиям ТЗ: полиэфирная основа, толщина ~4мм, гибкость -25С. Это прямой аналог.",
+             critical_mismatches: [],
+             all_matches: []
+    };
+
+    if (IS_DEMO_MODE) {
+        await delay(1500);
+        return demoMatch;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/match-product`, {
             method: 'POST',
@@ -383,20 +418,20 @@ export const findProductEquivalent = async (tenderSpecs: string): Promise<any> =
         return { is_equivalent: false, confidence: 0, reasoning: "Ничего не найдено", critical_mismatches: [], all_matches: [] };
 
     } catch (e) {
-        console.warn("Backend unavailable, using DEMO data for Product Matching");
-        await delay(1500);
-        return {
-             is_equivalent: true,
-             confidence: 0.95,
-             recommended_product_id: '1',
-             reasoning: "Материал 'Техноэласт ЭПП' полностью соответствует заявленным требованиям ТЗ: полиэфирная основа, толщина ~4мм, гибкость -25С. Это прямой аналог.",
-             critical_mismatches: [],
-             all_matches: []
-        };
+        return demoMatch;
     }
 };
 
 export const searchProductsInternet = async (tenderSpecs: string): Promise<any> => {
+    const demoResult = { 
+        text: `[РЕЖИМ ДЕМО] Backend недоступен.\n\nИмитация ответа:\n1. Изопласт К-ЭПП-4.0 (~280 руб/м2)\n2. Филизол Супер ЭПП (~310 руб/м2)` 
+    };
+
+    if (IS_DEMO_MODE) {
+        await delay(2000);
+        return demoResult;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/match-product`, {
             method: 'POST',
@@ -406,15 +441,15 @@ export const searchProductsInternet = async (tenderSpecs: string): Promise<any> 
         if(!response.ok) throw new Error("Backend error");
         return await response.json(); 
     } catch (e) {
-        console.warn("Backend unavailable, using DEMO data for Internet Search");
-        await delay(2000);
-        return { 
-            text: `[РЕЖИМ ДЕМО] Backend недоступен.\n\nИмитация ответа:\n1. Изопласт К-ЭПП-4.0 (~280 руб/м2)\n2. Филизол Супер ЭПП (~310 руб/м2)` 
-        };
+        return demoResult;
     }
 };
 
 export const validateProductCompliance = async (docText: string): Promise<any> => {
+    if (IS_DEMO_MODE) {
+        await delay(1500);
+        return { is_compliant: false, issues: ["[ДЕМО] Ошибка проверки"], score: 0 };
+    }
      try {
         const response = await fetch(`${API_BASE_URL}/api/ai/validate-compliance`, {
             method: 'POST',
@@ -424,7 +459,6 @@ export const validateProductCompliance = async (docText: string): Promise<any> =
         if(!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
-        await delay(1500);
         return { is_compliant: false, issues: ["[ДЕМО] Ошибка проверки"], score: 0 };
     }
 };
@@ -432,6 +466,16 @@ export const validateProductCompliance = async (docText: string): Promise<any> =
 // --- NEW METHODS FOR COMPLEX VALIDATION ---
 
 export const extractProductsFromText = async (text: string): Promise<any[]> => {
+    const demoProducts = [
+        { name: "Техноэласт ЭПП", quantity: "2000 м2", specs: "Толщина 4.0мм, Полиэфир, Гибкость -25С" },
+        { name: "Праймер битумный №01", quantity: "500 кг", specs: "Ведро 20л, Расход 0.3 кг/м2" }
+    ];
+
+    if (IS_DEMO_MODE) {
+        await delay(1500);
+        return demoProducts;
+    }
+
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/extract-products`, {
             method: 'POST',
@@ -441,16 +485,15 @@ export const extractProductsFromText = async (text: string): Promise<any[]> => {
         if(!res.ok) throw new Error("Backend error");
         return await res.json();
     } catch (e) {
-        console.warn("Backend unavailable. Using DEMO extracted products.");
-        await delay(1500);
-        return [
-            { name: "Техноэласт ЭПП", quantity: "2000 м2", specs: "Толщина 4.0мм, Полиэфир, Гибкость -25С" },
-            { name: "Праймер битумный №01", quantity: "500 кг", specs: "Ведро 20л, Расход 0.3 кг/м2" }
-        ];
+        return demoProducts;
     }
 };
 
 export const enrichProductSpecs = async (productName: string): Promise<string> => {
+    if (IS_DEMO_MODE) {
+        await delay(1000);
+        return "[ДЕМО] Основа: Полиэфир, Толщина: 4.0мм, Вес: 4.95кг/м2, Гибкость: -25С.";
+    }
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/enrich-specs`, {
             method: 'POST',
@@ -461,13 +504,30 @@ export const enrichProductSpecs = async (productName: string): Promise<string> =
         const data = await res.json();
         return data.specs;
     } catch (e) {
-        console.warn("Backend unavailable for enrichment. Using Demo.");
-        await delay(1000);
         return "[ДЕМО] Backend недоступен. Невозможно выполнить поиск в Google.";
     }
 };
 
 export const validateComplexCompliance = async (requirements: string, proposalItems: any[]): Promise<any> => {
+    const demoCompliance = {
+        score: 45,
+        summary: "[ДЕМО] Предложение не полностью соответствует требованиям ТЗ.",
+        items: [
+            {
+                requirement_name: "Гидроизоляция (Полиэфир, -25С)",
+                proposal_name: "Техноэласт ЭПП",
+                real_specs_found: "В интернете: Техноэласт ЭПП имеет гибкость -25С.",
+                status: "OK",
+                comment: "Характеристики соответствуют."
+            }
+        ]
+    };
+
+    if (IS_DEMO_MODE) {
+        await delay(2000);
+        return demoCompliance;
+    }
+
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/validate-compliance`, {
             method: 'POST',
@@ -480,26 +540,28 @@ export const validateComplexCompliance = async (requirements: string, proposalIt
         if(!res.ok) throw new Error("Backend error");
         return await res.json();
     } catch (e) {
-        console.warn("Backend unavailable. Using DEMO compliance result.");
-        await delay(2000);
-        return {
-            score: 45,
-            summary: "[ДЕМО] Предложение не полностью соответствует требованиям ТЗ.",
-            items: [
-                {
-                    requirement_name: "Гидроизоляция (Полиэфир, -25С)",
-                    proposal_name: "Техноэласт ЭПП",
-                    real_specs_found: "В интернете: Техноэласт ЭПП имеет гибкость -25С.",
-                    status: "OK",
-                    comment: "Характеристики соответствуют."
-                }
-            ]
-        };
+        return demoCompliance;
     }
 };
 
 
 export const checkTenderCompliance = async (title: string, description: string, fileNames: string[]): Promise<ComplianceResult> => {
+    const demoCompliance: ComplianceResult = {
+        overallStatus: 'warning',
+        summary: '[ДЕМО] Обнаружены пропуски в комплекте документов.',
+        missingDocuments: ['Декларация о соответствии (СТ-1)', 'Решение об одобрении крупной сделки'],
+        checkedFiles: fileNames.map(name => ({
+            fileName: name,
+            status: name.toLowerCase().includes('form2') || name.includes('форма') ? 'valid' : 'warning',
+            comments: name.toLowerCase().includes('form2') ? ['Форма заполнена корректно'] : ['Требуется проверка']
+        }))
+    };
+
+    if (IS_DEMO_MODE) {
+        await delay(2000);
+        return demoCompliance;
+    }
+
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/check-compliance`, {
             method: 'POST',
@@ -509,23 +571,20 @@ export const checkTenderCompliance = async (title: string, description: string, 
         if(!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
-        await delay(2000);
-        return {
-            overallStatus: 'warning',
-            summary: '[ДЕМО] Обнаружены пропуски в комплекте документов.',
-            missingDocuments: ['Декларация о соответствии (СТ-1)', 'Решение об одобрении крупной сделки'],
-            checkedFiles: fileNames.map(name => ({
-                fileName: name,
-                status: name.toLowerCase().includes('form2') || name.includes('форма') ? 'valid' : 'warning',
-                comments: name.toLowerCase().includes('form2') ? ['Форма заполнена корректно'] : ['Требуется проверка']
-            }))
-        };
+        return demoCompliance;
     }
 };
 
 // --- NEW HELPER FUNCTIONS FOR MANUAL ADD ---
 
 export const uploadTenderFile = async (file: File): Promise<{text: string, path: string}> => {
+    if (IS_DEMO_MODE) {
+        await delay(1000);
+        return { 
+            text: `[DEMO TEXT FROM FILE: ${file.name}]\n\nТендерная документация.\nОбъект: Школа №5.\nТребуется ремонт кровли.`, 
+            path: "fake_path/doc.pdf" 
+        };
+    }
     try {
         const formData = new FormData();
         formData.append('file', file);
@@ -542,6 +601,16 @@ export const uploadTenderFile = async (file: File): Promise<{text: string, path:
 };
 
 export const extractDetailsFromText = async (text: string): Promise<any> => {
+    if (IS_DEMO_MODE) {
+        await delay(1500);
+        return {
+            eis_number: '1234567890123456789',
+            title: 'Закупка из загруженного файла (Демо)',
+            initial_price: 5000000,
+            deadline: '31.12.2024',
+            description: 'Автоматически извлеченное описание из файла (Демо режим).'
+        };
+    }
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/extract-details`, {
             method: 'POST',
@@ -560,6 +629,9 @@ export const extractDetailsFromText = async (text: string): Promise<any> => {
 // --- CRM SYNC ---
 
 export const getTendersFromBackend = async (): Promise<Tender[]> => {
+    if (IS_DEMO_MODE) {
+        return getLocalTenders();
+    }
     try {
         const res = await fetch(`${API_BASE_URL}/api/crm/tenders`);
         if(!res.ok) throw new Error("Backend error");
@@ -567,35 +639,34 @@ export const getTendersFromBackend = async (): Promise<Tender[]> => {
         localStorage.setItem(LOCAL_STORAGE_KEY_CRM, JSON.stringify(data));
         return data;
     } catch (e) {
-        console.warn("Backend unavailable, using LocalStorage fallback for CRM");
         return getLocalTenders();
     }
 };
 
 export const addOrUpdateTender = async (tender: Tender) => {
-    try {
-        const res = await fetch(`${API_BASE_URL}/api/crm/tenders`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(tender)
-        });
-        if (!res.ok) throw new Error("Backend sync failed");
-        saveLocalTender(tender);
-    } catch(e) {
-        console.warn("Backend unavailable. Saving to LocalStorage.");
-        saveLocalTender(tender);
+    saveLocalTender(tender);
+    if (!IS_DEMO_MODE) {
+        try {
+            await fetch(`${API_BASE_URL}/api/crm/tenders`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(tender)
+            });
+        } catch(e) {
+            console.warn("Backend sync failed");
+        }
     }
 };
 
 export const deleteTenderFromBackend = async (id: string) => {
-    try {
-        const res = await fetch(`${API_BASE_URL}/api/crm/tenders/${id}`, {
-            method: 'DELETE'
-        });
-        if (!res.ok) throw new Error("Backend sync failed");
-        deleteLocalTender(id);
-    } catch(e) {
-        console.warn("Backend unavailable. Deleting from LocalStorage.");
-        deleteLocalTender(id);
+    deleteLocalTender(id);
+    if (!IS_DEMO_MODE) {
+        try {
+            await fetch(`${API_BASE_URL}/api/crm/tenders/${id}`, {
+                method: 'DELETE'
+            });
+        } catch(e) {
+            console.warn("Backend sync failed");
+        }
     }
 };
