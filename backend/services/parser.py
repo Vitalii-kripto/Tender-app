@@ -9,7 +9,7 @@ from urllib.parse import urlparse, urljoin, urlunparse, parse_qs, urlencode, url
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from langchain_community.document_loaders import RecursiveUrlLoader
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Set
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
@@ -52,64 +52,54 @@ class GidroizolParser:
 
     def is_product_page(self, soup: BeautifulSoup, url: str) -> bool:
         """
-        Проверка валидности страницы товара (логика из скрипта).
+        Проверка валидности страницы товара.
         """
-        # 1. По кнопке "Заказать"
-        order_btn = soup.select_one('a.order__item.open__popup[href="#order__item"]')
-        if order_btn:
-            btn_text = order_btn.get_text(strip=True).lower()
-            if 'заказать' in btn_text:
-                return True
-            
-        # 2. Альтернативные селекторы кнопки
-        alt_selectors = [
-            'a[href="#order__item"][class*="order__item"]',
-            'a[href="#order__item"][class*="open__popup"]',
-            'a.order__item[href="#order__item"]',
-            'a.open__popup[href="#order__item"]'
-        ]
-        for sel in alt_selectors:
-            el = soup.select_one(sel)
-            if el and 'заказать' in el.get_text(strip=True).lower():
-                return True
+        # 1. По кнопке "Заказать" или "В корзину"
+        buy_buttons = soup.select('a.order__item, button.to-cart, a.btn-buy, div.buy-block')
+        if buy_buttons:
+            for btn in buy_buttons:
+                txt = btn.get_text(strip=True).lower()
+                if 'заказать' in txt or 'корзин' in txt or 'купить' in txt:
+                    return True
         
-        # 3. Дополнительная проверка из скрипта пользователя: поиск текста, но строгий фильтр
+        # 2. По наличию цены и заголовка товара
+        price = soup.select_one('.price_val, .price-block, .detail-price, div.price')
+        h1 = soup.select_one('h1')
+        if price and h1:
+            return True
+
         return False
 
     def _parse_prices_sync(self, html: str) -> float:
-        """Синхронный парсинг цены (как в скрипте)"""
+        """Синхронный парсинг цены"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             price = 0.0
-            price_blocks = soup.select('div.price-block-wrap .price-block')
             
-            found_retail = False
+            # Попытка 1: Блоки с ценами (розница/опт)
+            price_blocks = soup.select('div.price-block-wrap .price-block')
             for block in price_blocks:
                 txt = block.get_text(strip=True)
-                span = block.select_one('span')
-                val_text = span.get_text(strip=True) if span else ""
-                
+                val = block.select_one('span')
+                val_text = val.get_text(strip=True) if val else ""
                 if 'РОЗН' in txt:
-                    price = self._clean_price(val_text)
-                    found_retail = True
-                    break
+                    p = self._clean_price(val_text)
+                    if p > 0: return p
             
-            if not found_retail:
-                fallback_sels = [
-                    ('div.dop-price strong', lambda x: x.get_text(strip=True)),
-                    ('span.price', lambda x: x.get_text(strip=True)),
-                    ('div.price-block', lambda x: x.get_text(strip=True)),
-                    ('meta[itemprop="price"]', lambda x: x.get('content', ''))
-                ]
-                for sel, extractor in fallback_sels:
-                    el = soup.select_one(sel)
-                    if el:
-                        raw = extractor(el)
-                        p = self._clean_price(raw)
-                        if p > 0:
-                            price = p
-                            break
-            return price
+            # Попытка 2: Мета-теги
+            meta_price = soup.select_one('meta[itemprop="price"]')
+            if meta_price:
+                return self._clean_price(meta_price.get('content', ''))
+
+            # Попытка 3: Общие селекторы
+            fallback_sels = ['div.dop-price strong', 'span.price', 'div.price-block', '.product-price']
+            for sel in fallback_sels:
+                el = soup.select_one(sel)
+                if el:
+                    p = self._clean_price(el.get_text(strip=True))
+                    if p > 0: return p
+            
+            return 0.0
         except Exception:
             return 0.0
 
@@ -122,52 +112,37 @@ class GidroizolParser:
                 return None
 
             # 1. Заголовок
-            title_selectors = [
-                'section#tovar h1', 'h1', 'div.product-title', 'header.product-header h1',
-                'div.product-info h1', 'article.product h1', 'div.product-card h1'
-            ]
             title = "Не указано"
-            for s in title_selectors:
-                el = soup.select_one(s)
-                if el:
-                    title = el.get_text(strip=True)
-                    break
+            h1 = soup.select_one('h1, div.product-title')
+            if h1:
+                title = h1.get_text(strip=True)
 
             # 2. Категория
-            breadcrumbs = [b.get_text(strip=True) for b in soup.select('div.breadcrumbs a, nav.breadcrumb a, ul.breadcrumb-list a')]
-            valid_crumbs = [b for b in breadcrumbs if b.lower() not in ['главная', 'home', 'каталог', '', 'все категории']]
-            category = valid_crumbs[-1] if valid_crumbs else "Гидроизоляция"
+            breadcrumbs = [b.get_text(strip=True) for b in soup.select('div.breadcrumbs a, ul.breadcrumb li')]
+            category = breadcrumbs[-2] if len(breadcrumbs) >= 2 else "Гидроизоляция"
 
             # 3. Характеристики
             specs = {}
-            char_selectors = [
-                'div.table_dop-info.ver2 .table-row', 'div.product-specs .spec-row', 'table.product-table tr',
-                'div.product-info .spec-item', 'ul.specifications li'
-            ]
-            
-            for sel in char_selectors:
-                rows = soup.select(sel)
-                if rows:
-                    for row in rows:
-                        cells = row.select('div.table-cell, td')
-                        if len(cells) >= 2:
-                            k = cells[0].get_text(strip=True).replace(':', '')
-                            v = cells[1].get_text(strip=True)
-                            
-                            k_lower = k.lower()
-                            if 'толщина' in k_lower: specs['thickness_mm'] = self._clean_price(v)
-                            elif 'вес' in k_lower and 'м2' in k_lower: specs['weight_kg_m2'] = self._clean_price(v)
-                            elif 'гибкость' in k_lower: specs['flexibility_temp_c'] = v
-                            elif 'разрывная' in k_lower: specs['tensile_strength_n'] = self._clean_price(v)
-                            else:
-                                specs[k] = v
-                    break
+            rows = soup.select('div.table_dop-info .table-row, table.specs tr, .product-features li')
+            for row in rows:
+                cells = row.select('div.table-cell, td, span')
+                if len(cells) >= 2:
+                    k = cells[0].get_text(strip=True).replace(':', '')
+                    v = cells[1].get_text(strip=True)
+                    
+                    k_lower = k.lower()
+                    if 'толщина' in k_lower: specs['thickness_mm'] = self._clean_price(v)
+                    elif 'вес' in k_lower and 'м2' in k_lower: specs['weight_kg_m2'] = self._clean_price(v)
+                    elif 'гибкость' in k_lower: specs['flexibility_temp_c'] = v
+                    elif 'разрывная' in k_lower: specs['tensile_strength_n'] = self._clean_price(v)
+                    else:
+                        specs[k] = v
 
-            # 4. Цена (вынесено в метод)
+            # 4. Цена
             price = self._parse_prices_sync(html)
 
             # 5. Описание
-            desc_el = soup.select_one('div.product-description, section#tovar .description, div.item-description')
+            desc_el = soup.select_one('div.product-description, div.desc')
             description = desc_el.get_text(strip=True)[:1000] if desc_el else ""
 
             return {
@@ -175,7 +150,7 @@ class GidroizolParser:
                 "url": url,
                 "price": price,
                 "category": category,
-                "material_type": "Рулонный" if "рулон" in category.lower() or "рулон" in title.lower() else "Гидроизоляция",
+                "material_type": "Рулонный" if "рулон" in category.lower() else "Гидроизоляция",
                 "specs": specs,
                 "description": description
             }
@@ -185,36 +160,41 @@ class GidroizolParser:
             return None
 
     def _extractor_raw(self, html: str) -> str:
-        """Простой экстрактор для RecursiveUrlLoader, возвращающий сырой HTML"""
         return html
 
     async def crawl(self, db: Session):
         """Основной цикл обхода, использующий RecursiveUrlLoader"""
         logger.info("Starting Crawl using RecursiveUrlLoader logic...")
         
-        # Конфигурация Loader как в скрипте пользователя
-        # Ограничиваем глубину 3, чтобы не зависнуть в вебе
+        # HEADERS are crucial for scraping to look like a browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+
+        # Используем BASE_URL, чтобы не ограничиваться префиксом /9
+        # prevent_outside=True оставим True, но для BASE_URL, чтобы не уходить с домена
         loader = RecursiveUrlLoader(
-            url=self.CATALOG_URL,
-            max_depth=3, 
+            url=self.BASE_URL,
+            max_depth=3, # Увеличиваем глубину
             extractor=self._extractor_raw,
-            prevent_outside=True,
-            timeout=10,
-            use_async=False, # Как в скрипте пользователя
-            exclude_dirs=["contacts", "about", "news", "blog", "articles", "login", "filter"]
+            prevent_outside=True, # Не уходим с gidroizol.ru
+            timeout=20,
+            use_async=False, 
+            exclude_dirs=["contacts", "about", "news", "blog", "articles", "login", "filter", "basket", "search", "auth"],
+            headers=headers
         )
 
         logger.info("Invoking loader.load() in thread pool...")
         
-        # Запускаем блокирующий load() в отдельном потоке
-        documents = await asyncio.to_thread(loader.load)
-        logger.info(f"RecursiveUrlLoader finished. Loaded {len(documents)} documents.")
+        try:
+            # Запускаем блокирующий load() в отдельном потоке
+            documents = await asyncio.to_thread(loader.load)
+            logger.info(f"RecursiveUrlLoader finished. Loaded {len(documents)} documents.")
+        except Exception as e:
+            logger.error(f"RecursiveUrlLoader failed: {e}")
+            return []
 
         saved_count = 0
-        
-        # Обработка документов
-        # В скрипте пользователя здесь использовался ThreadPoolExecutor для доп. запросов (города),
-        # но мы используем его для парсинга, чтобы не блокировать event loop.
         
         with ThreadPoolExecutor(max_workers=8) as executor:
             loop = asyncio.get_event_loop()
@@ -224,11 +204,9 @@ class GidroizolParser:
                 url = doc.metadata.get('source', '')
                 if not url: continue
                 
-                # Фильтрация
-                if 'city=' in url: continue
-                if any(ext in url for ext in ['.jpg', '.png', '.pdf']): continue
-
-                # Запускаем парсинг в пуле потоков
+                # Фильтрация мусора
+                if any(x in url for x in ['login', 'filter', 'sort', 'view', 'print']): continue
+                
                 tasks.append(
                     loop.run_in_executor(executor, self.parse_product_page, url, doc.page_content)
                 )
@@ -242,8 +220,8 @@ class GidroizolParser:
             for data in results:
                 if not data: continue
                 
-                # Валидация
-                if data['price'] == 0 and not data['title']: continue
+                # Валидация: должна быть цена или хотя бы название
+                if data['price'] == 0 and len(data['title']) < 3: continue
 
                 existing = db.query(ProductModel).filter(ProductModel.url == data['url']).first()
                 if not existing:
