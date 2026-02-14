@@ -147,7 +147,9 @@ def get_products_endpoint(db: Session = Depends(get_db)):
 async def parse_catalog_endpoint(db: Session = Depends(get_db)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
     logger.info("Starting catalog parser manually.")
-    products = parser_service.parse_and_save(db)
+    # IMPORTANT: await because the parser is now async for performance
+    products = await parser_service.parse_and_save(db)
+    
     result = []
     for p in products:
         result.append({
