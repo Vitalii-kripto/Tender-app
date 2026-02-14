@@ -22,7 +22,7 @@ logger = logging.getLogger("GidroizolParser")
 class GidroizolParser:
     """
     Асинхронный парсер для gidroizol.ru.
-    Логика портирована из рабочего скрипта (parser_async_city_log.txt).
+    Логика портирована из рабочего скрипта пользователя.
     """
     BASE_URL = "https://gidroizol.ru"
     CATALOG_URL = "https://gidroizol.ru/9"
@@ -104,8 +104,10 @@ class GidroizolParser:
         """
         # Основной признак из скрипта: a.order__item.open__popup[href="#order__item"]
         order_btn = soup.select_one('a.order__item.open__popup[href="#order__item"]')
-        if order_btn and 'заказать' in order_btn.get_text(strip=True).lower():
-            return True
+        if order_btn:
+            btn_text = order_btn.get_text(strip=True).lower()
+            if 'заказать' in btn_text:
+                return True
             
         # Альтернативные селекторы из скрипта
         alt_selectors = [
@@ -115,7 +117,8 @@ class GidroizolParser:
             'a.open__popup[href="#order__item"]'
         ]
         for sel in alt_selectors:
-            if soup.select_one(sel):
+            el = soup.select_one(sel)
+            if el and 'заказать' in el.get_text(strip=True).lower():
                 return True
                 
         return False
@@ -189,11 +192,16 @@ class GidroizolParser:
             
             if not found_retail:
                 # Fallback selectors from script
-                fallback_sels = ['div.dop-price strong', 'span.price', 'div.price-block', 'meta[itemprop="price"]']
-                for sel in fallback_sels:
+                fallback_sels = [
+                    ('div.dop-price strong', lambda x: x.get_text(strip=True)),
+                    ('span.price', lambda x: x.get_text(strip=True)),
+                    ('div.price-block', lambda x: x.get_text(strip=True)),
+                    ('meta[itemprop="price"]', lambda x: x.get('content', ''))
+                ]
+                for sel, extractor in fallback_sels:
                     el = soup.select_one(sel)
                     if el:
-                        raw = el.get('content') if el.name == 'meta' else el.get_text(strip=True)
+                        raw = extractor(el)
                         p = self._clean_price(raw)
                         if p > 0:
                             price = p
