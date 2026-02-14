@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urljoin, urlunparse, parse_qs, urlencode, url
 import requests
 from concurrent.futures import ThreadPoolExecutor
 from langchain_community.document_loaders import RecursiveUrlLoader
+from typing import Optional, Dict
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
