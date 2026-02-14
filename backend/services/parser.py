@@ -22,39 +22,42 @@ logger = logging.getLogger("GidroizolParser")
 class GidroizolParser:
     """
     Асинхронный парсер для gidroizol.ru.
-    Адаптирован для работы внутри FastAPI сервиса.
+    Реализует динамический поиск категорий для предотвращения ошибок 404 при смене структуры сайта.
     """
     BASE_URL = "https://gidroizol.ru"
-    ASYNC_CONCURRENCY = 5  # Ограничение кол-ва одновременных запросов
-    ASYNC_TIMEOUT = 15
+    ASYNC_CONCURRENCY = 10  # Увеличим для скорости, т.к. многие ссылки могут быть не товарами
+    ASYNC_TIMEOUT = 20
 
     def __init__(self):
         self.visited_urls = set()
-        self.product_urls = set()
 
     def _clean_price(self, price_text: str) -> float:
         """Очищает цену и возвращает float"""
         if not price_text: return 0.0
-        clean = re.sub(r'[^\d.]', '', price_text.replace(',', '.').replace(' ', ''))
+        # Удаляем &nbsp; и пробелы, заменяем запятую на точку
+        clean = re.sub(r'[^\d.,]', '', price_text.replace('&nbsp;', '').replace(' ', ''))
+        clean = clean.replace(',', '.')
         try:
+            # Если есть несколько точек/запятых, берем первую валидную часть
+            # Например 1.200.00 -> 1200.00
             return float(clean)
         except ValueError:
             return 0.0
 
-    def normalize_url(self, url: str) -> str:
-        parsed = urlparse(url)
-        scheme = parsed.scheme or 'https'
-        netloc = parsed.netloc.replace('www.', '')
-        path = parsed.path.rstrip('/')
-        return urlunparse((scheme, netloc, path, '', '', ''))
-
     async def _fetch(self, session, url):
-        """Асинхронная загрузка страницы с повторными попытками"""
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        """Асинхронная загрузка страницы с имитацией браузера"""
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7'
+        }
         try:
-            async with session.get(url, headers=headers, timeout=self.ASYNC_TIMEOUT) as response:
+            async with session.get(url, headers=headers, timeout=self.ASYNC_TIMEOUT, ssl=False) as response:
                 if response.status == 200:
                     return await response.text()
+                elif response.status == 404:
+                    logger.warning(f"Страница не найдена (404): {url}")
+                    return None
                 else:
                     logger.warning(f"Status {response.status} for {url}")
                     return None
@@ -62,79 +65,82 @@ class GidroizolParser:
             logger.error(f"Error fetching {url}: {e}")
             return None
 
-    def is_product_page(self, soup: BeautifulSoup, url: str) -> bool:
-        """Определяет, является ли страница карточкой товара"""
-        # Проверка по наличию кнопки "Заказать" или специфичных блоков цены
-        order_btn = soup.select_one('a[href="#order__item"], .price-block')
-        if order_btn:
-            return True
-        return False
+    def is_product_page(self, soup: BeautifulSoup) -> bool:
+        """
+        Проверяет, является ли страница карточкой товара.
+        Ищет признаки: цена, кнопка купить, наличие характеристик.
+        """
+        # 1. Наличие цены
+        has_price = bool(soup.find(itemprop="price") or soup.select_one('.price, .product-price, .detail-price'))
+        # 2. Наличие кнопки "В корзину" или "Заказать"
+        has_buy_btn = bool(soup.select_one('.btn-buy, .add-to-cart, button[name="add"], a[href*="add2basket"]'))
+        
+        return has_price or has_buy_btn
 
     def parse_product_page(self, url: str, html: str) -> Optional[Dict]:
-        """
-        Логика извлечения данных со страницы товара (из рабочего скрипта)
-        """
+        """Парсинг карточки товара"""
         try:
             soup = BeautifulSoup(html, 'html.parser')
             
-            if not self.is_product_page(soup, url):
+            if not self.is_product_page(soup):
                 return None
 
-            # 1. Заголовок
-            title_selectors = ['h1', 'div.product-title', 'section#tovar h1']
-            title = "Не указано"
-            for s in title_selectors:
-                el = soup.select_one(s)
-                if el:
-                    title = el.get_text(strip=True)
-                    break
+            # 1. Заголовок (H1)
+            title_el = soup.find('h1')
+            title = title_el.get_text(strip=True) if title_el else "Без названия"
             
-            # 2. Цена (Приоритет: Розничная -> Обычная -> Мета)
+            # 2. Цена
             price = 0.0
-            price_blocks = soup.select('div.price-block')
-            for block in price_blocks:
-                txt = block.get_text(strip=True)
-                if 'РОЗН' in txt or not price:
-                    val_el = block.select_one('span')
-                    if val_el:
-                        price = self._clean_price(val_el.get_text(strip=True))
+            # Пробуем мета-тег (самый надежный способ для Schema.org)
+            meta_price = soup.find(itemprop="price")
+            if meta_price:
+                content = meta_price.get('content') or meta_price.get_text(strip=True)
+                price = self._clean_price(content)
             
+            # Если нет мета-тега, ищем визуальную цену
             if price == 0:
-                meta_price = soup.select_one('meta[itemprop="price"]')
-                if meta_price:
-                    price = self._clean_price(meta_price.get('content'))
+                price_selectors = ['.price_val', '.price', '.catalog-element-price', '.detail_price']
+                for sel in price_selectors:
+                    el = soup.select_one(sel)
+                    if el:
+                        price = self._clean_price(el.get_text(strip=True))
+                        if price > 0: break
 
-            # 3. Характеристики (Specs)
+            # 3. Характеристики
             specs = {}
-            char_rows = soup.select('div.table_dop-info .table-row, table.product-table tr')
-            for row in char_rows:
-                cells = row.select('div.table-cell, td')
-                if len(cells) >= 2:
-                    k = cells[0].get_text(strip=True).replace(':', '')
-                    v = cells[1].get_text(strip=True)
+            # Ищем таблицы характеристик (обычно table или список div)
+            rows = soup.select('table tr, .props_group .prop_line')
+            for row in rows:
+                cols = row.select('td, .prop_name, .prop_value')
+                if len(cols) >= 2:
+                    key = cols[0].get_text(strip=True).replace(':', '')
+                    val = cols[1].get_text(strip=True)
                     
-                    # Маппинг ключей для БД
-                    if 'толщина' in k.lower(): specs['thickness_mm'] = self._clean_price(v)
-                    elif 'вес' in k.lower(): specs['weight_kg_m2'] = self._clean_price(v)
-                    elif 'гибкость' in k.lower(): specs['flexibility_temp_c'] = v
-                    elif 'разрывная' in k.lower(): specs['tensile_strength_n'] = self._clean_price(v)
+                    k_lower = key.lower()
+                    if 'толщина' in k_lower: specs['thickness_mm'] = self._clean_price(val)
+                    elif 'вес' in k_lower and 'м2' in k_lower: specs['weight_kg_m2'] = self._clean_price(val)
+                    elif 'гибкость' in k_lower: specs['flexibility_temp_c'] = val
+                    elif 'разрывная' in k_lower: specs['tensile_strength_n'] = self._clean_price(val)
                     else:
-                        specs[k] = v
+                        specs[key] = val
 
-            # 4. Категория (Хлебные крошки)
-            breadcrumbs = [b.get_text(strip=True) for b in soup.select('.breadcrumbs a, .breadcrumb a')]
-            category = breadcrumbs[-2] if len(breadcrumbs) > 1 else "Гидроизоляция"
+            # 4. Категория (Breadcrumbs)
+            breadcrumbs = soup.select('.breadcrumbs a, .breadcrumb-item a')
+            category = "Гидроизоляция"
+            if len(breadcrumbs) >= 3:
+                # Обычно 0=Главная, 1=Каталог, 2=Категория
+                category = breadcrumbs[-2].get_text(strip=True)
 
             # 5. Описание
-            desc_el = soup.select_one('.product-description, .description')
-            description = desc_el.get_text(strip=True)[:1000] if desc_el else ""
+            desc_el = soup.find(itemprop="description") or soup.select_one('.detail_text, .product-desc')
+            description = desc_el.get_text(strip=True)[:2000] if desc_el else ""
 
             return {
                 "title": title,
                 "url": url,
                 "price": price,
                 "category": category,
-                "material_type": "Рулонный" if "рулон" in category.lower() else "Гидроизоляция",
+                "material_type": "Рулонный" if "рулон" in title.lower() else "Обмазочный",
                 "specs": specs,
                 "description": description
             }
@@ -145,61 +151,87 @@ class GidroizolParser:
 
     async def crawl(self, db: Session):
         """
-        Основной метод обхода:
-        1. Загружает главную страницу и основные разделы.
-        2. Ищет ссылки на товары.
-        3. Загружает товары параллельно.
-        4. Сохраняет в БД.
+        Умный обход:
+        1. Сначала сканируем главную страницу, чтобы найти актуальные ссылки на категории (/catalog/...).
+        2. Затем заходим в категории и собираем ссылки на товары.
+        3. Парсим товары.
         """
-        logger.info("Starting Async Crawl...")
+        logger.info("Starting Intelligent Crawl...")
         
         async with aiohttp.ClientSession() as session:
-            # 1. Получаем ссылки с главной и основных разделов каталога
-            start_urls = [
+            # --- ЭТАП 1: Обнаружение категорий ---
+            category_links = set()
+            
+            # Пробуем несколько точек входа
+            entry_points = [
                 self.BASE_URL,
-                f"{self.BASE_URL}/catalog/gidroizolyaciya/",
-                f"{self.BASE_URL}/9" # Часто используемый ID раздела
+                urljoin(self.BASE_URL, '/catalog/'),
+                urljoin(self.BASE_URL, '/katalog/')
             ]
             
-            found_links = set()
-            
-            for start_url in start_urls:
-                html = await self._fetch(session, start_url)
+            logger.info("Discovering categories...")
+            for ep in entry_points:
+                html = await self._fetch(session, ep)
                 if not html: continue
                 
                 soup = BeautifulSoup(html, 'html.parser')
-                # Ищем ссылки на товары (эвристика по URL или классам)
-                links = soup.select('a[href*="/product/"], a[href*="/item/"], a.product-link, div.catalog-item a')
-                
-                # Если специфичных нет, берем все внутренние и фильтруем
-                if not links:
-                    links = soup.find_all('a', href=True)
+                for a in soup.find_all('a', href=True):
+                    href = a['href']
+                    # Фильтруем ссылки, похожие на категории
+                    if '/catalog/' in href or '/katalog/' in href:
+                        full_url = urljoin(self.BASE_URL, href)
+                        # Исключаем ссылки на фильтры, сортировки и т.д.
+                        if '?' not in full_url and full_url not in entry_points:
+                            category_links.add(full_url)
+            
+            logger.info(f"Found {len(category_links)} category pages.")
+            if not category_links:
+                logger.warning("No categories found via crawling. Adding fallback.")
+                category_links.add(urljoin(self.BASE_URL, '/catalog/'))
 
+            # --- ЭТАП 2: Сбор ссылок на товары ---
+            product_links = set()
+            
+            # Ограничиваем кол-во категорий для сканирования (чтобы не ждать вечно)
+            # Берем первые 10 категорий
+            target_categories = list(category_links)[:10]
+            
+            logger.info(f"Scanning products in {len(target_categories)} categories...")
+            
+            for cat_url in target_categories:
+                html = await self._fetch(session, cat_url)
+                if not html: continue
+                
+                soup = BeautifulSoup(html, 'html.parser')
+                # Ищем ссылки на товары. Обычно они вложены глубже чем категории
+                links = soup.find_all('a', href=True)
                 for link in links:
                     href = link['href']
                     full_url = urljoin(self.BASE_URL, href)
                     
-                    # Фильтры
-                    if self.BASE_URL not in full_url: continue
-                    if 'filter' in full_url or 'sort' in full_url: continue
-                    if full_url in self.visited_urls: continue
-                    
-                    # Простая эвристика товарной ссылки (обычно глубокая вложенность или ключевые слова)
-                    # Но лучше мы просто попробуем спарсить топ-50 ссылок, похожих на товары
-                    if len(full_url.split('/')) > 4: 
-                        found_links.add(full_url)
+                    # Эвристика: ссылка на товар обычно содержит .html или глубже 3 уровней
+                    # И она должна быть внутри домена
+                    if self.BASE_URL in full_url:
+                        # Проверка на мусор
+                        if any(x in full_url for x in ['login', 'logout', 'register', 'basket', 'compare', 'filter']):
+                            continue
+                        
+                        # Если ссылка длинная и отличается от категории, считаем кандидатом
+                        if len(full_url) > len(cat_url) + 5:
+                            product_links.add(full_url)
 
-            logger.info(f"Found {len(found_links)} potential product links. Processing limit: 50.")
+            logger.info(f"Found {len(product_links)} potential product links. Selecting 50 to parse.")
             
-            # Ограничиваем кол-во для демо/скорости
-            links_to_process = list(found_links)[:50]
-            
-            # 2. Параллельная загрузка товаров
+            # --- ЭТАП 3: Парсинг товаров ---
+            links_to_process = list(product_links)[:50]
             tasks = []
             sem = asyncio.Semaphore(self.ASYNC_CONCURRENCY)
 
             async def process_url(url):
                 async with sem:
+                    if url in self.visited_urls: return None
+                    self.visited_urls.add(url)
+                    
                     html = await self._fetch(session, url)
                     if html:
                         return self.parse_product_page(url, html)
@@ -210,10 +242,11 @@ class GidroizolParser:
             
             results = await asyncio.gather(*tasks)
             
-            # 3. Сохранение в БД
+            # --- ЭТАП 4: Сохранение ---
             saved_count = 0
             for data in results:
                 if not data: continue
+                if not data.get('title') or data['title'] == "Без названия": continue
                 
                 # Upsert logic
                 existing = db.query(ProductModel).filter(ProductModel.url == data['url']).first()
@@ -230,7 +263,6 @@ class GidroizolParser:
                     db.add(prod)
                     saved_count += 1
                 else:
-                    # Update price
                     existing.price = data['price']
                     existing.specs = data['specs']
             
@@ -239,5 +271,4 @@ class GidroizolParser:
             return db.query(ProductModel).all()
 
     async def parse_and_save(self, db: Session):
-        """Wrapper to be called from Main"""
         return await self.crawl(db)
