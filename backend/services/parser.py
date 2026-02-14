@@ -23,11 +23,12 @@ class GidroizolParser:
     """
     Асинхронный парсер для gidroizol.ru.
     Логика портирована из рабочего скрипта пользователя.
+    Исправлен обход: теперь заходит ВНУТРЬ категорий.
     """
     BASE_URL = "https://gidroizol.ru"
     CATALOG_URL = "https://gidroizol.ru/9"
-    ASYNC_CONCURRENCY = 8
-    ASYNC_TIMEOUT = 20
+    ASYNC_CONCURRENCY = 10
+    ASYNC_TIMEOUT = 25
 
     def __init__(self):
         self.visited_urls = set()
@@ -65,7 +66,7 @@ class GidroizolParser:
             logger.error(f"Error fetching {url}: {e}")
             return None
 
-    async def _extract_site_categories(self, session) -> Dict[str, str]:
+    async def _extract_site_categories(self, session) -> Dict[str, Dict[str, str]]:
         """Извлекает категории с /9 (логика из рабочего скрипта)"""
         categories = {}
         html = await self._fetch(session, self.CATALOG_URL)
@@ -89,7 +90,9 @@ class GidroizolParser:
                 text = link.get_text(strip=True)
                 if href and text:
                     full_href = urljoin(self.BASE_URL, href)
-                    # Нормализация ключа (как в скрипте)
+                    # Исключаем мусор
+                    if 'filter' in full_href or 'login' in full_href: continue
+                    
                     key = text.strip().lower()
                     if key not in categories:
                         categories[key] = {'name': text, 'href': full_href}
@@ -100,16 +103,15 @@ class GidroizolParser:
     def is_product_page(self, soup: BeautifulSoup, url: str) -> bool:
         """
         Проверка валидности страницы товара (логика из скрипта).
-        Ищет кнопку 'Заказать' или специфичные попапы.
         """
-        # Основной признак из скрипта: a.order__item.open__popup[href="#order__item"]
+        # 1. По кнопке "Заказать"
         order_btn = soup.select_one('a.order__item.open__popup[href="#order__item"]')
         if order_btn:
             btn_text = order_btn.get_text(strip=True).lower()
             if 'заказать' in btn_text:
                 return True
             
-        # Альтернативные селекторы из скрипта
+        # 2. Альтернативные селекторы кнопки
         alt_selectors = [
             'a[href="#order__item"][class*="order__item"]',
             'a[href="#order__item"][class*="open__popup"]',
@@ -120,7 +122,13 @@ class GidroizolParser:
             el = soup.select_one(sel)
             if el and 'заказать' in el.get_text(strip=True).lower():
                 return True
-                
+        
+        # 3. Дополнительная проверка: Цена + Кнопка корзины (если дизайн другой)
+        has_price = soup.select_one('.price_val, .price-block, .detail-price')
+        has_cart = soup.select_one('.btn-buy, .to-cart, button[name="add"]')
+        if has_price and has_cart:
+            return True
+
         return False
 
     def parse_product_page(self, url: str, html: str) -> Optional[Dict]:
@@ -145,7 +153,6 @@ class GidroizolParser:
 
             # 2. Категория (Breadcrumbs)
             breadcrumbs = [b.get_text(strip=True) for b in soup.select('div.breadcrumbs a, nav.breadcrumb a, ul.breadcrumb-list a')]
-            # Фильтруем "Главная", "Каталог"
             valid_crumbs = [b for b in breadcrumbs if b.lower() not in ['главная', 'home', 'каталог', '', 'все категории']]
             category = valid_crumbs[-1] if valid_crumbs else "Гидроизоляция"
 
@@ -166,14 +173,13 @@ class GidroizolParser:
                             v = cells[1].get_text(strip=True)
                             
                             k_lower = k.lower()
-                            # Маппинг в системные имена полей
                             if 'толщина' in k_lower: specs['thickness_mm'] = self._clean_price(v)
                             elif 'вес' in k_lower and 'м2' in k_lower: specs['weight_kg_m2'] = self._clean_price(v)
                             elif 'гибкость' in k_lower: specs['flexibility_temp_c'] = v
                             elif 'разрывная' in k_lower: specs['tensile_strength_n'] = self._clean_price(v)
                             else:
                                 specs[k] = v
-                    break # Если нашли таблицу характеристик, выходим
+                    break
 
             # 4. Цена (Логика из скрипта: РОЗН -> ОПТ -> Мета)
             price = 0.0
@@ -191,7 +197,6 @@ class GidroizolParser:
                     break
             
             if not found_retail:
-                # Fallback selectors from script
                 fallback_sels = [
                     ('div.dop-price strong', lambda x: x.get_text(strip=True)),
                     ('span.price', lambda x: x.get_text(strip=True)),
@@ -227,17 +232,24 @@ class GidroizolParser:
 
     async def crawl(self, db: Session):
         """Основной цикл обхода"""
-        logger.info("Starting Crawl based on provided script logic...")
+        logger.info("Starting Crawl...")
         
         async with aiohttp.ClientSession() as session:
-            # 1. Извлекаем категории (как в скрипте)
+            # 1. Извлекаем категории
             self.categories_cache = await self._extract_site_categories(session)
             
-            # 2. Собираем ссылки с ключевых страниц
-            start_urls = [self.BASE_URL, self.CATALOG_URL]
+            # 2. Формируем список страниц списков (листингов), которые нужно обойти
+            # Добавляем главную каталога и ссылки на конкретные категории
+            # Чтобы не ждать вечно в демо режиме, берем первые 15 категорий + корень
+            listing_urls = [self.CATALOG_URL]
+            for cat_data in list(self.categories_cache.values())[:15]:
+                listing_urls.append(cat_data['href'])
+            
+            logger.info(f"Scanning {len(listing_urls)} listing pages for products...")
+
+            # 3. Собираем ссылки на товары со страниц категорий
             product_links = set()
             
-            # Селекторы ссылок из скрипта (полный список)
             link_selectors = [
                 'a.product-link', 'a.item-link', 'div.product-list a', 'div.product-card a',
                 'div.item-product a', 'h2.left__heading a', 'div.item__left a', 'a[href*="product"]',
@@ -247,32 +259,42 @@ class GidroizolParser:
                 'div.item a[href*="/gidroizol.ru/"]', 'a[href*="/material/"]'
             ]
 
-            for start_url in start_urls:
-                html = await self._fetch(session, start_url)
-                if not html: continue
-                
-                soup = BeautifulSoup(html, 'html.parser')
-                for selector in link_selectors:
-                    links = soup.select(selector)
-                    for link in links:
-                        href = link.get('href')
-                        if href:
-                            full_url = urljoin(self.BASE_URL, href)
-                            # Простые фильтры
-                            if self.BASE_URL not in full_url: continue
-                            if any(x in full_url for x in ['login', 'filter', 'sort', 'city']): continue
-                            
-                            product_links.add(full_url)
+            sem_list = asyncio.Semaphore(self.ASYNC_CONCURRENCY)
 
-            logger.info(f"Found {len(product_links)} potential links. Processing limit: 50.")
+            async def scan_listing(url):
+                async with sem_list:
+                    html = await self._fetch(session, url)
+                    if not html: return
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    found_on_page = 0
+                    for selector in link_selectors:
+                        links = soup.select(selector)
+                        for link in links:
+                            href = link.get('href')
+                            if href:
+                                full_url = urljoin(self.BASE_URL, href)
+                                # Фильтрация: внутри домена, не категории (грубо), не логин
+                                if self.BASE_URL not in full_url: continue
+                                if any(x in full_url for x in ['login', 'filter', 'sort', 'city', 'basket']): continue
+                                # Если ссылка длиннее базовой категории, вероятно это товар
+                                if len(full_url) > len(self.BASE_URL) + 10:
+                                    product_links.add(full_url)
+                                    found_on_page += 1
+                    # logger.info(f"Scanned {url}: found {found_on_page} links")
+
+            tasks_scan = [scan_listing(u) for u in listing_urls]
+            await asyncio.gather(*tasks_scan)
+
+            logger.info(f"Found {len(product_links)} unique potential product links. Processing top 50.")
             
-            # 3. Парсинг товаров
-            links_to_process = list(product_links)[:50] # Лимит для демо
-            tasks = []
-            sem = asyncio.Semaphore(self.ASYNC_CONCURRENCY)
+            # 4. Парсинг товаров (лимит 50 для скорости)
+            links_to_process = list(product_links)[:50] 
+            tasks_parse = []
+            sem_parse = asyncio.Semaphore(self.ASYNC_CONCURRENCY)
 
             async def process_url(url):
-                async with sem:
+                async with sem_parse:
                     if url in self.visited_urls: return None
                     self.visited_urls.add(url)
                     
@@ -282,15 +304,18 @@ class GidroizolParser:
                     return None
 
             for url in links_to_process:
-                tasks.append(process_url(url))
+                tasks_parse.append(process_url(url))
             
-            results = await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks_parse)
             
-            # 4. Сохранение
+            # 5. Сохранение
             saved_count = 0
             for data in results:
                 if not data: continue
                 
+                # Простейшая валидация цены и названия
+                if data['price'] == 0 and not data['title']: continue
+
                 existing = db.query(ProductModel).filter(ProductModel.url == data['url']).first()
                 if not existing:
                     prod = ProductModel(
