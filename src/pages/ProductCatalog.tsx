@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, MapPin, Tag, Download, Play, Loader2, ServerOff, Globe, Layers } from 'lucide-react';
+import { Package, MapPin, Tag, Download, Play, Loader2, ServerOff, Globe, Layers, ChevronDown, ChevronRight } from 'lucide-react';
 import { Product } from '../types';
 import { getProductsFromBackend, runBackendParser } from '../services/geminiService';
 
@@ -10,6 +10,7 @@ const ProductCatalog = () => {
   const [catalog, setCatalog] = useState<Product[]>([]);
   const [isParsing, setIsParsing] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string>("Загрузка...");
+  const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
 
   // Группировка товаров по категориям
   const groupedProducts = catalog.reduce((acc, product) => {
@@ -75,6 +76,13 @@ const ProductCatalog = () => {
     URL.revokeObjectURL(href);
   };
 
+  const toggleCategory = (category: string) => {
+    setExpandedCategories(prev => ({
+        ...prev,
+        [category]: !prev[category]
+    }));
+  };
+
   const formatSpecKey = (key: string) => {
     const map: Record<string, string> = {
       thickness_mm: 'Толщина (мм)',
@@ -124,73 +132,83 @@ const ProductCatalog = () => {
               <p>Каталог пуст. Нажмите "Обновить базу".</p>
           </div>
       ) : (
-          <div className="space-y-8">
+          <div className="space-y-4">
               {categories.map(category => (
-                  <div key={category}>
-                      <div className="flex items-center gap-3 mb-4 border-b border-slate-200 pb-2">
-                          <Layers className="text-blue-600" size={20} />
-                          <h3 className="text-lg font-bold text-slate-800">{category}</h3>
-                          <span className="bg-slate-100 text-slate-500 text-xs font-semibold px-2 py-0.5 rounded-full">
-                              {groupedProducts[category].length}
-                          </span>
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                        {groupedProducts[category].map((product) => (
-                          <div key={product.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow group animate-in fade-in duration-500">
-                            <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50 group-hover:bg-blue-50/30 transition-colors">
-                              <div>
-                                <h3 className="font-bold text-slate-800 leading-tight line-clamp-2 text-sm" title={product.title}>{product.title}</h3>
-                                <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-medium uppercase tracking-wide">
-                                  <Tag size={10} />
-                                  {product.material_type}
-                                </span>
-                              </div>
-                              <div className="text-right flex-shrink-0 ml-2">
-                                <p className="text-lg font-bold text-emerald-600 whitespace-nowrap">
-                                    {product.price > 0 ? `₽${product.price}` : 'По запросу'}
-                                </p>
-                              </div>
-                            </div>
-                            
-                            <div className="p-4 space-y-3">
-                              <div className="text-sm">
-                                <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
-                                <div className="grid grid-cols-2 gap-y-2 gap-x-4">
-                                  {product.specs && Object.entries(product.specs).map(([key, value]) => (
-                                    value !== 0 && (
-                                      <div key={key} className="flex justify-between items-center border-b border-slate-100 pb-1">
-                                        <span className="text-[10px] text-slate-500 truncate pr-2" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
-                                        <span className="text-[11px] font-medium text-slate-900">{value}</span>
-                                      </div>
-                                    )
-                                  ))}
-                                  {(!product.specs || Object.keys(product.specs).length === 0) && (
-                                      <span className="text-xs text-slate-400 italic col-span-2">Нет данных</span>
-                                  )}
-                                </div>
-                              </div>
-                              
-                              <div className="pt-2 flex items-center justify-between border-t border-slate-50 mt-2">
-                                {product.url && (
-                                    <a 
-                                        href={product.url} 
-                                        target="_blank" 
-                                        rel="noreferrer"
-                                        className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-                                    >
-                                        Открыть на сайте <Globe size={10}/>
-                                    </a>
-                                )}
-                                <div className="flex items-center gap-1.5 text-xs text-slate-400 ml-auto">
-                                  <MapPin size={14} />
-                                  <span>МСК</span>
-                                </div>
-                              </div>
-                            </div>
+                  <div key={category} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden animate-in fade-in duration-300">
+                      <button 
+                        onClick={() => toggleCategory(category)}
+                        className="w-full flex items-center justify-between p-4 bg-slate-50 hover:bg-blue-50/50 transition-colors"
+                      >
+                          <div className="flex items-center gap-3">
+                              {expandedCategories[category] ? <ChevronDown size={20} className="text-blue-600"/> : <ChevronRight size={20} className="text-slate-400"/>}
+                              <Layers className="text-blue-600" size={20} />
+                              <h3 className="text-lg font-bold text-slate-800">{category}</h3>
+                              <span className="bg-white border border-slate-200 text-slate-500 text-xs font-semibold px-2 py-0.5 rounded-full">
+                                  {groupedProducts[category].length}
+                              </span>
                           </div>
-                        ))}
-                      </div>
+                      </button>
+                      
+                      {expandedCategories[category] && (
+                          <div className="p-4 border-t border-slate-100 bg-white">
+                              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {groupedProducts[category].map((product) => (
+                                  <div key={product.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow group animate-in fade-in duration-500">
+                                    <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50 group-hover:bg-blue-50/30 transition-colors">
+                                      <div>
+                                        <h3 className="font-bold text-slate-800 leading-tight line-clamp-2 text-sm" title={product.title}>{product.title}</h3>
+                                        <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-medium uppercase tracking-wide">
+                                          <Tag size={10} />
+                                          {product.material_type}
+                                        </span>
+                                      </div>
+                                      <div className="text-right flex-shrink-0 ml-2">
+                                        <p className="text-lg font-bold text-emerald-600 whitespace-nowrap">
+                                            {product.price > 0 ? `₽${product.price}` : 'По запросу'}
+                                        </p>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="p-4 space-y-3">
+                                      <div className="text-sm">
+                                        <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
+                                        <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                                          {product.specs && Object.entries(product.specs).map(([key, value]) => (
+                                            value !== 0 && (
+                                              <div key={key} className="flex justify-between items-center border-b border-slate-100 pb-1">
+                                                <span className="text-[10px] text-slate-500 truncate pr-2" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
+                                                <span className="text-[11px] font-medium text-slate-900">{value}</span>
+                                              </div>
+                                            )
+                                          ))}
+                                          {(!product.specs || Object.keys(product.specs).length === 0) && (
+                                              <span className="text-xs text-slate-400 italic col-span-2">Нет данных</span>
+                                          )}
+                                        </div>
+                                      </div>
+                                      
+                                      <div className="pt-2 flex items-center justify-between border-t border-slate-50 mt-2">
+                                        {product.url && (
+                                            <a 
+                                                href={product.url} 
+                                                target="_blank" 
+                                                rel="noreferrer"
+                                                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                                            >
+                                                Открыть на сайте <Globe size={10}/>
+                                            </a>
+                                        )}
+                                        <div className="flex items-center gap-1.5 text-xs text-slate-400 ml-auto">
+                                          <MapPin size={14} />
+                                          <span>МСК</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                          </div>
+                      )}
                   </div>
               ))}
           </div>

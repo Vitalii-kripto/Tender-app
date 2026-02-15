@@ -8,7 +8,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("eis_service_log.txt", encoding='utf-8'),
+        logging.FileHandler("eis_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
         logging.StreamHandler()
     ]
 )

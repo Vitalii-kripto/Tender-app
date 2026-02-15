@@ -23,7 +23,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.FileHandler(log_file, encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
         logging.StreamHandler()
     ]
 )
@@ -169,7 +169,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 async def api_analyze_risks(data: dict = Body(...)):
     logger.info("AI Analysis request received.")
     text = data.get('text', '')
-    return ai_service.analyze_legal_risks(text)
+    returnAi_service.analyze_legal_risks(text)
 
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):
