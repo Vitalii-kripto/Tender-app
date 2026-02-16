@@ -16,6 +16,7 @@ export interface Product {
   specs: ProductCharacteristic;
   similarity_score?: number; // Mocking the vector DB score
   url?: string;
+  description?: string;
 }
 
 export type TenderStatus = 'Found' | 'Calculation' | 'Applied' | 'Auction' | 'Contract' | 'Lost';

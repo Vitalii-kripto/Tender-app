@@ -209,7 +209,6 @@ const ProductCatalog = () => {
                                         </div>
 
                                         {/* Product Description Block */}
-                                        {/* @ts-ignore: description might be missing in type definition if strict, but handled by backend */}
                                         {product.description && (
                                             <div className="mt-auto pt-3 border-t border-slate-100">
                                                 <div className="flex items-center gap-1.5 mb-1.5 text-slate-400">

@@ -99,7 +99,8 @@ const getLocalProducts = (): Product[] => {
             category: 'Битумно-полимерные',
             material_type: 'Рулонный',
             price: 340,
-            specs: { thickness_mm: 4.0, weight_kg_m2: 4.95, flexibility_temp_c: -25, tensile_strength_n: 600 }
+            specs: { thickness_mm: 4.0, weight_kg_m2: 4.95, flexibility_temp_c: -25, tensile_strength_n: 600 },
+            description: "Техноэласт ЭПП – это СБС-модифицированный битумно-полимерный материал для устройства нижнего слоя кровельного ковра и гидроизоляции строительных конструкций."
         }
     ];
 };
@@ -248,7 +249,8 @@ export const runBackendParser = async (): Promise<Product[]> => {
             material_type: 'Рулонный',
             price: 385,
             specs: { thickness_mm: 4.0, weight_kg_m2: 4.95, flexibility_temp_c: -25, tensile_strength_n: 600 },
-            url: 'https://gidroizol.ru'
+            url: 'https://gidroizol.ru',
+            description: "Техноэласт ЭПП – это СБС-модифицированный битумно-полимерный материал..."
         },
         {
             id: 'demo_cat_2',
@@ -257,7 +259,8 @@ export const runBackendParser = async (): Promise<Product[]> => {
             material_type: 'Рулонный',
             price: 295,
             specs: { thickness_mm: 3.8, weight_kg_m2: 4.0, flexibility_temp_c: -20, tensile_strength_n: 500 },
-            url: 'https://gidroizol.ru'
+            url: 'https://gidroizol.ru',
+            description: "Унифлекс ТКП используется для устройства верхнего слоя кровельного ковра."
         },
         {
             id: 'demo_cat_3',
@@ -266,7 +269,8 @@ export const runBackendParser = async (): Promise<Product[]> => {
             material_type: 'Рулонный',
             price: 220,
             specs: { thickness_mm: 3.0, weight_kg_m2: 3.5, flexibility_temp_c: -15, tensile_strength_n: 400 },
-            url: 'https://gidroizol.ru'
+            url: 'https://gidroizol.ru',
+            description: "Биполь ЭПП предназначен для устройства нижнего слоя кровельного ковра."
         }
     ];
 

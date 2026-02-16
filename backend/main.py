@@ -139,7 +139,8 @@ def get_products_endpoint(db: Session = Depends(get_db)):
             "material_type": p.material_type,
             "price": p.price,
             "specs": p.specs if p.specs else {},
-            "url": p.url
+            "url": p.url,
+            "description": p.description # Added description
         })
     return result
 
@@ -164,7 +165,8 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
             "material_type": p.material_type,
             "price": p.price,
             "specs": p.specs if p.specs else {},
-            "url": p.url
+            "url": p.url,
+            "description": p.description # Added description
         })
     return result
 
