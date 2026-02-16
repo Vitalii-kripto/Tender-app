@@ -12,13 +12,16 @@ const ProductCatalog = () => {
   const [statusMsg, setStatusMsg] = useState<string>("Загрузка...");
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
 
-  // Группировка товаров по категориям
+  // Группировка товаров по СТАРШИМ категориям (до первого слеша)
   const groupedProducts = catalog.reduce((acc, product) => {
-      const category = product.category || 'Без категории';
-      if (!acc[category]) {
-          acc[category] = [];
+      const fullCategory = product.category || 'Без категории';
+      // Разделяем "Рулонные ... / Изопласт" и берем только "Рулонные ..."
+      const seniorCategory = fullCategory.split(' / ')[0];
+      
+      if (!acc[seniorCategory]) {
+          acc[seniorCategory] = [];
       }
-      acc[category].push(product);
+      acc[seniorCategory].push(product);
       return acc;
   }, {} as Record<string, Product[]>);
 
@@ -152,60 +155,73 @@ const ProductCatalog = () => {
                       {expandedCategories[category] && (
                           <div className="p-4 border-t border-slate-100 bg-white">
                               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {groupedProducts[category].map((product) => (
-                                  <div key={product.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow group animate-in fade-in duration-500">
-                                    <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50 group-hover:bg-blue-50/30 transition-colors">
-                                      <div>
-                                        <h3 className="font-bold text-slate-800 leading-tight line-clamp-2 text-sm" title={product.title}>{product.title}</h3>
-                                        <span className="inline-flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-medium uppercase tracking-wide">
-                                          <Tag size={10} />
-                                          {product.material_type}
-                                        </span>
-                                      </div>
-                                      <div className="text-right flex-shrink-0 ml-2">
-                                        <p className="text-lg font-bold text-emerald-600 whitespace-nowrap">
-                                            {product.price > 0 ? `₽${product.price}` : 'По запросу'}
-                                        </p>
-                                      </div>
-                                    </div>
-                                    
-                                    <div className="p-4 space-y-3">
-                                      <div className="text-sm">
-                                        <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
-                                        <div className="grid grid-cols-2 gap-y-2 gap-x-4">
-                                          {product.specs && Object.entries(product.specs).map(([key, value]) => (
-                                            value !== 0 && (
-                                              <div key={key} className="flex justify-between items-center border-b border-slate-100 pb-1">
-                                                <span className="text-[10px] text-slate-500 truncate pr-2" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
-                                                <span className="text-[11px] font-medium text-slate-900">{value}</span>
-                                              </div>
-                                            )
-                                          ))}
-                                          {(!product.specs || Object.keys(product.specs).length === 0) && (
-                                              <span className="text-xs text-slate-400 italic col-span-2">Нет данных</span>
-                                          )}
+                                {groupedProducts[category].map((product) => {
+                                  // Извлекаем подкатегорию для отображения в карточке
+                                  const catParts = (product.category || '').split(' / ');
+                                  const subCategory = catParts.length > 1 ? catParts.slice(1).join(' / ') : '';
+
+                                  return (
+                                    <div key={product.id} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden hover:shadow-md transition-shadow group animate-in fade-in duration-500 flex flex-col h-full">
+                                      <div className="p-4 border-b border-slate-100 flex justify-between items-start bg-slate-50 group-hover:bg-blue-50/30 transition-colors">
+                                        <div>
+                                          <h3 className="font-bold text-slate-800 leading-tight line-clamp-2 text-sm" title={product.title}>{product.title}</h3>
+                                          <div className="flex flex-wrap gap-1 mt-2">
+                                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-medium uppercase tracking-wide">
+                                                <Tag size={10} />
+                                                {product.material_type}
+                                              </span>
+                                              {subCategory && (
+                                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 text-[10px] font-medium truncate max-w-[120px]">
+                                                      {subCategory}
+                                                  </span>
+                                              )}
+                                          </div>
+                                        </div>
+                                        <div className="text-right flex-shrink-0 ml-2">
+                                          <p className="text-lg font-bold text-emerald-600 whitespace-nowrap">
+                                              {product.price > 0 ? `₽${product.price}` : 'По запросу'}
+                                          </p>
                                         </div>
                                       </div>
                                       
-                                      <div className="pt-2 flex items-center justify-between border-t border-slate-50 mt-2">
-                                        {product.url && (
-                                            <a 
-                                                href={product.url} 
-                                                target="_blank" 
-                                                rel="noreferrer"
-                                                className="text-xs text-blue-600 hover:underline flex items-center gap-1"
-                                            >
-                                                Открыть на сайте <Globe size={10}/>
-                                            </a>
-                                        )}
-                                        <div className="flex items-center gap-1.5 text-xs text-slate-400 ml-auto">
-                                          <MapPin size={14} />
-                                          <span>МСК</span>
+                                      <div className="p-4 space-y-3 flex-1">
+                                        <div className="text-sm">
+                                          <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
+                                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                                            {product.specs && Object.entries(product.specs).map(([key, value]) => (
+                                              value !== 0 && (
+                                                <div key={key} className="flex justify-between items-center border-b border-slate-100 pb-1">
+                                                  <span className="text-[10px] text-slate-500 truncate pr-2" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
+                                                  <span className="text-[11px] font-medium text-slate-900">{value}</span>
+                                                </div>
+                                              )
+                                            ))}
+                                            {(!product.specs || Object.keys(product.specs).length === 0) && (
+                                                <span className="text-xs text-slate-400 italic col-span-2">Нет данных</span>
+                                            )}
+                                          </div>
                                         </div>
                                       </div>
+                                      
+                                      <div className="px-4 py-3 flex items-center justify-between border-t border-slate-50 mt-auto bg-slate-50/50">
+                                          {product.url && (
+                                              <a 
+                                                  href={product.url} 
+                                                  target="_blank" 
+                                                  rel="noreferrer"
+                                                  className="text-xs text-blue-600 hover:underline flex items-center gap-1"
+                                              >
+                                                  Открыть на сайте <Globe size={10}/>
+                                              </a>
+                                          )}
+                                          <div className="flex items-center gap-1.5 text-xs text-slate-400 ml-auto">
+                                            <MapPin size={14} />
+                                            <span>МСК</span>
+                                          </div>
+                                      </div>
                                     </div>
-                                  </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                           </div>
                       )}
