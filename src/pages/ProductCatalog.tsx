@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Package, MapPin, Tag, Download, Play, Loader2, ServerOff, Globe, Layers, ChevronDown, ChevronRight } from 'lucide-react';
+import { Package, MapPin, Tag, Download, Play, Loader2, ServerOff, Globe, Layers, ChevronDown, ChevronRight, FileText } from 'lucide-react';
 import { Product } from '../types';
 import { getProductsFromBackend, runBackendParser } from '../services/geminiService';
 
@@ -192,8 +192,8 @@ const ProductCatalog = () => {
                                         </div>
                                       </div>
                                       
-                                      <div className="p-4 space-y-3 flex-1">
-                                        <div className="text-sm">
+                                      <div className="p-4 space-y-3 flex-1 flex flex-col">
+                                        <div className="text-sm mb-2">
                                           <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
                                           <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-4">
                                             {product.specs && Object.entries(product.specs).map(([key, value]) => (
@@ -207,6 +207,20 @@ const ProductCatalog = () => {
                                             )}
                                           </div>
                                         </div>
+
+                                        {/* Product Description Block */}
+                                        {/* @ts-ignore: description might be missing in type definition if strict, but handled by backend */}
+                                        {product.description && (
+                                            <div className="mt-auto pt-3 border-t border-slate-100">
+                                                <div className="flex items-center gap-1.5 mb-1.5 text-slate-400">
+                                                    <FileText size={12} />
+                                                    <span className="text-[10px] font-bold uppercase tracking-wider">Описание</span>
+                                                </div>
+                                                <p className="text-xs text-slate-500 leading-relaxed line-clamp-4 hover:line-clamp-none transition-all cursor-help" title="Нажмите, чтобы развернуть (если поддерживается)">
+                                                    {product.description}
+                                                </p>
+                                            </div>
+                                        )}
                                       </div>
                                       
                                       <div className="px-4 py-3 flex items-center justify-between border-t border-slate-50 mt-auto bg-slate-50/50">
