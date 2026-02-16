@@ -86,14 +86,17 @@ const ProductCatalog = () => {
     }));
   };
 
+  // Helper to nicely format keys if needed, but primarily we just display what's there
   const formatSpecKey = (key: string) => {
     const map: Record<string, string> = {
       thickness_mm: 'Толщина (мм)',
       weight_kg_m2: 'Вес (кг/м²)',
       flexibility_temp_c: 'Гибкость (°C)',
-      tensile_strength_n: 'Разрывная сила (Н)'
+      tensile_strength_n: 'Разрывная сила (Н)',
+      material_type: 'Тип материала'
     };
-    return map[key] || key;
+    // Return mapped key or capitalized original key
+    return map[key] || key.charAt(0).toUpperCase() + key.slice(1);
   };
 
   return (
@@ -187,14 +190,12 @@ const ProductCatalog = () => {
                                       <div className="p-4 space-y-3 flex-1">
                                         <div className="text-sm">
                                           <h4 className="font-semibold text-slate-700 mb-2 text-xs uppercase tracking-wider">Характеристики</h4>
-                                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-y-2 gap-x-4">
                                             {product.specs && Object.entries(product.specs).map(([key, value]) => (
-                                              value !== 0 && (
-                                                <div key={key} className="flex justify-between items-center border-b border-slate-100 pb-1">
-                                                  <span className="text-[10px] text-slate-500 truncate pr-2" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
-                                                  <span className="text-[11px] font-medium text-slate-900">{value}</span>
-                                                </div>
-                                              )
+                                              <div key={key} className="flex justify-between items-start border-b border-slate-100 pb-1">
+                                                <span className="text-[10px] text-slate-500 truncate pr-2 max-w-[100px]" title={formatSpecKey(key)}>{formatSpecKey(key)}</span>
+                                                <span className="text-[11px] font-medium text-slate-900 text-right truncate max-w-[100px]" title={String(value)}>{String(value)}</span>
+                                              </div>
                                             ))}
                                             {(!product.specs || Object.keys(product.specs).length === 0) && (
                                                 <span className="text-xs text-slate-400 italic col-span-2">Нет данных</span>
@@ -216,7 +217,7 @@ const ProductCatalog = () => {
                                           )}
                                           <div className="flex items-center gap-1.5 text-xs text-slate-400 ml-auto">
                                             <MapPin size={14} />
-                                            <span>МСК</span>
+                                            <span>РФ</span>
                                           </div>
                                       </div>
                                     </div>

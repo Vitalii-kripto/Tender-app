@@ -52,9 +52,10 @@ class GidroizolParser:
         "https://gidroizol.ru/149",  # вложенная категория
     ]
 
-    # Чтобы НЕ терять пагинацию: query сохраняем, но чистим мусорные параметры
+    # Чтобы НЕ терять пагинацию: query сохраняем, но чистим мусорные параметры.
+    # ВАЖНО: Добавил 'city', чтобы исключить дубли товаров из разных городов.
     DROP_QUERY_PREFIXES = ("utm_",)
-    DROP_QUERY_KEYS = {"gclid", "fbclid", "yclid"}
+    DROP_QUERY_KEYS = {"gclid", "fbclid", "yclid", "city", "region", "sort", "order"}
 
     def __init__(self):
         self.visited_urls: Set[str] = set()   # для обхода
@@ -79,7 +80,7 @@ class GidroizolParser:
         Нормализация URL:
         - приводим домен без www
         - НЕ выкидываем query целиком (важно для PAGEN_*, page=)
-        - выкидываем только мусорные query (utm_*, gclid/fbclid/yclid)
+        - выкидываем мусорные query и CITY (чтобы склеить дубли)
         - убираем trailing slash
         """
         url = (url or "").strip()
@@ -280,16 +281,45 @@ class GidroizolParser:
                         description = txt[:2000]
                         break
 
-            # характеристики (если найдём)
+            # --- ИЗВЛЕЧЕНИЕ ХАРАКТЕРИСТИК (УЛУЧШЕНО) ---
             specs: Dict[str, str] = {}
-            rows = soup.select("div.table_dop-info .table-row, table.specs tr, .product-features li")
+            
+            # 1. Попытка: Классическая таблица характеристик (div или table)
+            # Часто встречается как .table-row или tr внутри .specs
+            rows = soup.select("div.table_dop-info .table-row, table.specs tr, .product-features li, .properties .item, .chars .row")
+            
             for row in rows:
-                cells = row.select("div.table-cell, td, span")
+                # Пытаемся найти ячейки (div, td, span)
+                cells = row.select("div.table-cell, td, span.name, span.val, div.col")
+                
+                # Если ячеек 2, это ключ-значение
                 if len(cells) >= 2:
-                    k = cells[0].get_text(strip=True).replace(":", "")
-                    v = cells[1].get_text(strip=True)
+                    k = cells[0].get_text(strip=True).replace(":", "").strip()
+                    v = cells[1].get_text(strip=True).strip()
                     if k and v:
                         specs[k] = v
+                else:
+                    # Бывает разметка, где ключ и значение просто текстом внутри row
+                    text = row.get_text(strip=True)
+                    if ":" in text:
+                        parts = text.split(":", 1)
+                        if len(parts) == 2:
+                            specs[parts[0].strip()] = parts[1].strip()
+
+            # 2. Попытка: Если таблица не найдена, ищем блок характеристик по тексту заголовка
+            if not specs:
+                header = soup.find(string=re.compile("Характеристики", re.I))
+                if header:
+                    parent = header.find_parent("div") or header.find_parent("section")
+                    if parent:
+                        # Ищем внутри родителя строки
+                        text_rows = parent.find_all(["p", "div", "li"])
+                        for tr in text_rows:
+                            txt = tr.get_text(" ", strip=True)
+                            if ":" in txt and len(txt) < 200: # Разумная длина строки
+                                parts = txt.split(":", 1)
+                                if len(parts) == 2:
+                                    specs[parts[0].strip()] = parts[1].strip()
 
             return {
                 "url": self.normalize_url(url),
