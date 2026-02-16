@@ -281,50 +281,62 @@ class GidroizolParser:
                         description = txt[:2000]
                         break
 
-            # --- ИЗВЛЕЧЕНИЕ ХАРАКТЕРИСТИК (УЛУЧШЕНО) ---
+            # --- ИЗВЛЕЧЕНИЕ ХАРАКТЕРИСТИК (ИСПРАВЛЕНО v3) ---
             specs: Dict[str, str] = {}
             
-            # 1. Попытка: Классическая таблица характеристик (div или table)
-            # Часто встречается как .table-row или tr внутри .specs
-            rows = soup.select("div.table_dop-info .table-row, table.specs tr, .product-features li, .properties .item, .chars .row")
+            # Селекторы строк. ВАЖНО: берем строки, а не ячейки сразу.
+            rows = soup.select("div.table_dop-info .table-row, table.specs tr, .product-features li, .properties .item, .chars .row, .char")
             
             for row in rows:
-                # Пытаемся найти ячейки (div, td, span)
-                cells = row.select("div.table-cell, td, span.name, span.val, div.col")
-                
-                # Если ячеек 2, это ключ-значение
+                # СТРАТЕГИЯ 1: Ячейки таблицы (td)
+                # Это надежно для <table>
+                cells = row.select("td")
                 if len(cells) >= 2:
                     k = cells[0].get_text(strip=True).replace(":", "").strip()
                     v = cells[1].get_text(strip=True).strip()
-                    if k and v:
+                    # Проверка на дублирование (иногда в моб. версии name=name)
+                    if k and v and k.lower() != v.lower():
                         specs[k] = v
-                else:
-                    # Бывает разметка, где ключ и значение просто текстом внутри row
-                    text = row.get_text(strip=True)
-                    if ":" in text:
-                        parts = text.split(":", 1)
-                        if len(parts) == 2:
-                            specs[parts[0].strip()] = parts[1].strip()
+                    continue
 
-            # 2. Попытка: Если таблица не найдена, ищем блок характеристик по тексту заголовка
-            if not specs:
-                header = soup.find(string=re.compile("Характеристики", re.I))
-                if header:
-                    parent = header.find_parent("div") or header.find_parent("section")
-                    if parent:
-                        # Ищем внутри родителя строки
-                        text_rows = parent.find_all(["p", "div", "li"])
-                        for tr in text_rows:
-                            txt = tr.get_text(" ", strip=True)
-                            if ":" in txt and len(txt) < 200: # Разумная длина строки
-                                parts = txt.split(":", 1)
-                                if len(parts) == 2:
-                                    specs[parts[0].strip()] = parts[1].strip()
+                # СТРАТЕГИЯ 2: Div/Span верстка
+                # Используем recursive=False чтобы брать только прямых потомков (колонки)
+                # Это решает проблему, когда .col содержит .col внутри или спаны с тем же текстом.
+                children = [child for child in row.find_all(recursive=False) if child.name in ['div', 'span', 'p', 'li']]
+                
+                if len(children) >= 2:
+                    k = children[0].get_text(strip=True).replace(":", "").strip()
+                    
+                    # Ищем первое непустое значение среди остальных потомков
+                    v = ""
+                    for child in children[1:]:
+                        txt = child.get_text(strip=True)
+                        if txt and txt not in [".", ":", "-"]:
+                            v = txt
+                            break
+                    
+                    # Очистка: если ключ содержит значение (например "Вес: 5кг" -> "5кг"), чистим ключ
+                    if v and v in k and len(v) > 2:
+                        k = k.replace(v, "").strip().rstrip(":")
+
+                    if k and v and k.lower() != v.lower():
+                        specs[k] = v
+                    continue
+                
+                # СТРАТЕГИЯ 3: Текст "Ключ: Значение" внутри одного контейнера
+                text = row.get_text(" ", strip=True)
+                if ":" in text:
+                    parts = text.split(":", 1)
+                    if len(parts) == 2:
+                        k = parts[0].strip()
+                        v = parts[1].strip()
+                        if k and v and len(k) < 50: 
+                            specs[k] = v
 
             return {
                 "url": self.normalize_url(url),
                 "title": title,
-                "category": category_path,  # <-- ключевое поле: "Рулонные ... / ИЗОПЛАСТ"
+                "category": category_path,
                 "price": price,
                 "description": description,
                 "specs": specs,
