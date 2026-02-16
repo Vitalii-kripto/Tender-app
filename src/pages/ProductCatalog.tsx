@@ -25,6 +25,11 @@ const ProductCatalog = () => {
       return acc;
   }, {} as Record<string, Product[]>);
 
+  // Сортируем товары внутри каждой категории по алфавиту
+  Object.values(groupedProducts).forEach((list: Product[]) => {
+      list.sort((a, b) => a.title.localeCompare(b.title));
+  });
+
   const categories = Object.keys(groupedProducts).sort();
 
   useEffect(() => {
