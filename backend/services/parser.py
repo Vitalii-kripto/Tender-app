@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 from typing import Dict, List, Optional, Set
-from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlparse, urljoin, urlunparse, parse_qsl, urlencode
 
 import aiohttp
@@ -31,11 +30,14 @@ class GidroizolParser:
     BASE_URL = "https://gidroizol.ru"
     DOMAIN = "gidroizol.ru"
 
-    # входные точки (чтобы быстрее собрать дерево)
+    # Москва = city=1 (по ссылке выбора города на сайте) :contentReference[oaicite:1]{index=1}
+    MOSCOW_CITY_ID = "1"
+    CITY_PARAM = "city"
+
     START_URLS = [
-        "https://gidroizol.ru/9",    # общий каталог
-        "https://gidroizol.ru/18",   # старшая категория
-        "https://gidroizol.ru/149",  # вложенная категория
+        "https://gidroizol.ru/9",    # каталог
+        "https://gidroizol.ru/18",
+        "https://gidroizol.ru/149",
     ]
 
     DROP_QUERY_PREFIXES = ("utm_",)
@@ -46,6 +48,8 @@ class GidroizolParser:
         self.product_urls: Set[str] = set()
         self.product_data: List[Dict] = []
 
+        # Держим “московский контекст” и через query, и через cookie.
+        # (У сайта после ?city=1 может быть редирект на чистый URL, а город хранится в cookie.)
         self.headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -54,15 +58,39 @@ class GidroizolParser:
             ),
             "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            # важно: подстраховка, если сайт читает город из cookie
+            "Cookie": f"{self.CITY_PARAM}={self.MOSCOW_CITY_ID}",
         }
 
     # ----------------------------
-    # URL helpers
+    # URL helpers (Москва-only)
     # ----------------------------
-    def normalize_url(self, url: str) -> str:
+    def _is_asset(self, url: str) -> bool:
+        return url.lower().endswith(
+            (".jpg", ".jpeg", ".png", ".svg", ".ico", ".webp", ".css", ".js", ".pdf", ".zip")
+        )
+
+    def _is_same_domain(self, url: str) -> bool:
+        netloc = (urlparse(url).netloc or "").replace("www.", "")
+        return netloc == "" or netloc.endswith(self.DOMAIN)
+
+    def _drop_tracking_qs(self, pairs: List[tuple]) -> List[tuple]:
+        kept = []
+        for k, v in pairs:
+            lk = k.lower()
+            if lk in self.DROP_QUERY_KEYS:
+                continue
+            if any(lk.startswith(pref) for pref in self.DROP_QUERY_PREFIXES):
+                continue
+            kept.append((k, v))
+        return kept
+
+    def _ensure_moscow_city(self, url: str) -> str:
         """
-        Нормализуем URL, но НЕ убиваем query (важно для пагинации).
-        Чистим только мусорные параметры (utm_*, gclid/fbclid/yclid).
+        Всегда приводим URL к московскому контексту:
+        - сохраняем query (пагинация и т.п.)
+        - удаляем мусорные query (utm/gclid/...)
+        - параметр city всегда = 1
         """
         url = (url or "").strip()
         if not url:
@@ -73,26 +101,44 @@ class GidroizolParser:
         netloc = (p.netloc or self.DOMAIN).replace("www.", "")
         path = (p.path or "").rstrip("/")
 
-        kept = []
-        for k, v in parse_qsl(p.query, keep_blank_values=True):
-            lk = k.lower()
-            if lk in self.DROP_QUERY_KEYS:
-                continue
-            if any(lk.startswith(pref) for pref in self.DROP_QUERY_PREFIXES):
-                continue
-            kept.append((k, v))
+        qs = self._drop_tracking_qs(list(parse_qsl(p.query, keep_blank_values=True)))
 
-        query = urlencode(kept, doseq=True)
+        # убираем любые city=... и ставим city=1
+        qs = [(k, v) for (k, v) in qs if k.lower() != self.CITY_PARAM]
+        qs.append((self.CITY_PARAM, self.MOSCOW_CITY_ID))
+
+        query = urlencode(qs, doseq=True)
         return urlunparse((scheme, netloc, path, "", query, ""))
 
-    def _is_same_domain(self, url: str) -> bool:
-        netloc = (urlparse(url).netloc or "").replace("www.", "")
-        return netloc == "" or netloc.endswith(self.DOMAIN)
+    def _get_city_from_url(self, url: str) -> Optional[str]:
+        p = urlparse(url)
+        for k, v in parse_qsl(p.query, keep_blank_values=True):
+            if k.lower() == self.CITY_PARAM:
+                return v
+        return None
 
-    def _is_asset(self, url: str) -> bool:
-        return url.lower().endswith(
-            (".jpg", ".jpeg", ".png", ".svg", ".ico", ".webp", ".css", ".js", ".pdf", ".zip")
-        )
+    def normalize_url(self, url: str) -> str:
+        """
+        Нормализация = “московский URL” (city=1 всегда присутствует).
+        """
+        return self._ensure_moscow_city(url)
+
+    def _is_allowed_url(self, url: str) -> bool:
+        """
+        Фильтр ссылок:
+        - только наш домен
+        - не ассеты
+        - не ссылки смены города на другой
+        """
+        if not url or not self._is_same_domain(url) or self._is_asset(url):
+            return False
+
+        city = self._get_city_from_url(url)
+        if city is not None and city != self.MOSCOW_CITY_ID:
+            # отбрасываем ссылки на другие города, чтобы не было дублей
+            return False
+
+        return True
 
     # ----------------------------
     # Product detection
@@ -102,40 +148,23 @@ class GidroizolParser:
         return bool(re.search(r"(\d+[.,]\d+|\d+)\s*р\./", txt))
 
     def is_product_page(self, soup: BeautifulSoup, url: str = "") -> bool:
-        """
-        Принцип "кнопка Заказать" сохраняем, НО добавляем fallback:
-        если есть h1 и есть цена => считаем карточкой товара.
-        (Иначе ты теряешь реальные карточки, как показал тест на /izoplast-p-epp-4-0)
-        """
-
-        # 1) основной признак: кнопка "Заказать"
-        btn = soup.select_one('a.order__item.open__popup[href="#order__item"]')
-        if btn:
-            if "заказать" in btn.get_text(strip=True).lower():
-                return True
-
-        # 2) альтернативные селекторы "заказать"
-        alternative_selectors = [
+        # 1) кнопки “заказать/купить/в корзину”
+        selectors = [
+            'a.order__item.open__popup[href="#order__item"]',
             'a[href="#order__item"][class*="order__item"]',
             'a[href="#order__item"][class*="open__popup"]',
-            'a.order__item[href="#order__item"]',
-            'a.open__popup[href="#order__item"]',
             'button[class*="order"]',
             'button[class*="buy"]',
             'a[class*="buy"]',
         ]
-        for selector in alternative_selectors:
-            for el in soup.select(selector):
-                if "заказать" in el.get_text(strip=True).lower():
-                    return True
-                if "в корзину" in el.get_text(strip=True).lower():
-                    return True
-                if "купить" in el.get_text(strip=True).lower():
+        for sel in selectors:
+            for el in soup.select(sel):
+                t = el.get_text(strip=True).lower()
+                if "заказать" in t or "в корзину" in t or "купить" in t:
                     return True
 
-        # 3) Fallback-эвристика: h1 + цена
-        h1 = soup.select_one("h1")
-        if h1 and self._has_price_text(soup):
+        # 2) fallback: h1 + цена
+        if soup.select_one("h1") and self._has_price_text(soup):
             return True
 
         return False
@@ -144,10 +173,6 @@ class GidroizolParser:
     # Category extraction
     # ----------------------------
     def extract_category_path(self, soup: BeautifulSoup) -> str:
-        """
-        Категории как на сайте: "Рулонные ... / ИЗОПЛАСТ"
-        Берём хлебные крошки, выкидываем "Главная/Каталог".
-        """
         breadcrumb_selectors = [
             'ul.col-12[itemtype*="BreadcrumbList"] a span[itemprop="name"]',
             'section#breadcrumbs ul li a',
@@ -167,18 +192,13 @@ class GidroizolParser:
         drop = {"главная", "home", "каталог", "все категории"}
         cats = [c for c in crumbs if c and c.strip().lower() not in drop]
 
-        if not cats:
-            return "Каталог"
-
-        # Иногда последний элемент крошек — товар. Если он совпадает с h1 — убираем.
         h1 = soup.select_one("h1")
         if h1:
             h1t = h1.get_text(strip=True)
             if cats and cats[-1] == h1t:
                 cats = cats[:-1]
 
-        # Обычно достаточно 1–3 уровней категорий
-        return " / ".join(cats[-3:]) if len(cats) > 3 else " / ".join(cats)
+        return " / ".join(cats[-3:]) if cats else "Каталог"
 
     # ----------------------------
     # Price + specs
@@ -197,17 +217,14 @@ class GidroizolParser:
     def parse_price(self, soup: BeautifulSoup) -> float:
         text = soup.get_text(" ", strip=True)
 
-        # РОЗН
         m = re.search(r"(\d+[.,]\d+|\d+)\s*р\./[^\s]*\s*РОЗН", text)
         if m:
             return self._clean_price(m.group(1))
 
-        # любая цена
         m = re.search(r"(\d+[.,]\d+|\d+)\s*р\./", text)
         if m:
             return self._clean_price(m.group(1))
 
-        # селекторы
         for sel in [".price_val", ".price", ".product-price", ".detail-price", "[itemprop='price']"]:
             el = soup.select_one(sel)
             if el:
@@ -219,14 +236,11 @@ class GidroizolParser:
 
     def parse_specs(self, soup: BeautifulSoup) -> Dict[str, str]:
         specs: Dict[str, str] = {}
-
-        # несколько вариантов таблиц/блоков характеристик
         row_selectors = [
             "div.table_dop-info .table-row",
             "table.specs tr",
             "table tr",
             ".product-features li",
-            ".характеристики li",
         ]
 
         rows = []
@@ -236,7 +250,6 @@ class GidroizolParser:
                 break
 
         for row in rows:
-            # table rows
             tds = row.select("td")
             if len(tds) >= 2:
                 k = tds[0].get_text(" ", strip=True).replace(":", "")
@@ -245,7 +258,6 @@ class GidroizolParser:
                     specs[k] = v
                 continue
 
-            # div rows
             cells = row.select("div.table-cell")
             if len(cells) >= 2:
                 k = cells[0].get_text(" ", strip=True).replace(":", "")
@@ -254,7 +266,6 @@ class GidroizolParser:
                     specs[k] = v
                 continue
 
-            # list items "Ключ: Значение"
             txt = row.get_text(" ", strip=True)
             if ":" in txt:
                 k, v = txt.split(":", 1)
@@ -266,11 +277,14 @@ class GidroizolParser:
         return specs
 
     # ----------------------------
-    # Product parsing
+    # Product parsing (Москва-only)
     # ----------------------------
     def parse_product_page(self, url: str, html: str) -> Optional[Dict]:
+        """
+        Важно: url здесь уже должен быть “московским” (city=1).
+        """
         try:
-            if not self._is_same_domain(url) or self._is_asset(url):
+            if not self._is_allowed_url(url):
                 return None
 
             soup = BeautifulSoup(html, "html.parser")
@@ -278,7 +292,6 @@ class GidroizolParser:
             if not self.is_product_page(soup, url):
                 return None
 
-            # title
             title = None
             for sel in ["section#tovar h1", "h1", "div.product-title h1", "div.product-title"]:
                 el = soup.select_one(sel)
@@ -290,6 +303,7 @@ class GidroizolParser:
 
             category_path = self.extract_category_path(soup)
             price = self.parse_price(soup)
+            specs = self.parse_specs(soup)
 
             description = ""
             for sel in [
@@ -306,10 +320,11 @@ class GidroizolParser:
                         description = txt[:2000]
                         break
 
-            specs = self.parse_specs(soup)
+            # сохраняем ссылку ТОЛЬКО в “московском” виде
+            product_url = self.normalize_url(url)
 
             return {
-                "url": self.normalize_url(url),
+                "url": product_url,
                 "title": title,
                 "category": category_path,
                 "price": price,
@@ -317,15 +332,18 @@ class GidroizolParser:
                 "specs": specs,
                 "material_type": "Рулонный" if "рулон" in category_path.lower() else "Гидроизоляция",
                 "type": "product",
+                "city_id": self.MOSCOW_CITY_ID,
+                "city_name": "Москва",
             }
         except Exception as e:
             logger.error(f"parse_product_page error {url}: {e}")
             return None
 
     # ----------------------------
-    # Async helpers
+    # Async crawling (Москва-only)
     # ----------------------------
     async def _fetch_html(self, session: aiohttp.ClientSession, url: str) -> Optional[str]:
+        url = self.normalize_url(url)
         for attempt in range(ASYNC_RETRIES + 1):
             try:
                 async with session.get(url, timeout=aiohttp.ClientTimeout(total=ASYNC_TIMEOUT)) as resp:
@@ -347,16 +365,18 @@ class GidroizolParser:
             href = href.strip()
             if href.startswith("#") or href.lower().startswith("javascript:"):
                 continue
+
             full = urljoin(base_url, href)
-            if not self._is_same_domain(full) or self._is_asset(full):
+            if not self._is_allowed_url(full):
                 continue
+
             out.add(self.normalize_url(full))
         return out
 
     async def _process_urls_async(self, initial_urls: Set[str]):
         sem = asyncio.Semaphore(ASYNC_CONCURRENCY)
         async with aiohttp.ClientSession(headers=self.headers) as session:
-            queue: Set[str] = set(initial_urls)
+            queue: Set[str] = set(self.normalize_url(u) for u in initial_urls if self._is_allowed_url(u))
 
             while queue:
                 batch = list(queue)[: ASYNC_CONCURRENCY * 3]
@@ -369,36 +389,38 @@ class GidroizolParser:
                             return
                         self.visited_urls.add(nu)
 
-                        html = await self._fetch_html(session, u)
+                        html = await self._fetch_html(session, nu)
                         if not html:
                             return
 
                         soup = BeautifulSoup(html, "html.parser")
-                        data = self.parse_product_page(u, html)
+                        data = self.parse_product_page(nu, html)
                         if data:
                             purl = data["url"]
                             if purl not in self.product_urls:
                                 self.product_urls.add(purl)
                                 self.product_data.append(data)
-                                logger.info(f"✅ PRODUCT: {data['title']} | {data['category']} | {purl}")
+                                logger.info(f"✅ PRODUCT(MSK): {data['title']} | {data['category']} | {purl}")
                             return
 
-                        # не товар — идём глубже
-                        links = self._extract_links(soup, u)
+                        # не товар — идём глубже (категории/пагинация), но только в Москве
+                        links = self._extract_links(soup, nu)
                         for l in links:
-                            if l not in self.visited_urls:
-                                queue.add(l)
+                            nl = self.normalize_url(l)
+                            if nl not in self.visited_urls:
+                                queue.add(nl)
 
                 await asyncio.gather(*(handle(u) for u in batch))
 
     # ----------------------------
-    # RecursiveUrlLoader
+    # RecursiveUrlLoader (Москва-only)
     # ----------------------------
     def extractor(self, html: str) -> str:
         return html
 
     async def crawl_pages(self, start_url: str, max_depth: int = 7):
-        logger.info(f"Starting crawl from: {start_url}")
+        start_url = self.normalize_url(start_url)
+        logger.info(f"Starting crawl (MSK) from: {start_url}")
 
         loader = RecursiveUrlLoader(
             url=start_url,
@@ -407,7 +429,7 @@ class GidroizolParser:
             prevent_outside=True,
             timeout=20,
             use_async=False,
-            # Важно: не отрезаем каталог агрессивно
+            # не режем каталог агрессивно, но отсекаем мусор
             exclude_dirs=["contacts", "about", "news", "blog", "articles", "login", "auth", "basket"],
             headers=self.headers,
         )
@@ -415,23 +437,20 @@ class GidroizolParser:
         documents = await asyncio.to_thread(loader.load)
         logger.info(f"RecursiveUrlLoader finished. Loaded {len(documents)} documents from {start_url}")
 
-        if len(documents) < 50:
-            logger.warning("Loaded very few documents. Check redirects/www/exclude_dirs/blocking.")
-            for d in documents[:20]:
-                logger.warning(f"Loaded URL sample: {d.metadata.get('source')}")
-
         next_urls: Set[str] = set()
 
-        # Сначала парсим то, что уже загрузил loader, и собираем ссылки на догрузку
         for doc in documents:
-            url = doc.metadata.get("source", "")
-            if not url or not self._is_same_domain(url) or self._is_asset(url):
+            raw_url = doc.metadata.get("source", "")
+            if not raw_url:
                 continue
 
-            nurl = self.normalize_url(url)
-            if nurl in self.visited_urls:
+            url = self.normalize_url(raw_url)
+            if not self._is_allowed_url(url):
                 continue
-            self.visited_urls.add(nurl)
+
+            if url in self.visited_urls:
+                continue
+            self.visited_urls.add(url)
 
             data = self.parse_product_page(url, doc.page_content)
             if data:
@@ -442,19 +461,17 @@ class GidroizolParser:
 
             soup = BeautifulSoup(doc.page_content, "html.parser")
             for l in self._extract_links(soup, url):
-                if l not in self.visited_urls:
-                    next_urls.add(l)
+                nl = self.normalize_url(l)
+                if nl not in self.visited_urls:
+                    next_urls.add(nl)
 
-        # Догружаем асинхронно
         await self._process_urls_async(next_urls)
-
-        logger.info(f"Finished crawl from {start_url}. Total products: {len(self.product_data)}")
+        logger.info(f"Finished crawl (MSK) from {start_url}. Total products: {len(self.product_data)}")
 
     # ----------------------------
     # DB upsert
     # ----------------------------
     def _upsert_products_to_db(self, db: Session) -> int:
-        # подстрой импорт под свой проект при необходимости
         try:
             from backend.models import ProductModel  # type: ignore
         except Exception:
@@ -492,16 +509,17 @@ class GidroizolParser:
         return created
 
     # ----------------------------
-    # Public entry (FastAPI uses this)
+    # Public entry
     # ----------------------------
     async def parse_and_save(self, db: Session) -> int:
         self.visited_urls.clear()
         self.product_urls.clear()
         self.product_data.clear()
 
+        # Обязательно прогоняем START_URLS тоже в московском виде
         for u in self.START_URLS:
             await self.crawl_pages(u, max_depth=7)
 
         created = self._upsert_products_to_db(db)
-        logger.info(f"DB upsert done. New created: {created}. Total parsed: {len(self.product_data)}")
+        logger.info(f"DB upsert done (MSK). New created: {created}. Total parsed: {len(self.product_data)}")
         return created
