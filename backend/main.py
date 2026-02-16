@@ -147,8 +147,13 @@ def get_products_endpoint(db: Session = Depends(get_db)):
 async def parse_catalog_endpoint(db: Session = Depends(get_db)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
     logger.info("Starting catalog parser manually.")
-    # IMPORTANT: await because the parser is now async for performance
-    products = await parser_service.parse_and_save(db)
+    
+    # Новый парсер возвращает количество сохраненных записей (int), а не список объектов
+    saved_count = await parser_service.parse_and_save(db)
+    logger.info(f"Parser finished. Saved/Updated {saved_count} items.")
+    
+    # После парсинга забираем актуальные данные из БД
+    products = db.query(ProductModel).all()
     
     result = []
     for p in products:
@@ -169,7 +174,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 async def api_analyze_risks(data: dict = Body(...)):
     logger.info("AI Analysis request received.")
     text = data.get('text', '')
-    returnAi_service.analyze_legal_risks(text)
+    return ai_service.analyze_legal_risks(text)
 
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):
