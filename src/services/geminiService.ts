@@ -391,7 +391,32 @@ export const findProductEquivalent = async (tenderSpecs: string): Promise<any> =
              recommended_product_id: '1',
              reasoning: "Материал 'Техноэласт ЭПП' полностью соответствует заявленным требованиям ТЗ: полиэфирная основа, толщина ~4мм, гибкость -25С. Это прямой аналог.",
              critical_mismatches: [],
-             all_matches: []
+             all_matches: [
+                 {
+                     id: '1',
+                     title: 'Техноэласт ЭПП',
+                     similarity_score: 95,
+                     match_reason: "Полное соответствие по основе (полиэфир), толщине (4мм) и гибкости на брусе (-25С).",
+                     price: 250,
+                     specs: {
+                         "Основа": "Полиэфир",
+                         "Толщина, мм": 4.0,
+                         "Гибкость на брусе, °C": -25
+                     }
+                 },
+                 {
+                     id: '2',
+                     title: 'Унифлекс ЭПП',
+                     similarity_score: 82,
+                     match_reason: "Подходит по основе (полиэфир), но имеет меньшую толщину (3.8мм) и гибкость (-20С).",
+                     price: 180,
+                     specs: {
+                         "Основа": "Полиэфир",
+                         "Толщина, мм": 3.8,
+                         "Гибкость на брусе, °C": -20
+                     }
+                 }
+             ]
     };
 
     if (IS_DEMO_MODE) {
@@ -523,6 +548,20 @@ export const validateComplexCompliance = async (requirements: string, proposalIt
                 real_specs_found: "В интернете: Техноэласт ЭПП имеет гибкость -25С.",
                 status: "OK",
                 comment: "Характеристики соответствуют."
+            },
+            {
+                requirement_name: "Мастика битумная (расход 1кг/м2)",
+                proposal_name: "Мастика №21",
+                real_specs_found: "В интернете: Расход 1.2кг/м2",
+                status: "FAIL",
+                comment: "Расход превышает требуемый по ТЗ."
+            },
+            {
+                requirement_name: "Праймер битумный",
+                proposal_name: "",
+                real_specs_found: "",
+                status: "MISSING",
+                comment: "Позиция отсутствует в предложении."
             }
         ]
     };
