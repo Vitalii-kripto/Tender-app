@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, FileText, ShoppingCart, Scale, Briefcase, Layers, FileCheck, Settings } from 'lucide-react';
+import { LayoutDashboard, FileText, ShoppingCart, Scale, Briefcase, Layers, FileCheck, Settings, Calendar } from 'lucide-react';
 
 const Sidebar = () => {
   const navClasses = ({ isActive }: { isActive: boolean }) =>
@@ -31,6 +31,10 @@ const Sidebar = () => {
         <NavLink to="/crm" className={navClasses}>
           <Briefcase size={20} />
           <span>CRM</span>
+        </NavLink>
+        <NavLink to="/calendar" className={navClasses}>
+          <Calendar size={20} />
+          <span>Календарь</span>
         </NavLink>
         <NavLink to="/matching" className={navClasses}>
           <Layers size={20} />

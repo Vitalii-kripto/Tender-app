@@ -18,7 +18,7 @@ const Analysis = () => {
 
   // Batch analysis state
   const [selectedTenders, setSelectedTenders] = useState<Tender[]>([]);
-  const [batchResults, setBatchResults] = useState<Record<string, { risks: LegalRisk[], status: 'pending' | 'loading' | 'done', docText?: string }>>({});
+  const [batchResults, setBatchResults] = useState<Record<string, { risks: LegalRisk[], status: 'pending' | 'loading' | 'done', docText?: string, showDoc?: boolean }>>({});
 
   useEffect(() => {
     // Load from Unified Service (Backend + LocalStorage Fallback)
@@ -89,13 +89,13 @@ const Analysis = () => {
             const risks = await analyzeLegalRisks(extractedText);
             setBatchResults(prev => ({
                 ...prev,
-                [tender.id]: { risks: risks, status: 'done', docText: extractedText.substring(0, 200) + "..." }
+                [tender.id]: { risks: risks, status: 'done', docText: extractedText, showDoc: false }
             }));
         } catch (e) {
             console.error(e);
             setBatchResults(prev => ({
                 ...prev,
-                [tender.id]: { risks: [], status: 'done' }
+                [tender.id]: { risks: [], status: 'done', docText: extractedText, showDoc: false }
             }));
         }
     }
@@ -122,6 +122,30 @@ const Analysis = () => {
       tensile_strength_n: 'Разрывная сила (Н)'
     };
     return map[key] || key;
+  };
+
+  const exportToCSV = (risks: LegalRisk[], tenderNumber: string) => {
+    const headers = ['Уровень риска', 'Документ', 'Требование', 'Описание', 'Дедлайн'];
+    const rows = risks.map(r => [
+      r.risk_level,
+      `"${r.document.replace(/"/g, '""')}"`,
+      `"${r.requirement.replace(/"/g, '""')}"`,
+      `"${r.description.replace(/"/g, '""')}"`,
+      `"${r.deadline.replace(/"/g, '""')}"`
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `risks_report_${tenderNumber}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToPDF = () => {
+    window.print();
   };
 
   return (
@@ -289,8 +313,21 @@ const Analysis = () => {
                                 </div>
 
                                 {result.docText && (
-                                    <div className="px-4 py-2 bg-amber-50 text-[10px] text-amber-800 border-b border-amber-100">
-                                        Проанализировано: {result.docText}
+                                    <div className="px-4 py-2 bg-amber-50 text-[10px] text-amber-800 border-b border-amber-100 flex flex-col gap-2">
+                                        <div className="flex justify-between items-center">
+                                            <span>Проанализированный текст документации</span>
+                                            <button 
+                                                onClick={() => setBatchResults(prev => ({...prev, [tender.id]: {...prev[tender.id], showDoc: !prev[tender.id].showDoc}}))}
+                                                className="text-blue-600 hover:underline font-medium"
+                                            >
+                                                {result.showDoc ? 'Скрыть текст' : 'Показать текст'}
+                                            </button>
+                                        </div>
+                                        {result.showDoc && (
+                                            <div className="bg-white p-3 rounded border border-amber-200 h-64 overflow-y-auto font-mono whitespace-pre-wrap text-slate-700">
+                                                {result.docText}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                                 
@@ -314,9 +351,12 @@ const Analysis = () => {
                                         ))}
                                     </div>
                                 )}
-                                <div className="bg-slate-50 p-2 border-t border-slate-100 flex justify-end">
-                                    <button className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
-                                        <FileDown size={12} /> Скачать полный отчет
+                                <div className="bg-slate-50 p-2 border-t border-slate-100 flex justify-end gap-4">
+                                    <button onClick={() => exportToCSV(result.risks, tender.eis_number)} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
+                                        <FileDown size={12} /> Скачать CSV
+                                    </button>
+                                    <button onClick={exportToPDF} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
+                                        <FileDown size={12} /> Печать / PDF
                                     </button>
                                 </div>
                             </div>

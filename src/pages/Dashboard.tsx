@@ -4,6 +4,8 @@ import { TrendingUp, AlertTriangle, FileCheck, DollarSign, RefreshCw, ServerOff,
 import { fetchDashboardStats } from '../services/geminiService';
 import { DashboardStats } from '../types';
 
+import { useNavigate } from 'react-router-dom';
+
 const StatCard = ({ title, value, subtext, icon: Icon, color }: any) => (
   <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm flex items-start justify-between">
     <div>
@@ -20,6 +22,7 @@ const StatCard = ({ title, value, subtext, icon: Icon, color }: any) => (
 );
 
 const Dashboard = () => {
+  const navigate = useNavigate();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -146,8 +149,11 @@ const Dashboard = () => {
               </div>
             ))}
           </div>
-          <button className="w-full mt-6 py-2 text-sm text-blue-600 font-medium bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-            Все задачи
+          <button 
+            onClick={() => navigate('/calendar')}
+            className="w-full mt-6 py-2 text-sm text-blue-600 font-medium bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors"
+          >
+            Календарь и задачи
           </button>
         </div>
       </div>

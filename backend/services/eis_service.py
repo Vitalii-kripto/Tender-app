@@ -1,14 +1,19 @@
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PwTimeoutError
 from bs4 import BeautifulSoup
 import re
 import logging
+import os
+import time
+import random
+from typing import List
+from urllib.parse import urlencode
 
 # --- LOGGING SETUP ---
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("eis_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
+        logging.FileHandler("eis_service_log.txt", encoding='utf-8', mode='w'),
         logging.StreamHandler()
     ]
 )
@@ -17,9 +22,19 @@ logger = logging.getLogger("EIS_Service")
 class EisService:
     """
     Сервис для поиска по Единой Информационной Системе (zakupki.gov.ru).
-    Использует Playwright (Headless Browser) для обхода защиты от ботов.
+    Использует предоставленный пользователем код на базе Playwright.
     """
-    SEARCH_URL = "https://zakupki.gov.ru/epz/order/extendedsearch/results.html"
+    BASE = "https://zakupki.gov.ru"
+    SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
+    
+    ONLY_APPLICATION_STAGE = True
+    USE_44 = True
+    USE_223 = True
+    RECORDS_PER_PAGE = 50
+    
+    OKPD2_IDS_WITH_NESTED = True
+    OKPD2_IDS = "8873861,8873862,8873863"
+    OKPD2_IDS_CODES = "A,B,C"
 
     def _clean_price(self, price_str):
         if not price_str: return 0.0
@@ -28,6 +43,32 @@ class EisService:
             return float(clean)
         except ValueError:
             return 0.0
+
+    def build_search_url(self, keyword: str, page_number: int) -> str:
+        params = {
+            "searchString": keyword,
+            "morphology": "on",
+            "pageNumber": str(page_number),
+            "sortDirection": "false",
+            "recordsPerPage": f"_{self.RECORDS_PER_PAGE}",
+            "showLotsInfoHidden": "false",
+            "sortBy": "UPDATE_DATE",
+        }
+        if self.ONLY_APPLICATION_STAGE:
+            params["af"] = "on"
+        if self.USE_44:
+            params["fz44"] = "on"
+        if self.USE_223:
+            params["fz223"] = "on"
+
+        if self.OKPD2_IDS_WITH_NESTED:
+            params["okpd2IdsWithNested"] = "on"
+        if self.OKPD2_IDS:
+            params["okpd2Ids"] = self.OKPD2_IDS
+        if self.OKPD2_IDS_CODES:
+            params["okpd2IdsCodes"] = self.OKPD2_IDS_CODES
+
+        return self.SEARCH_URL + "?" + urlencode(params)
 
     def search_tenders(self, query: str):
         """
@@ -39,42 +80,30 @@ class EisService:
         try:
             with sync_playwright() as p:
                 try:
-                    # Запускаем браузер
                     logger.info("Launching Chromium...")
                     browser = p.chromium.launch(headless=True)
                 except Exception as browser_err:
                     logger.critical(f"Failed to launch browser. Error: {browser_err}")
-                    print("HINT: Run 'playwright install' or 'python -m playwright install' in terminal.")
                     return []
                 
                 try:
                     context = browser.new_context(
-                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        locale="ru-RU",
+                        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                         viewport={"width": 1920, "height": 1080}
                     )
                     page = context.new_page()
 
-                    # Формируем URL
-                    params = [
-                        f"searchString={query}",
-                        "morphology=on",
-                        "pageNumber=1",
-                        "sortDirection=false",
-                        "recordsPerPage=_10",
-                        "sortBy=UPDATE_DATE",
-                        "fz44=on",
-                        "fz223=on"
-                    ]
-                    full_url = f"{self.SEARCH_URL}?{'&'.join(params)}"
+                    full_url = self.build_search_url(query, 1)
                     
                     logger.info(f"Navigating to: {full_url}")
-                    # Переход на страницу с увеличенным таймаутом
-                    page.goto(full_url, timeout=45000, wait_until="domcontentloaded")
+                    time.sleep(random.uniform(1.2, 3.2))
+                    page.goto(full_url, timeout=90000, wait_until="domcontentloaded")
+                    time.sleep(random.uniform(0.8, 2.2))
                     
-                    # Ждем селектор
                     try:
-                        page.wait_for_selector("div.search-registry-entry-block", timeout=10000)
-                    except:
+                        page.wait_for_selector("div.search-registry-entry-block", timeout=15000)
+                    except PwTimeoutError:
                         logger.warning("No results found selector appeared or timeout.")
 
                     html_content = page.content()

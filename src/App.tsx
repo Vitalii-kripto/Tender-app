@@ -10,6 +10,7 @@ import TenderSearch from './pages/TenderSearch';
 import ProductMatching from './pages/ProductMatching';
 import ComplianceCheck from './pages/ComplianceCheck';
 import Settings from './pages/Settings';
+import Calendar from './pages/Calendar';
 
 function App() {
   return (
@@ -27,6 +28,7 @@ function App() {
               <Route path="/compliance" element={<ComplianceCheck />} />
               <Route path="/analysis" element={<Analysis />} />
               <Route path="/tenders" element={<TenderSearch />} />
+              <Route path="/calendar" element={<Calendar />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

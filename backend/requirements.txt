@@ -1,0 +1,15 @@
+fastapi==0.110.0
+uvicorn==0.27.1
+sqlalchemy==2.0.28
+playwright==1.42.0
+beautifulsoup4==4.12.3
+python-multipart==0.0.9
+google-genai==0.3.0
+pydantic==2.6.3
+pypdf==4.1.0
+aiofiles==23.2.1
+pdf2image==1.17.0
+pytesseract==0.3.10
+python-dotenv==1.0.1
+aiohttp==3.9.3
+langchain-community==0.0.28

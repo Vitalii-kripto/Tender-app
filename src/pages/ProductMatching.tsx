@@ -75,13 +75,19 @@ const ProductMatching = () => {
 
   const handleSearchFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || e.target.files.length === 0) return;
-      const file = e.target.files[0];
       setSearchExtracting(true);
       try {
-          const { text } = await uploadTenderFile(file);
-          const items = await extractProductsFromText(text);
-          if (items && items.length > 0) {
-              setSearchItems(items.map((item: any, idx: number) => ({
+          let allItems: any[] = [];
+          for (let i = 0; i < e.target.files.length; i++) {
+              const file = e.target.files[i];
+              const { text } = await uploadTenderFile(file);
+              const items = await extractProductsFromText(text);
+              if (items && items.length > 0) {
+                  allItems = [...allItems, ...items];
+              }
+          }
+          if (allItems.length > 0) {
+              setSearchItems(allItems.map((item: any, idx: number) => ({
                   id: Date.now() + idx.toString(),
                   query: `${item.name} ${item.specs}`,
                   status: 'idle',
@@ -168,36 +174,46 @@ const ProductMatching = () => {
 
   const handleRequirementUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || e.target.files.length === 0) return;
-      const file = e.target.files[0];
-      setRequirementsText("Загрузка текста из файла...");
+      setRequirementsText("Загрузка текста из файлов...");
       try {
-          const { text } = await uploadTenderFile(file);
-          setRequirementsText(text);
+          let allText = "";
+          for (let i = 0; i < e.target.files.length; i++) {
+              const file = e.target.files[i];
+              const { text } = await uploadTenderFile(file);
+              allText += `\n--- Файл: ${file.name} ---\n${text}\n`;
+          }
+          setRequirementsText(allText);
       } catch(err) {
-          setRequirementsText("Ошибка чтения файла.");
+          setRequirementsText("Ошибка чтения файлов.");
       }
   };
 
   const handleProposalUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (!e.target.files || e.target.files.length === 0) return;
-      const file = e.target.files[0];
       setValidationExtracting(true);
       try {
-          const { text } = await uploadTenderFile(file);
-          const items = await extractProductsFromText(text);
-          if (items && items.length > 0) {
-              setProposalItems(items.map((item: any, idx: number) => ({
+          let allItems: any[] = [];
+          for (let i = 0; i < e.target.files.length; i++) {
+              const file = e.target.files[i];
+              const { text } = await uploadTenderFile(file);
+              const items = await extractProductsFromText(text);
+              if (items && items.length > 0) {
+                  allItems = [...allItems, ...items];
+              }
+          }
+          if (allItems.length > 0) {
+              setProposalItems(allItems.map((item: any, idx: number) => ({
                   id: Date.now() + idx.toString(),
                   name: item.name || '',
                   quantity: item.quantity || '',
                   specs: item.specs || ''
               })));
           } else {
-              alert("Не удалось извлечь товары из файла.");
+              alert("Не удалось извлечь товары из файлов.");
           }
       } catch(err) {
           console.error(err);
-          alert("Ошибка обработки файла предложения.");
+          alert("Ошибка обработки файлов предложения.");
       } finally {
           setValidationExtracting(false);
       }
@@ -268,7 +284,7 @@ const ProductMatching = () => {
                       <div className="relative group cursor-pointer hover:text-blue-600 transition-colors">
                           <FileUp size={16} />
                           <span className="ml-1 text-xs">Загрузить ТЗ</span>
-                          <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleRequirementUpload}/>
+                          <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleRequirementUpload}/>
                       </div>
                   </div>
                   <div className="p-4 flex-1 flex flex-col overflow-y-auto">
@@ -297,7 +313,7 @@ const ProductMatching = () => {
                       <div className="relative cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1 shadow-sm transition-all">
                           <Zap size={12}/>
                           <span>Загрузить Тех.Предложение</span>
-                          <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleProposalUpload}/>
+                          <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleProposalUpload}/>
                       </div>
                   </div>
                   
@@ -463,7 +479,7 @@ const ProductMatching = () => {
                                 </select>
                                 <div className="relative group cursor-pointer bg-white border border-slate-300 rounded-lg w-10 flex items-center justify-center hover:bg-blue-50">
                                     <FileUp size={18} className="text-slate-500 group-hover:text-blue-600"/>
-                                    <input type="file" className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleSearchFileUpload}/>
+                                    <input type="file" multiple className="absolute inset-0 opacity-0 cursor-pointer" onChange={handleSearchFileUpload}/>
                                 </div>
                              </div>
                         </div>
