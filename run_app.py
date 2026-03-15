@@ -38,10 +38,10 @@ def run_services():
         # 2. Запуск Backend (Python)
         # Используем текущий интерпретатор python (из venv)
         python_executable = sys.executable 
-        print(f"🐍 Запуск Backend ({python_executable} backend.py)...")
+        print(f"🐍 Запуск Backend ({python_executable} run_backend.py)...")
         
         backend_process = subprocess.Popen(
-            [python_executable, "backend.py"],
+            [python_executable, "run_backend.py"],
             cwd=project_root,
             env=os.environ.copy()
         )
