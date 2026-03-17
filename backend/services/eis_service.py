@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from typing import List, Optional, Set, Dict
 from urllib.parse import urlencode, urljoin, urlparse, parse_qs, unquote
 import logging
+import requests
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeoutError
@@ -80,7 +81,8 @@ RF_CFG = RfProxyTunnelConfig(
     warmup_url="https://zakupki.gov.ru/epz/main/public/home.html",
 )
 
-RF_CLIENT = None
+RF_CLIENT_PROXY: Optional[RfProxyHttpClient] = None
+RF_CLIENT_DIRECT: Optional[requests.Session] = None
 
 # =========================
 # SQLite + CSV
@@ -305,18 +307,18 @@ def parse_docs_block(docs_html: str) -> List[tuple[str, str]]:
     return out
 
 def get_http_client():
-    global RF_CLIENT
+    global RF_CLIENT_PROXY, RF_CLIENT_DIRECT
     if USE_PROXY:
-        if RF_CLIENT is None:
+        if RF_CLIENT_PROXY is None:
             from backend.services.auto_ssh import RfProxyHttpClient
-            RF_CLIENT = RfProxyHttpClient(RF_CFG)
-        RF_CLIENT.tunnel.ensure()
-        return RF_CLIENT.session
+            RF_CLIENT_PROXY = RfProxyHttpClient(RF_CFG)
+        RF_CLIENT_PROXY.tunnel.ensure()
+        return RF_CLIENT_PROXY.session
     else:
         import requests
-        if RF_CLIENT is None:
-            RF_CLIENT = requests.Session()
-        return RF_CLIENT
+        if RF_CLIENT_DIRECT is None:
+            RF_CLIENT_DIRECT = requests.Session()
+        return RF_CLIENT_DIRECT
 
 def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
     client = get_http_client()
@@ -692,6 +694,18 @@ class EisService:
                 asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
             except Exception:
                 pass
+
+        if USE_PROXY:
+            try:
+                client = get_http_client() # This ensures tunnel is up
+                # We can't easily call warmup() here because get_http_client returns session
+                # But we can access the global RF_CLIENT_PROXY
+                global RF_CLIENT_PROXY
+                if RF_CLIENT_PROXY:
+                    logger.info("Warming up proxy session...")
+                    RF_CLIENT_PROXY.warmup()
+            except Exception as e:
+                logger.error(f"Proxy warmup failed: {e}")
 
         logger.info(f"Searching EIS via Playwright for: {query}")
         collected: List[Notice] = []
