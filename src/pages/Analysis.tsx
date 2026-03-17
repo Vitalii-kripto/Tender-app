@@ -1,39 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { MOCK_CATALOG } from './ProductCatalog';
-import { findProductEquivalent, analyzeLegalRisks, fetchTenderDocsText, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
-import { AnalysisResult, LegalRisk, Tender } from '../types';
-import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2 } from 'lucide-react';
+import { getTendersFromBackend, deleteTenderFromBackend, processTendersBatch } from '../services/geminiService';
+import { AnalysisResult, LegalAnalysisRow, TenderLegalResult, Tender } from '../types';
+import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, Loader2, CheckSquare, Square, Info, ChevronDown, ChevronUp } from 'lucide-react';
 
 const Analysis = () => {
   const navigate = useNavigate();
-  const [inputText, setInputText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState<'match' | 'legal' | 'batch'>('batch');
   const [statusText, setStatusText] = useState('');
   
-  // Single analysis state
-  const [matchResult, setMatchResult] = useState<AnalysisResult | null>(null);
-  const [legalRisks, setLegalRisks] = useState<LegalRisk[]>([]);
-
   // Batch analysis state
-  const [selectedTenders, setSelectedTenders] = useState<Tender[]>([]);
-  const [batchResults, setBatchResults] = useState<Record<string, { risks: LegalRisk[], status: 'pending' | 'loading' | 'done', docText?: string, showDoc?: boolean }>>({});
+  const [allTenders, setAllTenders] = useState<Tender[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [analysisResults, setAnalysisResults] = useState<TenderLegalResult[]>([]);
+  const [processingStatus, setProcessingStatus] = useState<'idle' | 'loading' | 'completed' | 'error'>('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [expandedTenders, setExpandedTenders] = useState<Set<string>>(new Set());
 
   useEffect(() => {
-    // Load from Unified Service (Backend + LocalStorage Fallback)
     const loadData = async () => {
         try {
             const tenders = await getTendersFromBackend();
-            setSelectedTenders(tenders);
-            
-            const initialResults: any = {};
-            tenders.forEach(t => {
-                initialResults[t.id] = { risks: [], status: 'pending' };
-            });
-            setBatchResults(initialResults);
-            
-            if (tenders.length > 0) setActiveTab('batch');
+            setAllTenders(tenders);
         } catch (e) {
             console.error("Failed to load analysis tenders", e);
         }
@@ -41,424 +29,461 @@ const Analysis = () => {
     loadData();
   }, []);
 
-  const handleSingleAnalyze = async () => {
-    if (!inputText) return;
-    setLoading(true);
-    setStatusText("Анализ...");
-    
-    try {
-      if (activeTab === 'match') {
-        const result = await findProductEquivalent(inputText);
-        setMatchResult(result);
-      } else {
-        const risks = await analyzeLegalRisks(inputText);
-        setLegalRisks(risks);
-      }
-    } catch (e) {
-      console.error(e);
-    } finally {
-      setLoading(false);
+  const toggleTenderSelection = (id: string) => {
+    if (processingStatus === 'loading') return;
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+    if (processingStatus === 'loading') return;
+    if (selectedIds.size === allTenders.length && allTenders.length > 0) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(allTenders.map(t => t.id)));
     }
   };
 
-  const runBatchAnalysis = async () => {
-    setLoading(true);
-    
-    for (const tender of selectedTenders) {
-        // 1. Статус: скачивание
-        setBatchResults(prev => ({
-            ...prev,
-            [tender.id]: { ...prev[tender.id], status: 'loading' }
-        }));
-        setStatusText(`Скачивание документации для №${tender.eis_number}...`);
-
-        // 2. Реальное скачивание текста через Backend
-        let extractedText = "";
-        if (tender.url) {
-            extractedText = await fetchTenderDocsText(tender.url, tender.eis_number);
-        }
-
-        if (!extractedText || extractedText.length < 50) {
-             extractedText = `Не удалось скачать документы автоматически. Анализируем описание: ${tender.description}`;
-        }
-
-        setStatusText(`ИИ анализ условий контракта №${tender.eis_number}...`);
-
-        // 3. Отправка в Gemini
-        try {
-            const risks = await analyzeLegalRisks(extractedText);
-            setBatchResults(prev => ({
-                ...prev,
-                [tender.id]: { risks: risks, status: 'done', docText: extractedText, showDoc: false }
-            }));
-        } catch (e) {
-            console.error(e);
-            setBatchResults(prev => ({
-                ...prev,
-                [tender.id]: { risks: [], status: 'done', docText: extractedText, showDoc: false }
-            }));
-        }
+  const toggleExpand = (id: string) => {
+    const newExpanded = new Set(expandedTenders);
+    if (newExpanded.has(id)) {
+      newExpanded.delete(id);
+    } else {
+      newExpanded.add(id);
     }
-    setLoading(false);
-    setStatusText("");
+    setExpandedTenders(newExpanded);
+  };
+
+  const handleBatchAnalyze = async () => {
+    if (selectedIds.size === 0) {
+      setErrorMessage("Выберите хотя бы один тендер для анализа.");
+      return;
+    }
+    
+    setErrorMessage(null);
+    setLoading(true);
+    setProcessingStatus('loading');
+    setStatusText("Запуск пакетного анализа...");
+    
+    try {
+      const results = await processTendersBatch(Array.from(selectedIds));
+      setAnalysisResults(results);
+      setProcessingStatus('completed');
+      // Expand all results by default
+      setExpandedTenders(new Set(results.map(r => r.tender_id)));
+    } catch (e: any) {
+      console.error(e);
+      setErrorMessage(e.message || "Произошла ошибка при анализе.");
+      setProcessingStatus('error');
+    } finally {
+      setLoading(false);
+      setStatusText("");
+    }
   };
 
   const removeTender = async (id: string) => {
+    if (processingStatus === 'loading') return;
     if(confirm("Убрать этот тендер из CRM?")) {
-        const updated = selectedTenders.filter(t => t.id !== id);
-        setSelectedTenders(updated);
-        await deleteTenderFromBackend(id); // Sync delete
-        if (updated.length === 0) setActiveTab('match');
+        const updated = allTenders.filter(t => t.id !== id);
+        setAllTenders(updated);
+        
+        if (selectedIds.has(id)) {
+          const newSelected = new Set(selectedIds);
+          newSelected.delete(id);
+          setSelectedIds(newSelected);
+        }
+        
+        setAnalysisResults(prev => prev.filter(r => r.tender_id !== id));
+        await deleteTenderFromBackend(id);
     }
   };
 
-  const getRecommendedProduct = (id?: string) => MOCK_CATALOG.find(p => p.id === id);
-
-  const formatSpecKey = (key: string) => {
-    const map: Record<string, string> = {
-      thickness_mm: 'Толщина (мм)',
-      weight_kg_m2: 'Вес (кг/м²)',
-      flexibility_temp_c: 'Гибкость на брусе (°C)',
-      tensile_strength_n: 'Разрывная сила (Н)'
-    };
-    return map[key] || key;
+  const formatPrice = (price: any) => {
+    if (price === null || price === undefined || price === "") return "Сумма не указана";
+    const num = typeof price === 'string' ? parseFloat(price.replace(/[^\d.]/g, '')) : price;
+    if (isNaN(num)) return "Сумма не указана";
+    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(num);
   };
 
-  const exportToCSV = (risks: LegalRisk[], tenderNumber: string) => {
-    const headers = ['Уровень риска', 'Документ', 'Требование', 'Описание', 'Дедлайн'];
-    const rows = risks.map(r => [
-      r.risk_level,
-      `"${r.document.replace(/"/g, '""')}"`,
-      `"${r.requirement.replace(/"/g, '""')}"`,
-      `"${r.description.replace(/"/g, '""')}"`,
-      `"${r.deadline.replace(/"/g, '""')}"`
+  const getRiskBadgeClass = (level: string) => {
+    switch (level.toLowerCase()) {
+      case 'high': return 'bg-red-100 text-red-700 border-red-200';
+      case 'medium': return 'bg-amber-100 text-amber-700 border-amber-200';
+      case 'low': return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+      default: return 'bg-slate-100 text-slate-700 border-slate-200';
+    }
+  };
+
+  const getRiskLabel = (level: string) => {
+    switch (level.toLowerCase()) {
+      case 'high': return 'Высокий';
+      case 'medium': return 'Средний';
+      case 'low': return 'Низкий';
+      default: return level;
+    }
+  };
+
+  const exportToCSV = (rows: LegalAnalysisRow[], tenderNumber: string) => {
+    const headers = ['Блок', 'Находка', 'Уровень риска', 'Действие поставщика', 'Документ', 'Ссылка', 'Основание'];
+    const csvRows = rows.map(r => [
+      `"${r.block}"`,
+      `"${r.finding.replace(/"/g, '""')}"`,
+      `"${r.risk_level}"`,
+      `"${r.supplier_action.replace(/"/g, '""')}"`,
+      `"${r.source_document.replace(/"/g, '""')}"`,
+      `"${r.source_reference.replace(/"/g, '""')}"`,
+      `"${(r.legal_basis || '').replace(/"/g, '""')}"`
     ]);
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = [headers.join(','), ...csvRows.map(r => r.join(','))].join('\n');
     const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.setAttribute('download', `risks_report_${tenderNumber}.csv`);
+    link.setAttribute('download', `legal_analysis_${tenderNumber}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
   };
 
-  const exportToPDF = () => {
-    window.print();
-  };
-
   return (
-    <div className="p-6 max-w-6xl mx-auto pb-20">
-      <div className="mb-8">
-        <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
-          <Cpu className="text-blue-600" />
-          ИИ Анализ (AI Engine)
-        </h2>
-        <p className="text-slate-500 text-sm mt-1">
-          Реальный анализ тендерной документации на риски. Источник данных: CRM.
-        </p>
+    <div className="p-6 max-w-7xl mx-auto pb-20">
+      <div className="mb-8 flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h2 className="text-3xl font-bold text-slate-900 flex items-center gap-3">
+            <Shield className="text-blue-600 w-8 h-8" />
+            ИИ Юрист
+          </h2>
+          <p className="text-slate-500 mt-2 max-w-2xl">
+            Пакетный юридический анализ тендерной документации. Система классифицирует документы, находит скрытые риски и дает рекомендации поставщику.
+          </p>
+        </div>
+        
+        <div className="flex items-center gap-4 bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
+          <div className="px-4 border-r border-slate-100">
+            <span className="block text-[10px] uppercase text-slate-400 font-bold">Всего тендеров</span>
+            <span className="text-xl font-bold text-slate-700">{allTenders.length}</span>
+          </div>
+          <div className="px-4">
+            <span className="block text-[10px] uppercase text-slate-400 font-bold">Выбрано для анализа</span>
+            <span className={`text-xl font-bold ${selectedIds.size > 0 ? 'text-blue-600' : 'text-slate-300'}`}>{selectedIds.size}</span>
+          </div>
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-        {/* Input/Selection Section */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col h-[600px] overflow-hidden">
-          <div className="border-b border-slate-200 flex bg-slate-50">
-            <button 
-              onClick={() => setActiveTab('batch')}
-              className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'batch' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <div className="relative">
-                <FileText size={16} />
-                {selectedTenders.length > 0 && <span className="absolute -top-1 -right-2 w-3 h-3 bg-red-500 rounded-full border border-white"></span>}
+      <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+        {/* Tender List Section */}
+        <div className="xl:col-span-5 flex flex-col gap-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[700px]">
+            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={toggleSelectAll}
+                  disabled={processingStatus === 'loading'}
+                  className="text-slate-500 hover:text-blue-600 transition-colors"
+                >
+                  {selectedIds.size === allTenders.length && allTenders.length > 0 ? (
+                    <CheckSquare className="w-5 h-5 text-blue-600" />
+                  ) : (
+                    <Square className="w-5 h-5" />
+                  )}
+                </button>
+                <span className="text-sm font-bold text-slate-700">Список тендеров</span>
               </div>
-              Тендеры в работе ({selectedTenders.length})
-            </button>
-            <button 
-              onClick={() => setActiveTab('match')}
-              className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'match' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-            >
-              <ScanEye size={16} />
-              Ручной ввод
-            </button>
-          </div>
-          
-          {activeTab === 'batch' ? (
-            <div className="flex-1 flex flex-col p-4 bg-slate-50/50">
-                {selectedTenders.length === 0 ? (
-                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
-                        <FileText size={48} className="text-slate-300 mb-4" />
-                        <h3 className="text-lg font-medium text-slate-700">Нет тендеров в CRM</h3>
-                        <p className="text-sm text-slate-500 mb-6">Перейдите в поиск и добавьте закупки в работу.</p>
-                        <button onClick={() => navigate('/tenders')} className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors text-sm font-medium">
-                            Перейти к поиску
-                        </button>
-                    </div>
-                ) : (
-                    <>
-                        <div className="flex-1 overflow-y-auto space-y-3 pr-2 mb-4">
-                            {selectedTenders.map(tender => (
-                                <div key={tender.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-start gap-3">
-                                    <div className="flex-1 min-w-0">
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className="text-xs font-mono bg-slate-100 px-1.5 rounded text-slate-500">#{tender.eis_number}</span>
-                                            {batchResults[tender.id]?.status === 'loading' && <span className="text-xs text-blue-600 animate-pulse font-medium">Загрузка...</span>}
-                                            {batchResults[tender.id]?.status === 'done' && <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><CheckCircle size={10}/> Готово</span>}
-                                        </div>
-                                        <h4 className="text-sm font-medium text-slate-800 line-clamp-2">{tender.title}</h4>
-                                    </div>
-                                    <button 
-                                        onClick={() => removeTender(tender.id)}
-                                        disabled={loading}
-                                        className="text-slate-400 hover:text-red-500 p-1"
-                                        title="Удалить из CRM"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
-                                </div>
-                            ))}
-                        </div>
-                        <div className="border-t border-slate-200 pt-4">
-                            <button 
-                                onClick={runBatchAnalysis}
-                                disabled={loading || selectedTenders.length === 0}
-                                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-bold transition-all shadow-md ${loading ? 'bg-slate-700 cursor-wait' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:scale-[1.01]'}`}
-                            >
-                                {loading ? (
-                                    <>
-                                        <Loader2 size={20} className="animate-spin" />
-                                        Идет работа...
-                                    </>
-                                ) : (
-                                    <>
-                                        <Cpu size={20} />
-                                        ИИ Анализ документации (Real)
-                                    </>
-                                )}
-                            </button>
-                            <p className="text-xs text-center text-slate-400 mt-2">
-                                Система скачает документы с zakupki.gov.ru, прочитает PDF и найдет риски.
-                            </p>
-                        </div>
-                    </>
-                )}
+              
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => setSelectedIds(new Set(allTenders.map(t => t.id)))}
+                  disabled={processingStatus === 'loading'}
+                  className="text-[10px] uppercase font-bold text-blue-600 hover:underline"
+                >
+                  Выбрать все
+                </button>
+                <span className="text-slate-300">|</span>
+                <button 
+                  onClick={() => setSelectedIds(new Set())}
+                  disabled={processingStatus === 'loading'}
+                  className="text-[10px] uppercase font-bold text-slate-400 hover:underline"
+                >
+                  Сбросить
+                </button>
+              </div>
             </div>
-          ) : (
-             <div className="p-4 flex-1 flex flex-col">
-                <textarea
-                className="w-full flex-1 p-4 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm"
-                placeholder="Вставьте тех. характеристики или текст контракта вручную..."
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                />
-                <div className="flex items-center gap-4 mt-4">
-                     <label className="flex items-center gap-2 text-sm text-slate-600">
-                        <input type="radio" name="mode" checked={activeTab === 'match'} onChange={() => setActiveTab('match')} />
-                        Подбор товара
-                     </label>
-                     <label className="flex items-center gap-2 text-sm text-slate-600">
-                        <input type="radio" name="mode" checked={activeTab === 'legal'} onChange={() => setActiveTab('legal')} />
-                        Юр. риски
-                     </label>
-                     <button 
-                        onClick={handleSingleAnalyze}
-                        disabled={loading || !inputText}
-                        className={`ml-auto flex items-center gap-2 px-6 py-2.5 rounded-lg text-white font-medium transition-all ${loading || !inputText ? 'bg-slate-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-md'}`}
-                    >
-                        {loading ? 'Анализ...' : 'Запустить'}
-                    </button>
+
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+              {allTenders.length === 0 ? (
+                <div className="h-full flex flex-col items-center justify-center text-center p-8">
+                  <FileText size={48} className="text-slate-200 mb-4" />
+                  <h3 className="text-lg font-medium text-slate-700">Тендеры не найдены</h3>
+                  <p className="text-sm text-slate-400 mt-2">Добавьте тендеры из поиска, чтобы начать анализ.</p>
+                  <button 
+                    onClick={() => navigate('/tenders')}
+                    className="mt-6 px-6 py-2 bg-blue-600 text-white rounded-xl font-medium hover:bg-blue-700 transition-all shadow-md"
+                  >
+                    Перейти к поиску
+                  </button>
                 </div>
+              ) : (
+                allTenders.map(tender => (
+                  <div 
+                    key={tender.id} 
+                    onClick={() => toggleTenderSelection(tender.id)}
+                    className={`group relative p-4 rounded-xl border transition-all cursor-pointer ${selectedIds.has(tender.id) ? 'border-blue-200 bg-blue-50/30' : 'border-slate-100 hover:border-slate-200 hover:bg-slate-50'}`}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className="mt-1">
+                        {selectedIds.has(tender.id) ? (
+                          <CheckSquare className="w-5 h-5 text-blue-600" />
+                        ) : (
+                          <Square className="w-5 h-5 text-slate-300 group-hover:text-slate-400" />
+                        )}
+                      </div>
+                      
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] font-mono font-bold text-slate-400">№ {tender.eis_number}</span>
+                          <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">{tender.law_type}</span>
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-800 line-clamp-1 mb-1">{tender.title}</h4>
+                        <p className="text-xs text-slate-500 line-clamp-2 mb-3 leading-relaxed">{tender.description}</p>
+                        
+                        <div className="flex items-center justify-between mt-auto pt-3 border-t border-slate-100/50">
+                          <span className="text-sm font-black text-slate-900">{formatPrice(tender.initial_price)}</span>
+                          <div className="flex items-center gap-3">
+                            {tender.deadline && (
+                              <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                                До {tender.deadline}
+                              </span>
+                            )}
+                            <button 
+                              onClick={(e) => { e.stopPropagation(); removeTender(tender.id); }}
+                              className="text-slate-300 hover:text-red-500 transition-colors"
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-          )}
+
+            <div className="p-4 bg-white border-t border-slate-100">
+              {errorMessage && (
+                <div className="mb-4 p-3 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-600 text-xs animate-in fade-in slide-in-from-top-2">
+                  <AlertTriangle size={16} />
+                  {errorMessage}
+                </div>
+              )}
+              
+              <button 
+                onClick={handleBatchAnalyze}
+                disabled={loading || selectedIds.size === 0}
+                className={`w-full flex items-center justify-center gap-3 py-4 rounded-2xl text-white font-black transition-all shadow-lg ${loading || selectedIds.size === 0 ? 'bg-slate-300 cursor-not-allowed shadow-none' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-blue-200 hover:scale-[1.02] active:scale-[0.98]'}`}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={20} className="animate-spin" />
+                    Анализируем...
+                  </>
+                ) : (
+                  <>
+                    <Cpu size={20} />
+                    Проанализировать выбранные ({selectedIds.size})
+                  </>
+                )}
+              </button>
+              <p className="text-[10px] text-center text-slate-400 mt-3 uppercase tracking-widest font-bold">
+                ИИ изучит все документы и составит отчет
+              </p>
+            </div>
+          </div>
         </div>
 
         {/* Results Section */}
-        <div className="space-y-6 h-[600px] overflow-y-auto pr-2 custom-scrollbar">
-          
-          {/* 1. Loading State */}
-          {loading && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
-              <div className="relative">
-                <div className="w-16 h-16 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
-                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <Cpu size={24} className="text-blue-600" />
-                </div>
-              </div>
-              <p className="animate-pulse font-medium">{statusText || "Агент работает..."}</p>
+        <div className="xl:col-span-7">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-[700px]">
+            <div className="p-4 border-b border-slate-100 bg-slate-50/50 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-700">Результаты анализа</h3>
+              {analysisResults.length > 0 && (
+                <span className="text-[10px] font-bold text-slate-400 uppercase">Готово: {analysisResults.length} из {selectedIds.size}</span>
+              )}
             </div>
-          )}
 
-          {/* 2. Batch Results State */}
-          {!loading && activeTab === 'batch' && selectedTenders.length > 0 && (
-             <div className="space-y-8">
-                {selectedTenders.map(tender => {
-                    const result = batchResults[tender.id];
-                    if (!result || result.status !== 'done') return null;
-
-                    return (
-                        <div key={tender.id} className="animate-in slide-in-from-bottom-4 fade-in duration-500">
-                            <div className="flex items-center gap-2 mb-3 sticky top-0 bg-slate-50/90 backdrop-blur py-2 z-10">
-                                <span className="bg-slate-200 text-slate-600 text-xs font-mono px-2 py-0.5 rounded">#{tender.eis_number}</span>
-                                <h3 className="font-bold text-slate-800 text-sm truncate max-w-md">{tender.title}</h3>
-                            </div>
-                            
-                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                <div className="bg-slate-50 px-4 py-2 border-b border-slate-100 flex justify-between items-center">
-                                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Отчет ИИ-Юриста</span>
-                                    {result.risks.length > 0 ? (
-                                        <span className="text-xs font-bold text-red-600 flex items-center gap-1"><AlertTriangle size={12}/> Найдено рисков: {result.risks.length}</span>
-                                    ) : (
-                                        <span className="text-xs font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={12}/> Рисков не обнаружено</span>
-                                    )}
-                                </div>
-
-                                {result.docText && (
-                                    <div className="px-4 py-2 bg-amber-50 text-[10px] text-amber-800 border-b border-amber-100 flex flex-col gap-2">
-                                        <div className="flex justify-between items-center">
-                                            <span>Проанализированный текст документации</span>
-                                            <button 
-                                                onClick={() => setBatchResults(prev => ({...prev, [tender.id]: {...prev[tender.id], showDoc: !prev[tender.id].showDoc}}))}
-                                                className="text-blue-600 hover:underline font-medium"
-                                            >
-                                                {result.showDoc ? 'Скрыть текст' : 'Показать текст'}
-                                            </button>
-                                        </div>
-                                        {result.showDoc && (
-                                            <div className="bg-white p-3 rounded border border-amber-200 h-64 overflow-y-auto font-mono whitespace-pre-wrap text-slate-700">
-                                                {result.docText}
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
-                                
-                                {result.risks.length === 0 ? (
-                                    <div className="p-6 text-center text-slate-400">
-                                        <p className="text-sm">Документация выглядит стандартной. Критических условий не найдено.</p>
-                                    </div>
-                                ) : (
-                                    <div className="divide-y divide-slate-100">
-                                        {result.risks.map((risk, idx) => (
-                                            <div key={idx} className="p-4 hover:bg-slate-50 transition-colors">
-                                                <div className="flex justify-between items-start mb-1">
-                                                    <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${risk.risk_level === 'High' ? 'bg-red-100 text-red-700' : risk.risk_level === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
-                                                        {risk.risk_level === 'High' ? 'Высокий' : risk.risk_level === 'Medium' ? 'Средний' : 'НИЗКИЙ'}
-                                                    </span>
-                                                    <span className="text-xs text-slate-400">{risk.document}</span>
-                                                </div>
-                                                <p className="text-sm font-semibold text-slate-800 mt-1">{risk.requirement}</p>
-                                                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{risk.description}</p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                <div className="bg-slate-50 p-2 border-t border-slate-100 flex justify-end gap-4">
-                                    <button onClick={() => exportToCSV(result.risks, tender.eis_number)} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
-                                        <FileDown size={12} /> Скачать CSV
-                                    </button>
-                                    <button onClick={exportToPDF} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
-                                        <FileDown size={12} /> Печать / PDF
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    );
-                })}
-             </div>
-          )}
-
-          {/* 3. Single Result State (Match) */}
-          {!loading && matchResult && activeTab === 'match' && (
-            <div className="space-y-6">
-              <div className={`p-6 rounded-xl border ${matchResult.is_equivalent ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
-                <div className="flex items-start gap-4">
-                  <div className={`p-3 rounded-full ${matchResult.is_equivalent ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
-                    {matchResult.is_equivalent ? <CheckCircle size={24} /> : <AlertTriangle size={24} />}
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
+              {processingStatus === 'idle' && analysisResults.length === 0 && (
+                <div className="h-full flex flex-col items-center justify-center text-center opacity-40">
+                  <div className="w-24 h-24 bg-slate-50 rounded-full flex items-center justify-center mb-6">
+                    <Shield size={48} className="text-slate-300" />
                   </div>
-                  <div>
-                    <h3 className={`text-lg font-bold ${matchResult.is_equivalent ? 'text-emerald-800' : 'text-red-800'}`}>
-                      {matchResult.is_equivalent ? 'Найден эквивалент' : 'Нет прямого аналога'}
-                    </h3>
-                    <p className="text-sm mt-1 opacity-80">
-                      Уверенность ИИ: <strong>{(matchResult.confidence * 100).toFixed(0)}%</strong>
-                    </p>
-                  </div>
+                  <h3 className="text-xl font-bold text-slate-800">Готов к работе</h3>
+                  <p className="text-sm text-slate-500 mt-2 max-w-xs">Выберите тендеры слева и нажмите кнопку запуска анализа.</p>
                 </div>
-              </div>
-
-              {matchResult.recommended_product_id && (
-                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                   <p className="text-xs text-slate-400 uppercase tracking-wider font-bold mb-3">Рекомендованный продукт</p>
-                   {(() => {
-                     const p = getRecommendedProduct(matchResult.recommended_product_id);
-                     if (!p) return null;
-                     return (
-                       <div>
-                         <h4 className="text-xl font-bold text-slate-800">{p.title}</h4>
-                         <p className="text-sm text-slate-500 mb-4">{p.category} | {p.material_type}</p>
-                         <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg">
-                            {Object.entries(p.specs).map(([k,v]) => (
-                                <div key={k}>
-                                    <span className="block text-xs text-slate-400 capitalize">{formatSpecKey(k)}</span>
-                                    <span className="font-medium text-slate-800">{v}</span>
-                                </div>
-                            ))}
-                         </div>
-                       </div>
-                     );
-                   })()}
-                 </div>
               )}
 
-              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
-                <h4 className="font-bold text-slate-800 mb-2">Обоснование ИИ</h4>
-                <p className="text-slate-600 text-sm leading-relaxed">{matchResult.reasoning}</p>
-                {matchResult.critical_mismatches.length > 0 && (
-                  <div className="mt-4 pt-4 border-t border-slate-100">
-                     <h5 className="text-red-600 text-sm font-bold mb-2">Критические расхождения:</h5>
-                     <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
-                        {matchResult.critical_mismatches.map((m, i) => (
-                            <li key={i}>{m}</li>
-                        ))}
-                     </ul>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* 4. Single Result State (Legal) */}
-          {!loading && legalRisks.length > 0 && activeTab === 'legal' && (
-            <div className="space-y-4">
-               {legalRisks.map((risk, idx) => (
-                 <div key={idx} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                    <div className={`h-1.5 w-full ${risk.risk_level === 'High' ? 'bg-red-500' : risk.risk_level === 'Medium' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
-                    <div className="p-5">
-                       <div className="flex justify-between items-start mb-2">
-                          <span className="text-xs font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">
-                             {risk.document}
-                          </span>
-                          <span className={`text-xs font-bold px-2 py-1 rounded ${risk.risk_level === 'High' ? 'text-red-600 bg-red-50' : risk.risk_level === 'Medium' ? 'text-amber-600 bg-amber-50' : 'text-emerald-600 bg-emerald-50'}`}>
-                            {risk.risk_level === 'High' ? 'ВЫСОКИЙ' : risk.risk_level === 'Medium' ? 'СРЕДНИЙ' : 'НИЗКИЙ'}
-                          </span>
-                       </div>
-                       <h4 className="font-bold text-slate-800 mb-2">Требование: {risk.requirement}</h4>
-                       <p className="text-sm text-slate-600 mb-3">{risk.description}</p>
-                       <div className="flex items-center gap-2 text-xs text-slate-500">
-                          <span className="font-semibold">Срок/Дедлайн:</span> {risk.deadline}
-                       </div>
+              {processingStatus === 'loading' && (
+                <div className="h-full flex flex-col items-center justify-center text-center">
+                  <div className="relative mb-8">
+                    <div className="w-20 h-20 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
+                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+                      <Cpu size={32} className="text-blue-600" />
                     </div>
-                 </div>
-               ))}
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-800 animate-pulse">{statusText}</h3>
+                  <p className="text-sm text-slate-400 mt-4 max-w-sm">Это может занять до 2-3 минут в зависимости от объема документации.</p>
+                </div>
+              )}
+
+              {analysisResults.map((result, idx) => (
+                <div key={result.tender_id} className="animate-in fade-in slide-in-from-bottom-4 duration-500" style={{ animationDelay: `${idx * 150}ms` }}>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${result.status === 'error' ? 'bg-red-50 text-red-600' : 'bg-blue-50 text-blue-600'}`}>
+                        {result.status === 'error' ? <AlertTriangle size={20} /> : <FileText size={20} />}
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono font-bold text-slate-400">№ {result.eis_number}</span>
+                          {result.status === 'ready' && (
+                            <span className="text-[10px] font-bold text-emerald-600 flex items-center gap-1">
+                              <CheckCircle size={10} /> Анализ завершен
+                            </span>
+                          )}
+                        </div>
+                        <h4 className="text-sm font-bold text-slate-800 line-clamp-1">{result.title}</h4>
+                      </div>
+                    </div>
+                    
+                    <button 
+                      onClick={() => toggleExpand(result.tender_id)}
+                      className="p-2 hover:bg-slate-50 rounded-lg transition-colors text-slate-400"
+                    >
+                      {expandedTenders.has(result.tender_id) ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                    </button>
+                  </div>
+
+                  {result.status === 'error' ? (
+                    <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-start gap-3">
+                      <AlertTriangle className="text-red-500 shrink-0 mt-0.5" size={18} />
+                      <div>
+                        <p className="text-sm font-bold text-red-800">Ошибка анализа</p>
+                        <p className="text-xs text-red-600 mt-1">{result.error_message || "Не удалось обработать документы."}</p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {/* Summary Cards */}
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">Высокий риск</span>
+                          <span className={`text-xl font-black ${result.summary.high_risks > 0 ? 'text-red-600' : 'text-slate-300'}`}>{result.summary.high_risks}</span>
+                        </div>
+                        <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">Средний риск</span>
+                          <span className={`text-xl font-black ${result.summary.medium_risks > 0 ? 'text-amber-600' : 'text-slate-300'}`}>{result.summary.medium_risks}</span>
+                        </div>
+                        <div className="bg-white p-3 rounded-2xl border border-slate-100 shadow-sm flex flex-col items-center justify-center text-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase mb-1">Низкий риск</span>
+                          <span className={`text-xl font-black ${result.summary.low_risks > 0 ? 'text-blue-600' : 'text-slate-300'}`}>{result.summary.low_risks}</span>
+                        </div>
+                      </div>
+
+                      {/* Analysis Table */}
+                      {expandedTenders.has(result.tender_id) && (
+                        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden animate-in slide-in-from-top-2 duration-300">
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-left text-xs border-collapse">
+                              <thead>
+                                <tr className="bg-slate-50 border-b border-slate-100">
+                                  <th className="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider w-32">Блок</th>
+                                  <th className="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Находка и Риск</th>
+                                  <th className="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider">Действие поставщика</th>
+                                  <th className="px-4 py-3 font-bold text-slate-500 uppercase tracking-wider w-40">Источник</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-50">
+                                {result.rows.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={4} className="px-4 py-8 text-center text-slate-400 italic">
+                                      Критических условий не выявлено
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  result.rows.map((row, rIdx) => (
+                                    <tr key={rIdx} className="hover:bg-slate-50/50 transition-colors">
+                                      <td className="px-4 py-4 align-top">
+                                        <span className="font-bold text-slate-700">{row.block}</span>
+                                      </td>
+                                      <td className="px-4 py-4 align-top">
+                                        <div className="flex flex-col gap-2">
+                                          <div className="flex items-center gap-2">
+                                            <span className={`text-[9px] font-black uppercase px-1.5 py-0.5 rounded-md border ${getRiskBadgeClass(row.risk_level)}`}>
+                                              {getRiskLabel(row.risk_level)}
+                                            </span>
+                                          </div>
+                                          <p className="text-slate-800 leading-relaxed">{row.finding}</p>
+                                          {row.legal_basis && (
+                                            <p className="text-[10px] text-slate-400 italic">Основание: {row.legal_basis}</p>
+                                          )}
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-4 align-top">
+                                        <div className="flex items-start gap-2 text-blue-700 bg-blue-50/50 p-2 rounded-lg border border-blue-100/50">
+                                          <ArrowRight size={12} className="shrink-0 mt-0.5" />
+                                          <p className="font-medium">{row.supplier_action}</p>
+                                        </div>
+                                      </td>
+                                      <td className="px-4 py-4 align-top">
+                                        <div className="flex flex-col gap-1">
+                                          <span className="text-slate-500 font-medium truncate max-w-[140px]" title={row.source_document}>
+                                            {row.source_document}
+                                          </span>
+                                          <span className="text-[10px] text-slate-400">{row.source_reference}</span>
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                          
+                          <div className="p-3 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                              <Info size={12} />
+                              <span>{result.summary.unread_files > 0 ? `Не удалось прочитать файлов: ${result.summary.unread_files}` : 'Все файлы успешно обработаны'}</span>
+                            </div>
+                            <div className="flex gap-3">
+                              <button 
+                                onClick={() => exportToCSV(result.rows, result.eis_number)}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <FileDown size={12} /> CSV
+                              </button>
+                              <button 
+                                onClick={() => window.print()}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-[10px] font-bold text-slate-600 hover:bg-slate-50 transition-colors shadow-sm"
+                              >
+                                <FileDown size={12} /> PDF
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                  
+                  {idx < analysisResults.length - 1 && <div className="my-8 border-t border-slate-100 border-dashed" />}
+                </div>
+              ))}
             </div>
-          )}
-          
-          {/* Empty State */}
-          {!loading && !matchResult && legalRisks.length === 0 && selectedTenders.length === 0 && (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-50">
-                  <Cpu size={48} className="mb-4"/>
-                  <p>Результаты появятся здесь</p>
-              </div>
-          )}
+          </div>
         </div>
       </div>
     </div>

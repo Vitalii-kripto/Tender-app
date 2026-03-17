@@ -162,7 +162,7 @@ const Header = () => {
                                       <span className="text-[10px] text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded ml-2 whitespace-nowrap">{t.eis_number}</span>
                                   </div>
                                   <div className="flex justify-between mt-1 text-xs text-slate-500">
-                                      <span>₽{(t.initial_price/1000).toLocaleString()}k</span>
+                                      <span>₽{(Number(t.initial_price)/1000).toLocaleString()}k</span>
                                       <span className={`px-1.5 rounded ${t.status === 'Found' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'}`}>{t.status}</span>
                                   </div>
                               </button>

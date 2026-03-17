@@ -51,6 +51,34 @@ export interface LegalRisk {
   description: string;
 }
 
+export interface LegalAnalysisRow {
+  block: string;
+  finding: string;
+  risk_level: 'high' | 'medium' | 'low';
+  supplier_action: string;
+  source_document: string;
+  source_reference: string;
+  legal_basis?: string;
+}
+
+export interface TenderLegalResult {
+  tender_id: string;
+  eis_number: string;
+  title: string;
+  description: string;
+  initial_price: string;
+  status: 'preparing' | 'extracting' | 'classifying' | 'analyzing_contract' | 'analyzing_docs' | 'generating_report' | 'ready' | 'error';
+  error_message?: string;
+  summary: {
+    high_risks: number;
+    medium_risks: number;
+    low_risks: number;
+    contract_found: boolean;
+    unread_files: number;
+  };
+  rows: LegalAnalysisRow[];
+}
+
 export interface AnalysisResult {
   is_equivalent: boolean;
   confidence: number;

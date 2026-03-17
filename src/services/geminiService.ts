@@ -8,7 +8,7 @@ import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceR
 // Если false - пытается подключиться к API (localhost:8000).
 const IS_DEMO_MODE = false; 
 
-export const API_BASE_URL = 'http://localhost:8000'; 
+export const API_BASE_URL = ''; 
 
 const LOCAL_STORAGE_KEY_CRM = 'TENDER_SMART_CRM_DATA';
 const LOCAL_STORAGE_KEY_PRODUCTS = 'TENDER_SMART_PRODUCTS_DATA';
@@ -318,6 +318,25 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
         if (!response.ok) throw new Error("Server error");
     } catch (error) {
         console.error("Failed to process tenders", error);
+    }
+};
+
+export const processTendersBatch = async (tenderIds: string[]): Promise<any[]> => {
+    if (IS_DEMO_MODE) {
+        await delay(2000);
+        return [];
+    }
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ tender_ids: tenderIds })
+        });
+        if (!response.ok) throw new Error("Server error");
+        return await response.json();
+    } catch (error) {
+        console.error("Failed to process tenders batch", error);
+        throw error;
     }
 };
 

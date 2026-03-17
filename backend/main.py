@@ -462,6 +462,119 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error(f"Upload Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/search-tenders/process")
+async def api_process_tenders(data: dict = Body(...), db: Session = Depends(get_db)):
+    """
+    Пакетная обработка тендеров: загрузка документов, извлечение текста, классификация и юридический анализ.
+    """
+    tender_ids = data.get('tender_ids', [])
+    logger.info(f"Batch processing request for {len(tender_ids)} tenders.")
+    
+    results = []
+    
+    # Путь к скачанным документам
+    eis_docs_dir = os.path.join(os.getcwd(), "data", "eis_docs")
+    
+    for t_id in tender_ids:
+        tender = db.query(TenderModel).filter(TenderModel.id == t_id).first()
+        if not tender:
+            logger.warning(f"Tender {t_id} not found in database.")
+            continue
+            
+        tender_result = {
+            "tender_id": t_id,
+            "eis_number": tender.id,
+            "title": tender.title,
+            "description": tender.description,
+            "initial_price": tender.initial_price,
+            "status": "processing",
+            "rows": [],
+            "summary": {
+                "high_risks": 0,
+                "medium_risks": 0,
+                "low_risks": 0,
+                "total_findings": 0,
+                "files_analyzed": 0,
+                "files_status": "No files"
+            }
+        }
+        
+        try:
+            # 1. Поиск файлов
+            reg_dir = os.path.join(eis_docs_dir, t_id)
+            files = []
+            if os.path.exists(reg_dir):
+                files = [os.path.join(reg_dir, f) for f in os.listdir(reg_dir) if os.path.isfile(os.path.join(reg_dir, f))]
+            
+            if not files:
+                tender_result["status"] = "error"
+                tender_result["error_message"] = "Документы не найдены. Сначала скачайте их."
+                tender_result["summary"]["files_status"] = "No files"
+                results.append(tender_result)
+                continue
+                
+            tender_result["summary"]["files_analyzed"] = len(files)
+            tender_result["summary"]["files_status"] = f"Найдено {len(files)} файлов"
+            
+            # 2. Извлечение текста
+            all_docs_text = []
+            for f_path in files:
+                try:
+                    text = doc_service.extract_text_from_pdf(f_path)
+                    if text:
+                        all_docs_text.append({
+                            "filename": os.path.basename(f_path),
+                            "text": text
+                        })
+                except Exception as e:
+                    logger.error(f"Error extracting text from {f_path}: {e}")
+            
+            if not all_docs_text:
+                tender_result["status"] = "error"
+                tender_result["error_message"] = "Не удалось извлечь текст из документов."
+                results.append(tender_result)
+                continue
+                
+            # 3. Классификация документов
+            classified = ai_service.classify_documents(all_docs_text)
+            contract_text = classified.get('contract_text', '')
+            other_text = classified.get('other_text', '')
+            
+            # 4. Юридический анализ (v2)
+            analysis_rows = ai_service.analyze_legal_v2(contract_text, other_text)
+            
+            # 5. Формирование результата
+            tender_result["rows"] = analysis_rows
+            tender_result["status"] = "completed"
+            
+            # Подсчет статистики
+            high = len([r for r in analysis_rows if r.get('risk_level') == 'high'])
+            medium = len([r for r in analysis_rows if r.get('risk_level') == 'medium'])
+            low = len([r for r in analysis_rows if r.get('risk_level') == 'low'])
+            
+            tender_result["summary"]["high_risks"] = high
+            tender_result["summary"]["medium_risks"] = medium
+            tender_result["summary"]["low_risks"] = low
+            tender_result["summary"]["total_findings"] = len(analysis_rows)
+            
+            # Обновляем уровень риска в БД (для красоты)
+            if high > 0:
+                tender.risk_level = "High"
+            elif medium > 0:
+                tender.risk_level = "Medium"
+            else:
+                tender.risk_level = "Low"
+            db.commit()
+            
+        except Exception as e:
+            logger.error(f"Error processing tender {t_id}: {e}", exc_info=True)
+            tender_result["status"] = "error"
+            tender_result["error_message"] = str(e)
+            
+        results.append(tender_result)
+        
+    return results
+
 @app.get("/api/dashboard-stats")
 async def get_dashboard_stats(db: Session = Depends(get_db)):
     logger.info("Dashboard stats requested.")
