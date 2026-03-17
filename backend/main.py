@@ -120,7 +120,7 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 # --- SEARCH & PARSING ---
 
 @app.get("/api/search-tenders")
-async def search_tenders_endpoint(
+def search_tenders_endpoint(
     query: str, 
     fz44: bool = True, 
     fz223: bool = True, 
