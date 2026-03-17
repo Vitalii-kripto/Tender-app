@@ -31,13 +31,18 @@ from backend.services.auto_ssh import RfProxyTunnelConfig, RfProxyHttpClient
 BASE = "https://zakupki.gov.ru"
 SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
 
-OUT_DIR = r"E:\APP\tenders_app\data\eis_docs"
-DB_PATH = r"E:\APP\tenders_app\data\seen.sqlite"
-CSV_LOG_PATH = r"E:\APP\tenders_app\data\notices_okpd2_log.csv"
-TXT_LOG_PATH = r"E:\APP\tenders_app\data\eis_monitor.log"
-SKIP_LOG_PATH = r"E:\APP\tenders_app\data\eis_monitor_skip.log"
-STATE_PATH = r"E:\APP\tenders_app\data\pw_state.json"
+# --- PATHS (Relative to project root) ---
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+DATA_DIR = os.path.join(BASE_DIR, "data")
 
+OUT_DIR = os.path.join(DATA_DIR, "eis_docs")
+DB_PATH = os.path.join(DATA_DIR, "seen.sqlite")
+CSV_LOG_PATH = os.path.join(DATA_DIR, "notices_okpd2_log.csv")
+TXT_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor.log")
+SKIP_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor_skip.log")
+STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
+
+USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
 LOCAL_SOCKS_PORT = 1080
 
 def ensure_dir(p: str):
@@ -299,14 +304,23 @@ def parse_docs_block(docs_html: str) -> List[tuple[str, str]]:
             out.append((u, t))
     return out
 
-def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
+def get_http_client():
     global RF_CLIENT
-    if RF_CLIENT is None:
-        from backend.services.auto_ssh import RfProxyHttpClient
-        RF_CLIENT = RfProxyHttpClient(RF_CFG)
+    if USE_PROXY:
+        if RF_CLIENT is None:
+            from backend.services.auto_ssh import RfProxyHttpClient
+            RF_CLIENT = RfProxyHttpClient(RF_CFG)
+        RF_CLIENT.tunnel.ensure()
+        return RF_CLIENT.session
+    else:
+        import requests
+        if RF_CLIENT is None:
+            RF_CLIENT = requests.Session()
+        return RF_CLIENT
 
-    RF_CLIENT.tunnel.ensure()
-    r = RF_CLIENT.session.get(file_url, timeout=120, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
+    client = get_http_client()
+    r = client.get(file_url, timeout=120, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
     r.raise_for_status()
 
     cd = r.headers.get("Content-Disposition", "")
@@ -345,12 +359,8 @@ def process_notice(n: Notice):
     d_url = f"{BASE}/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}"
 
     try:
-        global RF_CLIENT
-        if RF_CLIENT is None:
-            from backend.services.auto_ssh import RfProxyHttpClient
-            RF_CLIENT = RfProxyHttpClient(RF_CFG)
-        RF_CLIENT.tunnel.ensure()
-        r = RF_CLIENT.session.get(d_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+        client = get_http_client()
+        r = client.get(d_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
         r.raise_for_status()
         html = r.text
     except Exception as e:
@@ -694,7 +704,7 @@ class EisService:
                     browser = p.chromium.launch(
                         headless=self.HEADLESS,
                         slow_mo=self.SLOWMO_MS,
-                        proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"}
+                        proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"} if USE_PROXY else None
                     )
                 except Exception as browser_err:
                     logger.critical(f"Failed to launch browser. Error: {browser_err}")

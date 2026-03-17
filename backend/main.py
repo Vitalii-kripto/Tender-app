@@ -35,9 +35,44 @@ logging.basicConfig(
 logger = logging.getLogger("FastAPI_Main")
 
 # --- SETUP ---
+def migrate_db():
+    """Простейшая миграция для добавления недостающих колонок в SQLite"""
+    import sqlite3
+    from .database import DB_PATH
+    
+    logger.info(f"Checking schema for {DB_PATH}...")
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Список колонок, которые могли быть добавлены позже
+    # (column_name, table_name, column_type)
+    new_columns = [
+        ("docs_url", "tenders", "TEXT"),
+        ("search_url", "tenders", "TEXT"),
+        ("keyword", "tenders", "TEXT"),
+        ("ntype", "tenders", "TEXT"),
+        ("local_file_path", "tenders", "TEXT"),
+        ("extracted_text", "tenders", "TEXT"),
+        ("created_at", "tenders", "DATETIME"),
+        ("description", "products", "TEXT"),
+        ("updated_at", "products", "DATETIME"),
+    ]
+    
+    for col_name, table_name, col_type in new_columns:
+        try:
+            cursor.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}")
+            logger.info(f"Added column {col_name} to table {table_name}")
+        except sqlite3.OperationalError:
+            # Колонка уже существует
+            pass
+            
+    conn.commit()
+    conn.close()
+
 try:
     logger.info("Initializing Database...")
     Base.metadata.create_all(bind=engine)
+    migrate_db()
     logger.info("Database initialized successfully.")
 except Exception as e:
     logger.critical(f"Database initialization failed: {e}", exc_info=True)
