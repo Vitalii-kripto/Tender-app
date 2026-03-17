@@ -28,6 +28,10 @@ class TenderModel(Base):
     region = Column(String)
     law_type = Column(String, default="44-ФЗ")
     url = Column(String)
+    docs_url = Column(String, nullable=True)
+    search_url = Column(String, nullable=True)
+    keyword = Column(String, nullable=True)
+    ntype = Column(String, nullable=True)
     local_file_path = Column(String, nullable=True) # Путь к скачанному PDF
     extracted_text = Column(Text, nullable=True) # Текст из PDF для AI
     created_at = Column(DateTime, default=datetime.utcnow)

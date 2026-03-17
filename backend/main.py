@@ -101,7 +101,11 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
                 risk_level=tender.get('risk_level', 'Low'),
                 region=tender.get('region', 'РФ'),
                 law_type=tender.get('law_type', '44-ФЗ'),
-                url=tender.get('url', '')
+                url=tender.get('url', ''),
+                docs_url=tender.get('docs_url', ''),
+                search_url=tender.get('search_url', ''),
+                keyword=tender.get('keyword', ''),
+                ntype=tender.get('ntype', '')
             )
             db.add(new_tender)
             logger.info(f"Created new tender: {tender['id']}")
@@ -150,13 +154,35 @@ def search_tenders_endpoint(
 ):
     """Поиск через Playwright"""
     logger.info(f"Search request received: {query}")
-    return eis_service.search_tenders(
+    notices = eis_service.search_tenders(
         query=query, 
         fz44=fz44, 
         fz223=fz223, 
         only_application_stage=only_application_stage, 
         publish_days_back=publish_days_back
     )
+    
+    # Convert Notice dataclass to dict for JSON response
+    result = []
+    for n in notices:
+        result.append({
+            "id": n.reg,
+            "eis_number": n.reg,
+            "title": n.title,
+            "description": n.object_info,
+            "initial_price": n.initial_price, # This is a string in Notice
+            "deadline": n.application_deadline,
+            "status": "Found",
+            "risk_level": "Low",
+            "region": "РФ",
+            "law_type": n.ntype,
+            "url": n.href,
+            "docs_url": f"https://zakupki.gov.ru/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}",
+            "search_url": n.search_url,
+            "keyword": n.keyword,
+            "ntype": n.ntype
+        })
+    return result
 
 @app.post("/api/search-tenders/skip")
 def skip_tender(tender: dict = Body(...)):

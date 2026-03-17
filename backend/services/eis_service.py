@@ -8,9 +8,6 @@ import traceback
 import asyncio
 import sys
 from dataclasses import dataclass
-
-if sys.platform == 'win32':
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from datetime import datetime, timedelta
 from typing import List, Optional, Set, Dict
 from urllib.parse import urlencode, urljoin, urlparse, parse_qs, unquote
@@ -19,11 +16,14 @@ import logging
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeoutError
 
-try:
-    from backend.services.auto_ssh import RfProxyTunnelConfig, RfProxyHttpClient
-except ImportError:
-    RfProxyTunnelConfig = None
-    RfProxyHttpClient = None
+# Fix for Windows NotImplementedError with Playwright
+if sys.platform == 'win32':
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+    except Exception:
+        pass
+
+from backend.services.auto_ssh import RfProxyTunnelConfig, RfProxyHttpClient
 
 # =========================
 # НАСТРОЙКИ
@@ -46,14 +46,7 @@ def ensure_dir(p: str):
 
 ensure_dir(os.path.dirname(TXT_LOG_PATH))
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(TXT_LOG_PATH, encoding='utf-8', mode='a'),
-        logging.StreamHandler()
-    ]
-)
+# Use a specific logger for this service
 logger = logging.getLogger("EIS_Service")
 
 def log(message: str):
@@ -74,16 +67,13 @@ def log_exception(prefix: str, exc: Exception):
 SSH_TAILSCALE_IP = "100.75.209.12"
 SSH_USER = "vitt"
 
-if RfProxyTunnelConfig:
-    RF_CFG = RfProxyTunnelConfig(
-        ssh_host=SSH_TAILSCALE_IP,
-        ssh_user=SSH_USER,
-        local_socks_port=LOCAL_SOCKS_PORT,
-        allowed_domains=("zakupki.gov.ru",),
-        warmup_url="https://zakupki.gov.ru/epz/main/public/home.html",
-    )
-else:
-    RF_CFG = None
+RF_CFG = RfProxyTunnelConfig(
+    ssh_host=SSH_TAILSCALE_IP,
+    ssh_user=SSH_USER,
+    local_socks_port=LOCAL_SOCKS_PORT,
+    allowed_domains=("zakupki.gov.ru",),
+    warmup_url="https://zakupki.gov.ru/epz/main/public/home.html",
+)
 
 RF_CLIENT = None
 
@@ -157,20 +147,16 @@ def csv_append_row(
             ]
         )
 
+# Initialize on module load
 try:
     db_init()
     csv_init()
-    if RF_CFG and RF_CLIENT is None:
-        RF_CLIENT = RfProxyHttpClient(RF_CFG)
 except Exception as e:
-    logger.error(f"Failed to initialize DB, CSV, or RF_CLIENT: {e}")
+    print(f"Init error: {e}")
 
 # =========================
 # РЕГЕКСЫ И КОНСТАНТЫ
 # =========================
-BASE = "https://zakupki.gov.ru"
-SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
-
 NOTICE_HREF_RE = re.compile(r"/epz/order/notice/([^/]+)/view/[^?]+\.html\?[^#]*regNumber=(\d+)")
 NOTICE_LINK_SELECTOR = "a[href*='/epz/order/notice/']"
 
@@ -209,6 +195,7 @@ class Notice:
     initial_price: str = ""
     application_deadline: str = ""
     seen: bool = False
+    docs_url: str = ""
 
 # =========================
 # ФАЙЛЫ
@@ -313,8 +300,10 @@ def parse_docs_block(docs_html: str) -> List[tuple[str, str]]:
     return out
 
 def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
+    global RF_CLIENT
     if RF_CLIENT is None:
-        raise RuntimeError("RF_CLIENT is not initialized")
+        from backend.services.auto_ssh import RfProxyHttpClient
+        RF_CLIENT = RfProxyHttpClient(RF_CFG)
 
     RF_CLIENT.tunnel.ensure()
     r = RF_CLIENT.session.get(file_url, timeout=120, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
@@ -353,28 +342,26 @@ def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: s
 
 def process_notice(n: Notice):
     log(f"--- Processing {n.reg} ---")
-    if not n.docs_url:
-        log(f"No docs URL for {n.reg}")
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:no_docs_url", n.title, n.object_info, n.initial_price, n.application_deadline)
-        mark_seen(n.reg)
-        return
+    d_url = f"{BASE}/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}"
 
     try:
+        global RF_CLIENT
         if RF_CLIENT is None:
-            raise RuntimeError("RF_CLIENT is not initialized")
+            from backend.services.auto_ssh import RfProxyHttpClient
+            RF_CLIENT = RfProxyHttpClient(RF_CFG)
         RF_CLIENT.tunnel.ensure()
-        r = RF_CLIENT.session.get(n.docs_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+        r = RF_CLIENT.session.get(d_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
         r.raise_for_status()
         html = r.text
     except Exception as e:
-        log_exception(f"Failed to fetch docs page {n.docs_url}", e)
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
+        log_exception(f"Failed to fetch docs page {d_url}", e)
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
         return
 
     items = parse_docs_block(html)
     if not items:
         log(f"No files found on docs page for {n.reg}")
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
         mark_seen(n.reg)
         return
 
@@ -393,10 +380,10 @@ def process_notice(n: Notice):
             log_exception(f"  Failed to download {file_url}", e)
 
     if downloaded > 0:
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
         mark_seen(n.reg)
     else:
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
 
 class EisService:
     def __init__(self):
@@ -661,14 +648,6 @@ class EisService:
         logger.info(f"После 'Применить': has_results={has_results}")
         return has_results
 
-    def _clean_price_for_db(self, price_str):
-        if not price_str: return 0.0
-        clean = re.sub(r'[^\d,.]', '', price_str).replace(',', '.')
-        try:
-            return float(clean)
-        except ValueError:
-            return 0.0
-
     def goto_with_human_delays(self, page, url: str, wait: str = "domcontentloaded", timeout: int = 30000, op_counter: Optional[int] = None, retries: int = 2):
         last_exc = None
         for attempt in range(1, retries + 1):
@@ -697,11 +676,14 @@ class EisService:
             raise last_exc
 
     def search_tenders(self, query: str, fz44: bool = True, fz223: bool = True, only_application_stage: bool = True, publish_days_back: int = 30):
-        """
-        Запускает реальный браузер, выполняет поиск и парсит результаты.
-        """
+        # Fix for Windows NotImplementedError with Playwright inside the method
+        if sys.platform == 'win32':
+            try:
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            except Exception:
+                pass
+
         logger.info(f"Searching EIS via Playwright for: {query}")
-        results = []
         collected: List[Notice] = []
         op_counter = 0
 
@@ -737,7 +719,6 @@ class EisService:
 
                     page = context.new_page()
 
-                    # Разделяем запрос на ключевые слова, если их несколько (через запятую)
                     keywords = [k.strip() for k in query.split(',')] if ',' in query else [query]
 
                     for kw in keywords:
@@ -770,7 +751,6 @@ class EisService:
 
                             collected.extend(items)
 
-                    # Сохраняем стейт после поиска
                     ensure_dir(os.path.dirname(STATE_PATH))
                     context.storage_state(path=STATE_PATH)
                     logger.info(f"[state] saved: {STATE_PATH}")
@@ -781,55 +761,22 @@ class EisService:
                     browser.close()
                     logger.info("Browser closed.")
 
-                # Преобразуем собранные Notice в формат для фронтенда
+                # Filter and merge
                 merged: Dict[str, Notice] = {}
                 for n in collected:
+                    if is_seen(n.reg):
+                        continue
                     if n.reg not in merged:
-                        n.seen = is_seen(n.reg)
                         merged[n.reg] = n
                     else:
                         current = merged[n.reg]
-                        current.keyword = current.keyword + " | " + n.keyword
-                        current.seen = current.seen or is_seen(n.reg)
                         if len(n.title) > len(current.title):
                             current.title = n.title
                         if n.object_info and len(n.object_info) > len(current.object_info):
                             current.object_info = n.object_info
-                        if n.initial_price and len(n.initial_price) > len(current.initial_price):
-                            current.initial_price = n.initial_price
-                        if n.application_deadline and len(n.application_deadline) > len(current.application_deadline):
-                            current.application_deadline = n.application_deadline
-                        if not current.href:
-                            current.href = n.href
+                
+                return list(merged.values())
 
-                for reg, n in merged.items():
-                    if n.seen:
-                        continue
-                    
-                    law_type = "223-ФЗ" if "223" in n.ntype else "44-ФЗ"
-                    price = self._clean_price_for_db(n.initial_price)
-                    
-                    results.append({
-                        "id": n.reg,
-                        "eis_number": n.reg,
-                        "title": n.title or n.object_info or "Без названия",
-                        "description": n.object_info,
-                        "initial_price": price,
-                        "deadline": n.application_deadline or "См. ЕИС", 
-                        "status": "Found",
-                        "risk_level": "Low",
-                        "region": "РФ",
-                        "law_type": law_type,
-                        "url": n.href,
-                        "docs_url": n.docs_url,
-                        "search_url": n.search_url,
-                        "keyword": n.keyword,
-                        "ntype": n.ntype
-                    })
-
-        except Exception as e:
-            logger.error(f"Playwright Global Error: {e}", exc_info=True)
+        except Exception as global_err:
+            logger.error(f"Playwright Global Error: {global_err}", exc_info=True)
             return []
-
-        logger.info(f"Returning {len(results)} tenders.")
-        return results
