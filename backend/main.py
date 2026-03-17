@@ -120,10 +120,22 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 # --- SEARCH & PARSING ---
 
 @app.get("/api/search-tenders")
-async def search_tenders_endpoint(query: str):
+async def search_tenders_endpoint(
+    query: str, 
+    fz44: bool = True, 
+    fz223: bool = True, 
+    only_application_stage: bool = True, 
+    publish_days_back: int = 30
+):
     """Поиск через Playwright"""
     logger.info(f"Search request received: {query}")
-    return eis_service.search_tenders(query)
+    return eis_service.search_tenders(
+        query=query, 
+        fz44=fz44, 
+        fz223=fz223, 
+        only_application_stage=only_application_stage, 
+        publish_days_back=publish_days_back
+    )
 
 @app.get("/api/products")
 def get_products_endpoint(db: Session = Depends(get_db)):

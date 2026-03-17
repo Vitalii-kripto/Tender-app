@@ -12,6 +12,9 @@ const TenderSearch = () => {
   const [loading, setLoading] = useState(false);
   const [searchMode, setSearchMode] = useState<'keyword' | 'catalog'>('keyword');
   const [isActive, setIsActive] = useState(true);
+  const [fz44, setFz44] = useState(true);
+  const [fz223, setFz223] = useState(true);
+  const [publishDaysBack, setPublishDaysBack] = useState(30);
 
   // CRM State from Backend
   const [crmTenders, setCrmTenders] = useState<Tender[]>([]);
@@ -51,7 +54,7 @@ const TenderSearch = () => {
         return;
       }
 
-      const tenders = await searchTenders(effectiveQuery, catalogContext, isActive);
+      const tenders = await searchTenders(effectiveQuery, catalogContext, isActive, fz44, fz223, publishDaysBack);
       setResults(tenders);
     } catch (error) {
       console.error(error);
@@ -89,6 +92,24 @@ const TenderSearch = () => {
         <div className="flex gap-4 mb-4">
              <button onClick={() => setSearchMode('keyword')} className={`px-4 py-2 text-sm font-medium rounded-md ${searchMode === 'keyword' ? 'bg-blue-50 text-blue-600' : 'text-slate-500'}`}>Ключевые слова</button>
              <button onClick={() => setSearchMode('catalog')} className={`px-4 py-2 text-sm font-medium rounded-md ${searchMode === 'catalog' ? 'bg-blue-50 text-blue-600' : 'text-slate-500'}`}>По каталогу</button>
+        </div>
+        <div className="flex flex-wrap gap-4 mb-4 items-center text-sm text-slate-700">
+            <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={fz44} onChange={(e) => setFz44(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                44-ФЗ
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={fz223} onChange={(e) => setFz223(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                223-ФЗ
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                Только этап подачи заявок
+            </label>
+            <label className="flex items-center gap-2">
+                Дней с публикации:
+                <input type="number" value={publishDaysBack} onChange={(e) => setPublishDaysBack(Number(e.target.value))} className="w-16 px-2 py-1 rounded border border-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500" min="1" max="365" />
+            </label>
         </div>
         <div className="flex gap-4">
           <div className="flex-1 relative">

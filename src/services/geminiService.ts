@@ -294,7 +294,14 @@ export const runBackendParser = async (): Promise<Product[]> => {
 
 // --- OTHER API CALLS ---
 
-export const searchTenders = async (query: string, catalogContext: string, isActiveOnly: boolean): Promise<Tender[]> => {
+export const searchTenders = async (
+    query: string, 
+    catalogContext: string, 
+    isActiveOnly: boolean,
+    fz44: boolean = true,
+    fz223: boolean = true,
+    publishDaysBack: number = 30
+): Promise<Tender[]> => {
     const demoTenders: Tender[] = [
         {
             id: 'demo_1',
@@ -330,7 +337,14 @@ export const searchTenders = async (query: string, catalogContext: string, isAct
     }
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/search-tenders?query=${encodeURIComponent(query)}`);
+        const params = new URLSearchParams({
+            query,
+            fz44: fz44.toString(),
+            fz223: fz223.toString(),
+            only_application_stage: isActiveOnly.toString(),
+            publish_days_back: publishDaysBack.toString()
+        });
+        const response = await fetch(`${API_BASE_URL}/api/search-tenders?${params.toString()}`);
         if (!response.ok) throw new Error("Server error");
         return await response.json();
     } catch (error) {
