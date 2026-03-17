@@ -5,7 +5,12 @@ import sqlite3
 import time
 import random
 import traceback
+import asyncio
+import sys
 from dataclasses import dataclass
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 from datetime import datetime, timedelta
 from typing import List, Optional, Set, Dict
 from urllib.parse import urlencode, urljoin, urlparse, parse_qs, unquote
