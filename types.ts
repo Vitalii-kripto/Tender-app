@@ -33,6 +33,10 @@ export interface Tender {
   law_type?: '44-ФЗ' | '223-ФЗ' | 'Коммерч.';
   url?: string;
   responsible_id?: string; // ID сотрудника
+  docs_url?: string;
+  search_url?: string;
+  keyword?: string;
+  ntype?: string;
 }
 
 export interface LegalRisk {

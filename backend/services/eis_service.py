@@ -14,15 +14,30 @@ import logging
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeoutError
 
+try:
+    from backend.services.auto_ssh import RfProxyTunnelConfig, RfProxyHttpClient
+except ImportError:
+    RfProxyTunnelConfig = None
+    RfProxyHttpClient = None
+
 # =========================
-# ЛОГИРОВАНИЕ
+# НАСТРОЙКИ
 # =========================
+BASE = "https://zakupki.gov.ru"
+SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
+
+OUT_DIR = r"E:\APP\tenders_app\data\eis_docs"
+DB_PATH = r"E:\APP\tenders_app\data\seen.sqlite"
+CSV_LOG_PATH = r"E:\APP\tenders_app\data\notices_okpd2_log.csv"
 TXT_LOG_PATH = r"E:\APP\tenders_app\data\eis_monitor.log"
+SKIP_LOG_PATH = r"E:\APP\tenders_app\data\eis_monitor_skip.log"
 STATE_PATH = r"E:\APP\tenders_app\data\pw_state.json"
+
 LOCAL_SOCKS_PORT = 1080
 
 def ensure_dir(p: str):
-    os.makedirs(p, exist_ok=True)
+    if p:
+        os.makedirs(p, exist_ok=True)
 
 ensure_dir(os.path.dirname(TXT_LOG_PATH))
 
@@ -35,6 +50,115 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger("EIS_Service")
+
+def log(message: str):
+    logger.info(message)
+
+def log_skip(message: str):
+    logger.info(message)
+    ensure_dir(os.path.dirname(SKIP_LOG_PATH))
+    with open(SKIP_LOG_PATH, "a", encoding="utf-8") as f:
+        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
+
+def log_exception(prefix: str, exc: Exception):
+    logger.error(f"{prefix}: {exc}", exc_info=True)
+
+# =========================
+# ТУННЕЛЬ / ПРОКСИ
+# =========================
+SSH_TAILSCALE_IP = "100.75.209.12"
+SSH_USER = "vitt"
+
+if RfProxyTunnelConfig:
+    RF_CFG = RfProxyTunnelConfig(
+        ssh_host=SSH_TAILSCALE_IP,
+        ssh_user=SSH_USER,
+        local_socks_port=LOCAL_SOCKS_PORT,
+        allowed_domains=("zakupki.gov.ru",),
+        warmup_url="https://zakupki.gov.ru/epz/main/public/home.html",
+    )
+else:
+    RF_CFG = None
+
+RF_CLIENT = None
+
+# =========================
+# SQLite + CSV
+# =========================
+def db_init():
+    ensure_dir(os.path.dirname(DB_PATH))
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS seen (regNumber TEXT PRIMARY KEY, ts DATETIME DEFAULT CURRENT_TIMESTAMP)"
+        )
+
+def is_seen(reg: str) -> bool:
+    with sqlite3.connect(DB_PATH) as con:
+        cur = con.execute("SELECT 1 FROM seen WHERE regNumber=?", (reg,))
+        return cur.fetchone() is not None
+
+def mark_seen(reg: str):
+    with sqlite3.connect(DB_PATH) as con:
+        con.execute("INSERT OR IGNORE INTO seen(regNumber) VALUES(?)", (reg,))
+
+def csv_init():
+    ensure_dir(os.path.dirname(CSV_LOG_PATH))
+    if not os.path.exists(CSV_LOG_PATH):
+        with open(CSV_LOG_PATH, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f, delimiter=";")
+            w.writerow(
+                [
+                    "ts",
+                    "regNumber",
+                    "noticeType",
+                    "keyword",
+                    "searchUrl",
+                    "docsUrl",
+                    "decision",
+                    "title",
+                    "object_info",
+                    "initial_price",
+                    "application_deadline",
+                ]
+            )
+
+def csv_append_row(
+    reg: str,
+    ntype: str,
+    keyword: str,
+    search_url: str,
+    d_url: str,
+    decision: str,
+    title: str,
+    object_info: str,
+    initial_price: str,
+    application_deadline: str,
+):
+    with open(CSV_LOG_PATH, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f, delimiter=";")
+        w.writerow(
+            [
+                datetime.now().isoformat(timespec="seconds"),
+                reg,
+                ntype,
+                keyword,
+                search_url,
+                d_url,
+                decision,
+                title,
+                object_info,
+                initial_price,
+                application_deadline,
+            ]
+        )
+
+try:
+    db_init()
+    csv_init()
+    if RF_CFG and RF_CLIENT is None:
+        RF_CLIENT = RfProxyHttpClient(RF_CFG)
+except Exception as e:
+    logger.error(f"Failed to initialize DB, CSV, or RF_CLIENT: {e}")
 
 # =========================
 # РЕГЕКСЫ И КОНСТАНТЫ
@@ -80,6 +204,194 @@ class Notice:
     initial_price: str = ""
     application_deadline: str = ""
     seen: bool = False
+
+# =========================
+# ФАЙЛЫ
+# =========================
+def safe_filename(name: str) -> str:
+    name = (name or "").strip()
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", name)
+    name = name.strip().strip(".")
+    return name[:180] if len(name) > 180 else name
+
+def looks_like_mojibake(s: str) -> bool:
+    return any(ch in s for ch in ["Ð", "Ñ", "Ã", "Â"]) and not re.search(r"[А-Яа-яЁё]", s)
+
+def fix_header_filename(s: str) -> str:
+    if not s:
+        return s
+    s = s.strip().strip('"').strip()
+    if re.search(r"[А-Яа-яЁё]", s):
+        return s
+    if looks_like_mojibake(s):
+        try:
+            restored = s.encode("latin1", errors="ignore").decode("utf-8", errors="ignore")
+            if re.search(r"[А-Яа-яЁё]", restored):
+                return restored
+        except Exception:
+            pass
+    try:
+        restored = s.encode("latin1", errors="ignore").decode("cp1251", errors="ignore")
+        if re.search(r"[А-Яа-яЁё]", restored):
+            return restored
+    except Exception:
+        pass
+    return s
+
+def filename_from_content_disposition(cd: str) -> Optional[str]:
+    if not cd:
+        return None
+
+    m = re.search(r"filename\*\s*=\s*UTF-8''([^;]+)", cd, flags=re.IGNORECASE)
+    if m:
+        try:
+            return safe_filename(unquote(m.group(1)))
+        except Exception:
+            pass
+
+    m = re.search(r'filename\s*=\s*"?([^";]+)"?', cd, flags=re.IGNORECASE)
+    if m:
+        raw = fix_header_filename(m.group(1))
+        return safe_filename(raw)
+
+    return None
+
+def guess_extension_from_content_type(ct: str) -> str:
+    ct = (ct or "").lower()
+    if "pdf" in ct:
+        return ".pdf"
+    if "wordprocessingml" in ct:
+        return ".docx"
+    if "msword" in ct:
+        return ".doc"
+    if "spreadsheetml" in ct:
+        return ".xlsx"
+    if "excel" in ct:
+        return ".xls"
+    if "zip" in ct:
+        return ".zip"
+    if "rar" in ct:
+        return ".rar"
+    if "7z" in ct or "7-zip" in ct:
+        return ".7z"
+    return ""
+
+def uid_from_url(u: str) -> str:
+    qs = parse_qs(urlparse(u).query)
+    return qs.get("uid", [""])[0]
+
+def parse_docs_block(docs_html: str) -> List[tuple[str, str]]:
+    soup = BeautifulSoup(docs_html, "html.parser")
+    block = soup.select_one("div.blockFilesTabDocs")
+    if not block:
+        return []
+
+    items: List[tuple[str, str]] = []
+    for a in block.select("a[href]"):
+        href = (a.get("href") or "").strip()
+        if not href:
+            continue
+        if href.startswith("/"):
+            href = urljoin(BASE, href)
+
+        if "filestore" in href and "download" in href:
+            title = (a.get("title") or "").strip()
+            text = (a.get_text() or "").strip()
+            suggested = safe_filename(title or text)
+            items.append((href, suggested))
+
+    out, seen = [], set()
+    for u, t in items:
+        if u not in seen:
+            seen.add(u)
+            out.append((u, t))
+    return out
+
+def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
+    if RF_CLIENT is None:
+        raise RuntimeError("RF_CLIENT is not initialized")
+
+    RF_CLIENT.tunnel.ensure()
+    r = RF_CLIENT.session.get(file_url, timeout=120, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+    r.raise_for_status()
+
+    cd = r.headers.get("Content-Disposition", "")
+    ct = r.headers.get("Content-Type", "")
+
+    filename = filename_from_content_disposition(cd)
+    if not filename:
+        ext = guess_extension_from_content_type(ct)
+        if suggested_title:
+            if ext and suggested_title.lower().endswith(ext):
+                filename = suggested_title
+            else:
+                filename = suggested_title + (ext if ext else "")
+        else:
+            uid = uid_from_url(file_url) or str(abs(hash(file_url)))
+            filename = uid + (ext if ext else ".bin")
+
+    filename = safe_filename(filename) or "file.bin"
+
+    base, ext = os.path.splitext(filename)
+    out_path = os.path.join(reg_dir, filename)
+    counter = 1
+    while os.path.exists(out_path):
+        out_path = os.path.join(reg_dir, f"{base}_{counter}{ext}")
+        counter += 1
+
+    with open(out_path, "wb") as f:
+        for chunk in r.iter_content(chunk_size=1024 * 128):
+            if chunk:
+                f.write(chunk)
+
+    return out_path
+
+def process_notice(n: Notice):
+    log(f"--- Processing {n.reg} ---")
+    if not n.docs_url:
+        log(f"No docs URL for {n.reg}")
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:no_docs_url", n.title, n.object_info, n.initial_price, n.application_deadline)
+        mark_seen(n.reg)
+        return
+
+    try:
+        if RF_CLIENT is None:
+            raise RuntimeError("RF_CLIENT is not initialized")
+        RF_CLIENT.tunnel.ensure()
+        r = RF_CLIENT.session.get(n.docs_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+        r.raise_for_status()
+        html = r.text
+    except Exception as e:
+        log_exception(f"Failed to fetch docs page {n.docs_url}", e)
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
+        return
+
+    items = parse_docs_block(html)
+    if not items:
+        log(f"No files found on docs page for {n.reg}")
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
+        mark_seen(n.reg)
+        return
+
+    reg_dir = os.path.join(OUT_DIR, n.reg)
+    ensure_dir(reg_dir)
+
+    downloaded = 0
+    for file_url, suggested_title in items:
+        try:
+            log(f"  Downloading {file_url}")
+            out_path = download_file_with_real_name(file_url, reg_dir, suggested_title)
+            log(f"  -> Saved to {out_path}")
+            downloaded += 1
+            time.sleep(random.uniform(0.5, 1.5))
+        except Exception as e:
+            log_exception(f"  Failed to download {file_url}", e)
+
+    if downloaded > 0:
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
+        mark_seen(n.reg)
+    else:
+        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, n.docs_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
 
 class EisService:
     def __init__(self):
@@ -468,9 +780,12 @@ class EisService:
                 merged: Dict[str, Notice] = {}
                 for n in collected:
                     if n.reg not in merged:
+                        n.seen = is_seen(n.reg)
                         merged[n.reg] = n
                     else:
                         current = merged[n.reg]
+                        current.keyword = current.keyword + " | " + n.keyword
+                        current.seen = current.seen or is_seen(n.reg)
                         if len(n.title) > len(current.title):
                             current.title = n.title
                         if n.object_info and len(n.object_info) > len(current.object_info):
@@ -483,6 +798,9 @@ class EisService:
                             current.href = n.href
 
                 for reg, n in merged.items():
+                    if n.seen:
+                        continue
+                    
                     law_type = "223-ФЗ" if "223" in n.ntype else "44-ФЗ"
                     price = self._clean_price_for_db(n.initial_price)
                     
@@ -497,7 +815,11 @@ class EisService:
                         "risk_level": "Low",
                         "region": "РФ",
                         "law_type": law_type,
-                        "url": n.href
+                        "url": n.href,
+                        "docs_url": n.docs_url,
+                        "search_url": n.search_url,
+                        "keyword": n.keyword,
+                        "ntype": n.ntype
                     })
 
         except Exception as e:

@@ -1,5 +1,5 @@
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
@@ -8,7 +8,7 @@ import logging
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
-from .services.eis_service import EisService
+from .services.eis_service import EisService, Notice, process_notice, mark_seen, csv_append_row
 from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
@@ -74,7 +74,7 @@ def get_crm_tenders(db: Session = Depends(get_db)):
     return db.query(TenderModel).all()
 
 @app.post("/api/crm/tenders")
-def add_update_tender(tender: dict = Body(...), db: Session = Depends(get_db)):
+def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...), db: Session = Depends(get_db)):
     """Добавить или обновить тендер в CRM"""
     logger.info(f"Add/Update tender request: {tender.get('id')}")
     try:
@@ -100,6 +100,22 @@ def add_update_tender(tender: dict = Body(...), db: Session = Depends(get_db)):
             )
             db.add(new_tender)
             logger.info(f"Created new tender: {tender['id']}")
+            
+            # Если это новый тендер, запускаем скачивание документов
+            if tender.get('docs_url'):
+                notice = Notice(
+                    reg=tender['id'],
+                    ntype=tender.get('ntype', ''),
+                    keyword=tender.get('keyword', ''),
+                    search_url=tender.get('search_url', ''),
+                    href=tender.get('url', ''),
+                    docs_url=tender.get('docs_url', ''),
+                    title=tender.get('title', ''),
+                    object_info=tender.get('description', ''),
+                    initial_price=str(tender.get('initial_price', '')),
+                    application_deadline=tender.get('deadline', '')
+                )
+                background_tasks.add_task(process_notice, notice)
         
         db.commit()
         return {"status": "success"}
@@ -136,6 +152,29 @@ def search_tenders_endpoint(
         only_application_stage=only_application_stage, 
         publish_days_back=publish_days_back
     )
+
+@app.post("/api/search-tenders/skip")
+def skip_tender(tender: dict = Body(...)):
+    """Пропустить тендер (отметить как просмотренный)"""
+    logger.info(f"Skipping tender: {tender.get('id')}")
+    try:
+        mark_seen(tender['id'])
+        csv_append_row(
+            tender['id'], 
+            tender.get('ntype', ''), 
+            tender.get('keyword', ''), 
+            tender.get('search_url', ''), 
+            tender.get('docs_url', ''), 
+            "SKIP:user_not_selected", 
+            tender.get('title', ''), 
+            tender.get('description', ''), 
+            str(tender.get('initial_price', '')), 
+            tender.get('deadline', '')
+        )
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Error skipping tender: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/products")
 def get_products_endpoint(db: Session = Depends(get_db)):

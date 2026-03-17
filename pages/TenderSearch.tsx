@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, Play, CheckCircle, ExternalLink, AlertCircle, Loader2, CheckSquare, Square, WifiOff, Briefcase } from 'lucide-react';
+import { Search, Filter, Play, CheckCircle, ExternalLink, AlertCircle, Loader2, CheckSquare, Square, WifiOff, Briefcase, X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { MOCK_CATALOG } from './ProductCatalog';
-import { searchTenders, getTendersFromBackend, addOrUpdateTender, deleteTenderFromBackend } from '../services/geminiService';
+import { searchTenders, getTendersFromBackend, addOrUpdateTender, deleteTenderFromBackend, skipTender } from '../services/geminiService';
 import { Tender } from '../types';
 
 const TenderSearch = () => {
@@ -36,6 +36,11 @@ const TenderSearch = () => {
       setCrmTenders(prev => [...prev, newTender]);
       await addOrUpdateTender(newTender);
     }
+  };
+
+  const handleSkip = async (tender: Tender) => {
+    setResults(prev => prev.filter(t => t.id !== tender.id));
+    await skipTender(tender);
   };
 
   const handleSearch = async () => {
@@ -114,7 +119,11 @@ const TenderSearch = () => {
              const isSelected = isInCrm(tender.id);
              return (
                  <div key={tender.id} className={`relative bg-white p-5 rounded-xl border ${isSelected ? 'border-blue-500 bg-blue-50/10' : 'border-slate-200'}`}>
-                    <div className="absolute top-5 right-5">
+                    <div className="absolute top-5 right-5 flex gap-2">
+                        <button onClick={() => handleSkip(tender)} className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-red-50 text-red-600 hover:bg-red-100">
+                            <X size={16} />
+                            Пропустить
+                        </button>
                         <button onClick={() => toggleTenderSelection(tender)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
                             {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
                             {isSelected ? 'В CRM' : 'В работу'}

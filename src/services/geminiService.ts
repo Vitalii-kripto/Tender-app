@@ -352,6 +352,19 @@ export const searchTenders = async (
     }
 };
 
+export const skipTender = async (tender: Tender): Promise<void> => {
+    if (IS_DEMO_MODE) return;
+    try {
+        await fetch(`${API_BASE_URL}/api/search-tenders/skip`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(tender)
+        });
+    } catch (error) {
+        console.error("Error skipping tender", error);
+    }
+};
+
 export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string): Promise<string> => {
     // В реальной системе нужно сделать эндпоинт, который качает PDF
     // Пока возвращаем заглушку, так как функционал скачивания сложен
