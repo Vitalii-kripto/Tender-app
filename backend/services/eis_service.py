@@ -499,6 +499,11 @@ class EisService:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
             "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
         }
+        self._cancel_flag = False
+
+    def cancel_search(self):
+        self._cancel_flag = True
+        logger.info("Search cancellation requested.")
 
     def _publish_date_from_str(self, days_back: int) -> str:
         dt = datetime.now() - timedelta(days=days_back)
@@ -793,6 +798,7 @@ class EisService:
             except Exception as e:
                 logger.error(f"Proxy warmup failed: {e}")
 
+        self._cancel_flag = False
         logger.info(f"Searching EIS via Playwright for: {query}")
         collected: List[Notice] = []
         op_counter = 0
@@ -832,7 +838,13 @@ class EisService:
                     keywords = [k.strip() for k in query.split(',')] if ',' in query else [query]
 
                     for kw in keywords:
+                        if self._cancel_flag:
+                            logger.info("Search cancelled by user.")
+                            break
                         for pn in range(1, self.MAX_PAGES + 1):
+                            if self._cancel_flag:
+                                logger.info("Search cancelled by user.")
+                                break
                             url = self.build_search_url(kw, pn, fz44, fz223, only_application_stage, publish_days_back)
                             logger.info(f"[SEARCH] kw='{kw}' page={pn}")
                             logger.info(f"[SEARCH] url: {url}")

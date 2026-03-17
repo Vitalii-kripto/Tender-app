@@ -191,6 +191,13 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 
 # --- SEARCH & PARSING ---
 
+@app.post("/api/search-tenders/cancel")
+def cancel_search():
+    """Отменить текущий поиск"""
+    logger.info("Cancel search request received")
+    eis_service.cancel_search()
+    return {"status": "cancelled"}
+
 @app.get("/api/search-tenders")
 def search_tenders_endpoint(
     query: str, 
@@ -212,12 +219,26 @@ def search_tenders_endpoint(
     # Convert Notice dataclass to dict for JSON response
     result = []
     for n in notices:
+        raw_price = n.initial_price
+        parsed_price = 0.0
+        if isinstance(raw_price, str):
+            import re
+            cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
+            try:
+                parsed_price = float(cleaned)
+            except ValueError:
+                parsed_price = 0.0
+        else:
+            parsed_price = float(raw_price)
+
         result.append({
             "id": n.reg,
             "eis_number": n.reg,
             "title": n.title,
             "description": n.object_info,
-            "initial_price": n.initial_price, # This is a string in Notice
+            "initial_price": parsed_price,
+            "initial_price_text": str(raw_price),
+            "initial_price_value": parsed_price,
             "deadline": n.application_deadline,
             "status": "Found",
             "risk_level": "Low",
@@ -231,6 +252,73 @@ def search_tenders_endpoint(
             "seen": n.seen
         })
     return result
+
+@app.post("/api/search-tenders/process")
+def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
+    """Обработать выбранные тендеры"""
+    logger.info(f"Processing {len(tenders)} selected tenders")
+    try:
+        for tender in tenders:
+            existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
+            
+            # Parse initial_price to float
+            raw_price = tender.get('initial_price', 0)
+            parsed_price = 0.0
+            if isinstance(raw_price, str):
+                import re
+                cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
+                try:
+                    parsed_price = float(cleaned)
+                except ValueError:
+                    parsed_price = 0.0
+            else:
+                parsed_price = float(raw_price)
+
+            if existing:
+                existing.status = tender.get('status', existing.status)
+                existing.risk_level = tender.get('risk_level', existing.risk_level)
+                logger.info(f"Updated existing tender: {tender['id']}")
+            else:
+                new_tender = TenderModel(
+                    id=tender['id'],
+                    title=tender['title'],
+                    description=tender.get('description', ''),
+                    initial_price=parsed_price,
+                    deadline=tender.get('deadline', '-'),
+                    status=tender.get('status', 'Found'),
+                    risk_level=tender.get('risk_level', 'Low'),
+                    region=tender.get('region', 'РФ'),
+                    law_type=tender.get('law_type', '44-ФЗ'),
+                    url=tender.get('url', ''),
+                    docs_url=tender.get('docs_url', ''),
+                    search_url=tender.get('search_url', ''),
+                    keyword=tender.get('keyword', ''),
+                    ntype=tender.get('ntype', '')
+                )
+                db.add(new_tender)
+                logger.info(f"Created new tender: {tender['id']}")
+                
+                # Если это новый тендер, запускаем скачивание документов
+                if tender.get('docs_url'):
+                    notice = Notice(
+                        reg=tender['id'],
+                        ntype=tender.get('ntype', ''),
+                        keyword=tender.get('keyword', ''),
+                        search_url=tender.get('search_url', ''),
+                        href=tender.get('url', ''),
+                        docs_url=tender.get('docs_url', ''),
+                        title=tender.get('title', ''),
+                        object_info=tender.get('description', ''),
+                        initial_price=str(tender.get('initial_price', '')),
+                        application_deadline=tender.get('deadline', '')
+                    )
+                    background_tasks.add_task(eis_service.process_tenders, [notice])
+            
+        db.commit()
+        return {"status": "success", "processed": len(tenders)}
+    except Exception as e:
+        logger.error(f"Error processing tenders: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/search-tenders/skip")
 def skip_tender(tender: dict = Body(...)):

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Search, Filter, Play, CheckCircle, ExternalLink, AlertCircle, Loader2, CheckSquare, Square, WifiOff, Briefcase } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, Filter, Play, CheckCircle, ExternalLink, AlertCircle, Loader2, CheckSquare, Square, WifiOff, Briefcase, XCircle, Settings } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { MOCK_CATALOG } from './ProductCatalog';
-import { searchTenders, getTendersFromBackend, addOrUpdateTender, deleteTenderFromBackend } from '../services/geminiService';
+import { searchTenders, getTendersFromBackend, processSelectedTenders, cancelSearch } from '../services/geminiService';
 import { Tender } from '../types';
 
 const TenderSearch = () => {
@@ -10,6 +10,7 @@ const TenderSearch = () => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Tender[]>([]);
   const [loading, setLoading] = useState(false);
+  const [processing, setProcessing] = useState(false);
   const [searchMode, setSearchMode] = useState<'keyword' | 'catalog'>('keyword');
   const [isActive, setIsActive] = useState(true);
   const [fz44, setFz44] = useState(true);
@@ -18,6 +19,9 @@ const TenderSearch = () => {
 
   // CRM State from Backend
   const [crmTenders, setCrmTenders] = useState<Tender[]>([]);
+  const [selectedTenders, setSelectedTenders] = useState<Tender[]>([]);
+  
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     // Initial fetch of what is already in CRM to show correct checkboxes
@@ -25,24 +29,43 @@ const TenderSearch = () => {
   }, []);
 
   const isInCrm = (id: string) => crmTenders.some(t => t.id === id);
+  const isSelected = (id: string) => selectedTenders.some(t => t.id === id);
 
-  const toggleTenderSelection = async (tender: Tender) => {
+  const toggleTenderSelection = (tender: Tender) => {
     if (tender.id === 'err_msg') return;
     
-    if (isInCrm(tender.id)) {
-      // Remove
-      setCrmTenders(prev => prev.filter(t => t.id !== tender.id));
-      await deleteTenderFromBackend(tender.id);
+    if (isSelected(tender.id)) {
+      setSelectedTenders(prev => prev.filter(t => t.id !== tender.id));
     } else {
-      // Add
-      const newTender = { ...tender, status: 'Found' as const };
-      setCrmTenders(prev => [...prev, newTender]);
-      await addOrUpdateTender(newTender);
+      setSelectedTenders(prev => [...prev, tender]);
+    }
+  };
+
+  const handleProcessSelected = async () => {
+    if (selectedTenders.length === 0) return;
+    setProcessing(true);
+    try {
+      await processSelectedTenders(selectedTenders);
+      // Update CRM state locally
+      const newCrmTenders = [...crmTenders, ...selectedTenders.map(t => ({...t, status: 'Found' as const}))];
+      setCrmTenders(newCrmTenders);
+      setSelectedTenders([]);
+      // Optionally navigate to CRM
+      // navigate('/crm');
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setProcessing(false);
     }
   };
 
   const handleSearch = async () => {
     setLoading(true);
+    setResults([]);
+    setSelectedTenders([]);
+    
+    abortControllerRef.current = new AbortController();
+
     try {
       const catalogContext = MOCK_CATALOG.map(p => `${p.title} (${p.category})`).join(', ');
       const effectiveQuery = searchMode === 'catalog' 
@@ -54,16 +77,46 @@ const TenderSearch = () => {
         return;
       }
 
-      const tenders = await searchTenders(effectiveQuery, catalogContext, isActive, fz44, fz223, publishDaysBack);
+      const tenders = await searchTenders(
+          effectiveQuery, 
+          catalogContext, 
+          isActive, 
+          fz44, 
+          fz223, 
+          publishDaysBack,
+          abortControllerRef.current.signal
+      );
       setResults(tenders);
     } catch (error) {
       console.error(error);
     } finally {
       setLoading(false);
+      abortControllerRef.current = null;
     }
   };
 
-  const formatPrice = (price: number) => {
+  const handleCancelSearch = async () => {
+    if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+    }
+    await cancelSearch();
+    setLoading(false);
+  };
+
+  const formatPrice = (tender: Tender) => {
+    if (tender.initial_price_text && tender.initial_price_text !== '0' && tender.initial_price_text !== '0.0') {
+        return tender.initial_price_text;
+    }
+    if (tender.initial_price === 0 || tender.initial_price === '0' || tender.initial_price === '0.0') {
+        return 'Цена не указана';
+    }
+    
+    const price = typeof tender.initial_price === 'string' ? parseFloat(tender.initial_price) : tender.initial_price;
+    
+    if (isNaN(price)) {
+        return 'Цена не указана';
+    }
+    
     return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(price);
   };
 
@@ -75,8 +128,18 @@ const TenderSearch = () => {
       </div>
 
       {/* Floating Action Bar */}
-      {crmTenders.length > 0 && (
-        <div className="absolute top-6 right-6 z-10 flex gap-3">
+      <div className="absolute top-6 right-6 z-10 flex gap-3">
+        {selectedTenders.length > 0 && (
+            <button 
+                onClick={handleProcessSelected}
+                disabled={processing}
+                className="bg-emerald-600 text-white px-4 py-3 rounded-full shadow-lg hover:bg-emerald-700 transition-all flex items-center gap-2 border border-emerald-700 disabled:opacity-50"
+            >
+                {processing ? <Loader2 size={16} className="animate-spin" /> : <Settings size={16} />}
+                <span className="text-sm font-bold">Обработать выбранные ({selectedTenders.length})</span>
+            </button>
+        )}
+        {crmTenders.length > 0 && (
             <button 
                 onClick={() => navigate('/crm')}
                 className="bg-white text-slate-700 px-4 py-3 rounded-full shadow-lg hover:bg-slate-50 transition-all flex items-center gap-2 border border-slate-200"
@@ -84,8 +147,8 @@ const TenderSearch = () => {
                 <Briefcase size={16} />
                 <span className="text-sm font-bold">CRM: {crmTenders.length} активных</span>
             </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Search UI */}
       <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm mb-6">
@@ -122,29 +185,47 @@ const TenderSearch = () => {
               className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-300 bg-white text-slate-900 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
-          <button onClick={handleSearch} disabled={loading} className="px-6 py-3 bg-blue-600 text-white rounded-lg flex items-center gap-2">
-            {loading ? <Loader2 className="animate-spin" /> : <Play size={20} />}
-            Найти
-          </button>
+          {loading ? (
+            <button onClick={handleCancelSearch} className="px-6 py-3 bg-red-600 text-white rounded-lg flex items-center gap-2 hover:bg-red-700">
+                <XCircle size={20} />
+                Отмена
+            </button>
+          ) : (
+            <button onClick={handleSearch} disabled={loading} className="px-6 py-3 bg-blue-600 text-white rounded-lg flex items-center gap-2 hover:bg-blue-700">
+                <Play size={20} />
+                Найти
+            </button>
+          )}
         </div>
       </div>
 
       {/* Results List */}
       <div className="flex-1 overflow-auto space-y-4 pb-6">
          {results.map((tender) => {
-             const isSelected = isInCrm(tender.id);
+             const inCrm = isInCrm(tender.id);
+             const selected = isSelected(tender.id);
              return (
-                 <div key={tender.id} className={`relative bg-white p-5 rounded-xl border ${isSelected ? 'border-blue-500 bg-blue-50/10' : 'border-slate-200'}`}>
+                 <div key={tender.id} className={`relative bg-white p-5 rounded-xl border ${selected ? 'border-blue-500 bg-blue-50/10' : 'border-slate-200'}`}>
                     <div className="absolute top-5 right-5">
-                        <button onClick={() => toggleTenderSelection(tender)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${isSelected ? 'bg-blue-600 text-white' : 'bg-slate-100'}`}>
-                            {isSelected ? <CheckSquare size={16} /> : <Square size={16} />}
-                            {isSelected ? 'В CRM' : 'В работу'}
-                        </button>
+                        {inCrm ? (
+                            <span className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium bg-slate-100 text-slate-500 cursor-not-allowed">
+                                <CheckCircle size={16} />
+                                В CRM
+                            </span>
+                        ) : (
+                            <button onClick={() => toggleTenderSelection(tender)} className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium ${selected ? 'bg-blue-600 text-white' : 'bg-slate-100 hover:bg-slate-200'}`}>
+                                {selected ? <CheckSquare size={16} /> : <Square size={16} />}
+                                В работу
+                            </button>
+                        )}
                     </div>
-                    <h3 className="text-lg font-bold text-slate-800 pr-24">{tender.title}</h3>
+                    <h3 className="text-lg font-bold text-slate-800 pr-24">
+                        {tender.title}
+                        {tender.seen && <span className="ml-2 px-2 py-0.5 text-xs font-semibold bg-gray-200 text-gray-700 rounded">Просмотрено</span>}
+                    </h3>
                     <p className="text-sm text-slate-600 mt-2 line-clamp-2 w-3/4">{tender.description}</p>
                     <div className="mt-4 flex justify-between items-end border-t pt-3">
-                        <span className="text-xl font-bold text-slate-900">{formatPrice(tender.initial_price)}</span>
+                        <span className="text-xl font-bold text-slate-900">{formatPrice(tender)}</span>
                         <div className="text-right">
                              <span className="text-xs text-slate-500 block">№ {tender.eis_number}</span>
                              {tender.url && <a href={tender.url} target="_blank" className="text-blue-600 text-sm hover:underline flex items-center gap-1 justify-end">ЕИС <ExternalLink size={12}/></a>}

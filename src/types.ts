@@ -26,7 +26,9 @@ export interface Tender {
   eis_number: string;
   title: string;
   description: string;
-  initial_price: number;
+  initial_price: number | string;
+  initial_price_text?: string;
+  initial_price_value?: number;
   deadline: string;
   status: TenderStatus;
   risk_level: 'Low' | 'Medium' | 'High';
@@ -34,6 +36,11 @@ export interface Tender {
   law_type?: '44-ФЗ' | '223-ФЗ' | 'Коммерч.';
   url?: string;
   responsible_id?: string; // ID сотрудника
+  docs_url?: string;
+  search_url?: string;
+  keyword?: string;
+  seen?: boolean;
+  ntype?: string;
 }
 
 export interface LegalRisk {

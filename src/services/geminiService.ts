@@ -294,13 +294,41 @@ export const runBackendParser = async (): Promise<Product[]> => {
 
 // --- OTHER API CALLS ---
 
+export const cancelSearch = async (): Promise<void> => {
+    if (IS_DEMO_MODE) return;
+    try {
+        await fetch(`${API_BASE_URL}/api/search-tenders/cancel`, { method: 'POST' });
+    } catch (error) {
+        console.error("Failed to cancel search", error);
+    }
+};
+
+export const processSelectedTenders = async (tenders: Tender[]): Promise<void> => {
+    if (IS_DEMO_MODE) {
+        await delay(1000);
+        tenders.forEach(t => saveLocalTender(t));
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(tenders)
+        });
+        if (!response.ok) throw new Error("Server error");
+    } catch (error) {
+        console.error("Failed to process tenders", error);
+    }
+};
+
 export const searchTenders = async (
     query: string, 
     catalogContext: string, 
     isActiveOnly: boolean,
     fz44: boolean = true,
     fz223: boolean = true,
-    publishDaysBack: number = 30
+    publishDaysBack: number = 30,
+    signal?: AbortSignal
 ): Promise<Tender[]> => {
     const demoTenders: Tender[] = [
         {
@@ -344,10 +372,16 @@ export const searchTenders = async (
             only_application_stage: isActiveOnly.toString(),
             publish_days_back: publishDaysBack.toString()
         });
-        const response = await fetch(`${API_BASE_URL}/api/search-tenders?${params.toString()}`);
+        const response = await fetch(`${API_BASE_URL}/api/search-tenders?${params.toString()}`, {
+            signal
+        });
         if (!response.ok) throw new Error("Server error");
         return await response.json();
-    } catch (error) {
+    } catch (error: any) {
+        if (error.name === 'AbortError') {
+            console.log('Search aborted');
+            return [];
+        }
         return demoTenders;
     }
 };
