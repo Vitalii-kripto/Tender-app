@@ -15,7 +15,7 @@ if not logger.handlers:
         level=logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[
-            logging.FileHandler("logs/parser_service_log.txt", encoding="utf-8", mode="w"),
+            logging.FileHandler("parser_service_log.txt", encoding="utf-8", mode="w"),
             logging.StreamHandler(),
         ],
     )
