@@ -43,7 +43,7 @@ TXT_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor.log")
 SKIP_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor_skip.log")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
 
-USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 LOCAL_SOCKS_PORT = 1080
 
 def ensure_dir(p: str):
@@ -312,17 +312,16 @@ def get_http_client():
         if RF_CLIENT_PROXY is None:
             from backend.services.auto_ssh import RfProxyHttpClient
             RF_CLIENT_PROXY = RfProxyHttpClient(RF_CFG)
-        RF_CLIENT_PROXY.tunnel.ensure()
-        return RF_CLIENT_PROXY.session
+        return RF_CLIENT_PROXY
     else:
-        import requests
         if RF_CLIENT_DIRECT is None:
             RF_CLIENT_DIRECT = requests.Session()
         return RF_CLIENT_DIRECT
 
 def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: str) -> str:
     client = get_http_client()
-    r = client.get(file_url, timeout=120, stream=True, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+    # RfProxyHttpClient handles tunnel ensure and warmup internally in .get()
+    r = client.get(file_url, timeout=120, stream=True)
     r.raise_for_status()
 
     cd = r.headers.get("Content-Disposition", "")
@@ -362,7 +361,7 @@ def process_notice(n: Notice):
 
     try:
         client = get_http_client()
-        r = client.get(d_url, timeout=60, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"})
+        r = client.get(d_url, timeout=60)
         r.raise_for_status()
         html = r.text
     except Exception as e:
@@ -698,12 +697,9 @@ class EisService:
         if USE_PROXY:
             try:
                 client = get_http_client() # This ensures tunnel is up
-                # We can't easily call warmup() here because get_http_client returns session
-                # But we can access the global RF_CLIENT_PROXY
-                global RF_CLIENT_PROXY
-                if RF_CLIENT_PROXY:
-                    logger.info("Warming up proxy session...")
-                    RF_CLIENT_PROXY.warmup()
+                # client is RfProxyHttpClient
+                logger.info("Warming up proxy session...")
+                client.warmup()
             except Exception as e:
                 logger.error(f"Proxy warmup failed: {e}")
 
