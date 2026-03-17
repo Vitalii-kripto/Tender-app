@@ -7,13 +7,33 @@ import random
 import traceback
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import List, Optional, Set
+from typing import List, Optional, Set, Dict
 from urllib.parse import urlencode, urljoin, urlparse, parse_qs, unquote
 import logging
 
 from bs4 import BeautifulSoup
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeoutError
 
+# =========================
+# ЛОГИРОВАНИЕ
+# =========================
+TXT_LOG_PATH = r"E:\APP\tenders_app\data\eis_monitor.log"
+STATE_PATH = r"E:\APP\tenders_app\data\pw_state.json"
+LOCAL_SOCKS_PORT = 1080
+
+def ensure_dir(p: str):
+    os.makedirs(p, exist_ok=True)
+
+ensure_dir(os.path.dirname(TXT_LOG_PATH))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(TXT_LOG_PATH, encoding='utf-8', mode='a'),
+        logging.StreamHandler()
+    ]
+)
 logger = logging.getLogger("EIS_Service")
 
 # =========================
@@ -41,6 +61,13 @@ NO_RESULTS_PATTERNS = [
     "не найдено",
 ]
 
+def human_sleep(min_s: float = 1.5, max_s: float = 4.5):
+    time.sleep(random.uniform(min_s, max_s))
+
+def long_pause_every(n: int, counter: int, min_s: float = 10.0, max_s: float = 25.0):
+    if counter > 0 and counter % n == 0:
+        time.sleep(random.uniform(min_s, max_s))
+
 @dataclass
 class Notice:
     reg: str
@@ -62,6 +89,7 @@ class EisService:
         self.OKPD2_IDS = "8873861,8873862,8873863"
         self.OKPD2_IDS_CODES = "A,B,C"
         self.HEADLESS = True
+        self.SLOWMO_MS = 0
         self.REQ_HEADERS = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36",
             "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8",
@@ -178,7 +206,7 @@ class EisService:
 
     def _extract_notices_from_results(self, html: str, keyword: str, search_url: str) -> List[Notice]:
         soup = BeautifulSoup(html, "html.parser")
-        found_by_reg: dict[str, Notice] = {}
+        found_by_reg: Dict[str, Notice] = {}
 
         for a in soup.select(NOTICE_LINK_SELECTOR):
             href = (a.get("href") or "").strip()
@@ -324,6 +352,33 @@ class EisService:
         except ValueError:
             return 0.0
 
+    def goto_with_human_delays(self, page, url: str, wait: str = "domcontentloaded", timeout: int = 30000, op_counter: Optional[int] = None, retries: int = 2):
+        last_exc = None
+        for attempt in range(1, retries + 1):
+            try:
+                human_sleep(1.2, 3.2)
+                logger.info(f"GOTO -> {url} (attempt {attempt}/{retries})")
+                page.goto(url, wait_until=wait, timeout=timeout)
+                human_sleep(0.8, 2.2)
+                if op_counter is not None:
+                    long_pause_every(25, op_counter)
+                return
+            except PwTimeoutError as e:
+                last_exc = e
+                logger.error(f"GOTO timeout on {url} (attempt {attempt}/{retries})")
+                if attempt < retries:
+                    human_sleep(3.0, 7.0)
+                    continue
+                raise
+            except Exception as e:
+                last_exc = e
+                if attempt < retries:
+                    human_sleep(3.0, 7.0)
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+
     def search_tenders(self, query: str, fz44: bool = True, fz223: bool = True, only_application_stage: bool = True, publish_days_back: int = 30):
         """
         Запускает реальный браузер, выполняет поиск и парсит результаты.
@@ -331,22 +386,38 @@ class EisService:
         logger.info(f"Searching EIS via Playwright for: {query}")
         results = []
         collected: List[Notice] = []
+        op_counter = 0
 
         try:
             with sync_playwright() as p:
                 try:
                     logger.info("Launching Chromium...")
-                    browser = p.chromium.launch(headless=self.HEADLESS)
+                    browser = p.chromium.launch(
+                        headless=self.HEADLESS,
+                        slow_mo=self.SLOWMO_MS,
+                        proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"}
+                    )
                 except Exception as browser_err:
                     logger.critical(f"Failed to launch browser. Error: {browser_err}")
                     return []
                 
                 try:
-                    context = browser.new_context(
-                        locale="ru-RU",
-                        user_agent=self.REQ_HEADERS["User-Agent"],
-                        viewport={"width": 1920, "height": 1080}
-                    )
+                    if os.path.exists(STATE_PATH):
+                        context = browser.new_context(
+                            locale="ru-RU",
+                            user_agent=self.REQ_HEADERS["User-Agent"],
+                            storage_state=STATE_PATH,
+                            viewport={"width": 1920, "height": 1080}
+                        )
+                        logger.info(f"[state] loaded: {STATE_PATH}")
+                    else:
+                        context = browser.new_context(
+                            locale="ru-RU",
+                            user_agent=self.REQ_HEADERS["User-Agent"],
+                            viewport={"width": 1920, "height": 1080}
+                        )
+                        logger.info("[state] fresh context (no saved state yet)")
+
                     page = context.new_page()
 
                     # Разделяем запрос на ключевые слова, если их несколько (через запятую)
@@ -359,9 +430,8 @@ class EisService:
                             logger.info(f"[SEARCH] url: {url}")
 
                             try:
-                                time.sleep(random.uniform(1.2, 3.2))
-                                page.goto(url, wait_until="domcontentloaded", timeout=30000)
-                                time.sleep(random.uniform(0.8, 2.2))
+                                self.goto_with_human_delays(page, url, op_counter=op_counter, retries=2)
+                                op_counter += 1
 
                                 has_results = self._ensure_fresh_search_results(page)
                                 if not has_results:
@@ -383,6 +453,11 @@ class EisService:
 
                             collected.extend(items)
 
+                    # Сохраняем стейт после поиска
+                    ensure_dir(os.path.dirname(STATE_PATH))
+                    context.storage_state(path=STATE_PATH)
+                    logger.info(f"[state] saved: {STATE_PATH}")
+
                 except Exception as nav_err:
                     logger.error(f"Navigation/Page Error: {nav_err}")
                 finally:
@@ -390,7 +465,7 @@ class EisService:
                     logger.info("Browser closed.")
 
                 # Преобразуем собранные Notice в формат для фронтенда
-                merged: dict[str, Notice] = {}
+                merged: Dict[str, Notice] = {}
                 for n in collected:
                     if n.reg not in merged:
                         merged[n.reg] = n

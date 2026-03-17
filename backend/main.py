@@ -14,7 +14,8 @@ from .services.document_service import DocumentService
 from .services.ai_service import AiService
 
 # --- LOGGING SETUP ---
-log_file = "fastapi_app_log.txt"
+os.makedirs("logs", exist_ok=True)
+log_file = "logs/fastapi_app_log.txt"
 # Удаляем существующие хендлеры, если они есть, чтобы избежать дублирования при релоаде
 for handler in logging.root.handlers[:]:
     logging.root.removeHandler(handler)

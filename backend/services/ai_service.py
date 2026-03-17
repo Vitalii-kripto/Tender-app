@@ -11,7 +11,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("ai_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
+        logging.FileHandler("logs/ai_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
         logging.StreamHandler()
     ]
 )
