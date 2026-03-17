@@ -127,7 +127,6 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
         else:
             new_tender = TenderModel(
                 id=tender['id'],
-                eis_number=tender.get('eis_number', 'Unknown'),
                 title=tender['title'],
                 description=tender.get('description', ''),
                 initial_price=tender.get('initial_price', 0),
