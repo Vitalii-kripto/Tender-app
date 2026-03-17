@@ -1,4 +1,4 @@
-import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceResult, Employee, CompanyProfile } from "../types";
+import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceResult, Employee, CompanyProfile, AILawyerTenderResult } from "../types";
 
 // =========================================================================================
 // КОНФИГУРАЦИЯ
@@ -415,6 +415,25 @@ export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string):
 };
 
 // --- AI CALLS (VIA BACKEND) ---
+
+export const analyzeSelectedTendersLegal = async (tenderIds: string[]): Promise<AILawyerTenderResult[]> => {
+    if (IS_DEMO_MODE) {
+        throw new Error("Demo mode is not supported for AI Lawyer. Please connect to a real backend.");
+    }
+    
+    const response = await fetch(`${API_BASE_URL}/api/ai/legal-analysis/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(tenderIds)
+    });
+    
+    if (!response.ok) {
+        throw new Error(`Backend error: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    return data.results;
+};
 
 export const analyzeLegalRisks = async (tenderText: string): Promise<LegalRisk[]> => {
     const demoRisks: LegalRisk[] = [

@@ -59,6 +59,52 @@ export interface AnalysisResult {
   critical_mismatches: string[];
 }
 
+export interface AILawyerRow {
+  block: string;
+  finding: string;
+  risk_level: 'High' | 'Medium' | 'Low';
+  supplier_action: string;
+  source_document: string;
+  source_reference: string;
+  legal_basis?: string;
+  doc_group?: number;
+}
+
+export interface AILawyerTenderResult {
+  tender_id: string;
+  eis_number: string;
+  title: string;
+  description: string;
+  initial_price: number | string;
+  initial_price_text?: string;
+  initial_price_value?: number;
+  status: 'success' | 'error';
+  summary: {
+    high_risks: number;
+    medium_risks: number;
+    low_risks: number;
+    has_contract_project: boolean;
+    unread_files: number;
+  };
+  rows: AILawyerRow[];
+  error?: string;
+}
+
+export type AILawyerProcessingStatus = 
+  | 'Подготовка документов'
+  | 'Извлечение текста'
+  | 'Классификация документов'
+  | 'Анализ договора'
+  | 'Анализ остальной документации'
+  | 'Формирование отчета'
+  | 'Готово'
+  | 'Ошибка'
+  | 'Ожидание';
+
+export interface AILawyerBatchResponse {
+  results: AILawyerTenderResult[];
+}
+
 export interface ComplianceFileStatus {
   fileName: string;
   status: 'valid' | 'invalid' | 'warning';

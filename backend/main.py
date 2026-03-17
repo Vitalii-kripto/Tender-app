@@ -396,6 +396,65 @@ async def api_analyze_risks(data: dict = Body(...)):
     text = data.get('text', '')
     return ai_service.analyze_legal_risks(text)
 
+@app.post("/api/ai/legal-analysis/batch")
+async def api_legal_analysis_batch(tender_ids: List[str] = Body(...), db: Session = Depends(get_db)):
+    """Пакетный анализ тендеров ИИ Юристом"""
+    logger.info(f"AI Legal Analysis Batch request for {len(tender_ids)} tenders.")
+    
+    tenders = db.query(TenderModel).filter(TenderModel.id.in_(tender_ids)).all()
+    if not tenders:
+        raise HTTPException(status_code=404, detail="Tenders not found")
+        
+    results = []
+    for tender in tenders:
+        # Получаем пути к скачанным файлам
+        reg_dir = os.path.join("downloaded_docs", tender.id)
+        files_text = {}
+        unread_files = 0
+        
+        if os.path.exists(reg_dir):
+            for filename in os.listdir(reg_dir):
+                filepath = os.path.join(reg_dir, filename)
+                if os.path.isfile(filepath):
+                    try:
+                        if filename.lower().endswith('.pdf'):
+                            text = doc_service.extract_text_from_pdf(filepath)
+                            files_text[filename] = text
+                        else:
+                            # Для других форматов пока просто читаем как текст, если возможно
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                files_text[filename] = f.read()
+                    except Exception as e:
+                        logger.error(f"Error reading file {filename}: {e}")
+                        unread_files += 1
+        
+        # Если файлы не скачаны или не прочитаны, используем описание
+        if not files_text:
+            files_text['description.txt'] = tender.description or tender.title
+            
+        # Запускаем анализ
+        try:
+            analysis_result = ai_service.analyze_legal_batch(tender, files_text)
+            analysis_result['summary']['unread_files'] = unread_files
+            results.append(analysis_result)
+        except Exception as e:
+            logger.error(f"Error analyzing tender {tender.id}: {e}", exc_info=True)
+            results.append({
+                "tender_id": tender.id,
+                "eis_number": tender.eis_number or tender.id,
+                "title": tender.title,
+                "description": tender.description,
+                "initial_price": tender.initial_price,
+                "initial_price_text": tender.initial_price_text,
+                "initial_price_value": tender.initial_price_value,
+                "status": "error",
+                "error": str(e),
+                "summary": {"high_risks": 0, "medium_risks": 0, "low_risks": 0, "has_contract_project": False, "unread_files": unread_files},
+                "rows": []
+            })
+            
+    return {"results": results}
+
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):
     """Извлечение данных о тендере из текста"""
