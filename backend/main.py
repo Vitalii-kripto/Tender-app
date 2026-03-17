@@ -13,7 +13,7 @@ import logging
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
-from .services.eis_service import EisService, Notice, process_notice, mark_seen, csv_append_row
+from .services.eis_service import EisService, Notice, mark_seen, csv_append_row
 from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
@@ -120,6 +120,19 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
     try:
         existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
         
+        # Parse initial_price to float
+        raw_price = tender.get('initial_price', 0)
+        parsed_price = 0.0
+        if isinstance(raw_price, str):
+            import re
+            cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
+            try:
+                parsed_price = float(cleaned)
+            except ValueError:
+                parsed_price = 0.0
+        else:
+            parsed_price = float(raw_price)
+
         if existing:
             existing.status = tender.get('status', existing.status)
             existing.risk_level = tender.get('risk_level', existing.risk_level)
@@ -129,7 +142,7 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
                 id=tender['id'],
                 title=tender['title'],
                 description=tender.get('description', ''),
-                initial_price=tender.get('initial_price', 0),
+                initial_price=parsed_price,
                 deadline=tender.get('deadline', '-'),
                 status=tender.get('status', 'Found'),
                 risk_level=tender.get('risk_level', 'Low'),
@@ -158,7 +171,7 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
                     initial_price=str(tender.get('initial_price', '')),
                     application_deadline=tender.get('deadline', '')
                 )
-                background_tasks.add_task(process_notice, notice)
+                background_tasks.add_task(eis_service.process_tenders, [notice])
         
         db.commit()
         return {"status": "success"}
@@ -214,7 +227,8 @@ def search_tenders_endpoint(
             "docs_url": f"https://zakupki.gov.ru/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}",
             "search_url": n.search_url,
             "keyword": n.keyword,
-            "ntype": n.ntype
+            "ntype": n.ntype,
+            "seen": n.seen
         })
     return result
 

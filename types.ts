@@ -25,7 +25,7 @@ export interface Tender {
   eis_number: string;
   title: string;
   description: string;
-  initial_price: number;
+  initial_price: number | string;
   deadline: string;
   status: TenderStatus;
   risk_level: 'Low' | 'Medium' | 'High';
@@ -36,6 +36,7 @@ export interface Tender {
   docs_url?: string;
   search_url?: string;
   keyword?: string;
+  seen?: boolean;
   ntype?: string;
 }
 

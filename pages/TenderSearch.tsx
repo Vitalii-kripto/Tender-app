@@ -65,7 +65,11 @@ const TenderSearch = () => {
     }
   };
 
-  const formatPrice = (price: number) => {
+  const formatPrice = (price: number | string) => {
+    if (typeof price === 'string') {
+      // If it's already a formatted string from EIS, just return it
+      return price;
+    }
     return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(price);
   };
 
@@ -129,7 +133,10 @@ const TenderSearch = () => {
                             {isSelected ? 'В CRM' : 'В работу'}
                         </button>
                     </div>
-                    <h3 className="text-lg font-bold text-slate-800 pr-24">{tender.title}</h3>
+                    <h3 className="text-lg font-bold text-slate-800 pr-24">
+                        {tender.title}
+                        {tender.seen && <span className="ml-2 px-2 py-0.5 text-xs font-semibold bg-gray-200 text-gray-700 rounded">Просмотрено</span>}
+                    </h3>
                     <p className="text-sm text-slate-600 mt-2 line-clamp-2 w-3/4">{tender.description}</p>
                     <div className="mt-4 flex justify-between items-end border-t pt-3">
                         <span className="text-xl font-bold text-slate-900">{formatPrice(tender.initial_price)}</span>

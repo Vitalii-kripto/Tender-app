@@ -54,6 +54,22 @@ ensure_dir(os.path.dirname(TXT_LOG_PATH))
 
 # Use a specific logger for this service
 logger = logging.getLogger("EIS_Service")
+logger.setLevel(logging.INFO)
+
+# Prevent duplicate handlers if module is reloaded
+if not logger.handlers:
+    # Console handler
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.INFO)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    # File handler
+    fh = logging.FileHandler(TXT_LOG_PATH, encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
 
 def log(message: str):
     logger.info(message)
@@ -355,48 +371,122 @@ def download_file_with_real_name(file_url: str, reg_dir: str, suggested_title: s
 
     return out_path
 
-def process_notice(n: Notice):
-    log(f"--- Processing {n.reg} ---")
-    d_url = f"{BASE}/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}"
-
-    try:
-        client = get_http_client()
-        r = client.get(d_url, timeout=60)
-        r.raise_for_status()
-        html = r.text
-    except Exception as e:
-        log_exception(f"Failed to fetch docs page {d_url}", e)
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
-        return
-
-    items = parse_docs_block(html)
-    if not items:
-        log(f"No files found on docs page for {n.reg}")
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
-        mark_seen(n.reg)
-        return
-
-    reg_dir = os.path.join(OUT_DIR, n.reg)
-    ensure_dir(reg_dir)
-
-    downloaded = 0
-    for file_url, suggested_title in items:
-        try:
-            log(f"  Downloading {file_url}")
-            out_path = download_file_with_real_name(file_url, reg_dir, suggested_title)
-            log(f"  -> Saved to {out_path}")
-            downloaded += 1
-            time.sleep(random.uniform(0.5, 1.5))
-        except Exception as e:
-            log_exception(f"  Failed to download {file_url}", e)
-
-    if downloaded > 0:
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
-        mark_seen(n.reg)
-    else:
-        csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
-
 class EisService:
+    def process_tenders(self, notices: List[Notice]) -> List[Dict]:
+        if sys.platform == 'win32':
+            try:
+                asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+            except Exception:
+                pass
+
+        if USE_PROXY:
+            try:
+                client = get_http_client()
+                logger.info("Warming up proxy session...")
+                client.warmup()
+            except Exception as e:
+                logger.error(f"Proxy warmup failed: {e}")
+
+        results = []
+
+        try:
+            with sync_playwright() as p:
+                try:
+                    logger.info("Launching Chromium for processing...")
+                    browser = p.chromium.launch(
+                        headless=self.HEADLESS,
+                        slow_mo=self.SLOWMO_MS,
+                        proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"} if USE_PROXY else None
+                    )
+                except Exception as browser_err:
+                    logger.critical(f"Failed to launch browser. Error: {browser_err}")
+                    return [{"status": "error", "reason": str(browser_err)}]
+                
+                try:
+                    if os.path.exists(STATE_PATH):
+                        context = browser.new_context(
+                            locale="ru-RU",
+                            user_agent=self.REQ_HEADERS["User-Agent"],
+                            storage_state=STATE_PATH,
+                            viewport={"width": 1920, "height": 1080}
+                        )
+                        logger.info(f"[state] loaded: {STATE_PATH}")
+                    else:
+                        context = browser.new_context(
+                            locale="ru-RU",
+                            user_agent=self.REQ_HEADERS["User-Agent"],
+                            viewport={"width": 1920, "height": 1080}
+                        )
+                        logger.info("[state] fresh context (no saved state yet)")
+
+                    page = context.new_page()
+
+                    for n in notices:
+                        log(f"--- Processing {n.reg} ---")
+                        d_url = f"{BASE}/epz/order/notice/{n.ntype}/view/documents.html?regNumber={n.reg}"
+                        
+                        try:
+                            self.goto_with_human_delays(page, d_url, wait="domcontentloaded", timeout=60000, retries=2)
+                            html = page.content()
+                        except PwTimeoutError as e:
+                            log_exception(f"Timeout fetching docs page {d_url}", e)
+                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"SKIP:documents_timeout", n.title, n.object_info, n.initial_price, n.application_deadline)
+                            log_skip(f"SKIP:documents_timeout for {n.reg}")
+                            results.append({"reg": n.reg, "status": "skip", "reason": "documents_timeout", "docs_url": d_url, "files": []})
+                            continue
+                        except Exception as e:
+                            log_exception(f"Failed to fetch docs page {d_url}", e)
+                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
+                            results.append({"reg": n.reg, "status": "error", "reason": f"fetch_docs_page:{e}", "docs_url": d_url, "files": []})
+                            continue
+
+                        items = parse_docs_block(html)
+                        if not items:
+                            log(f"No files found on docs page for {n.reg}")
+                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
+                            log_skip(f"SKIP:no_files_found for {n.reg}")
+                            mark_seen(n.reg)
+                            results.append({"reg": n.reg, "status": "skip", "reason": "no_files_found", "docs_url": d_url, "files": []})
+                            continue
+
+                        reg_dir = os.path.join(OUT_DIR, n.reg)
+                        ensure_dir(reg_dir)
+
+                        downloaded_files = []
+                        for file_url, suggested_title in items:
+                            try:
+                                log(f"  Downloading {file_url}")
+                                out_path = download_file_with_real_name(file_url, reg_dir, suggested_title)
+                                log(f"  -> Saved to {out_path}")
+                                downloaded_files.append(out_path)
+                                time.sleep(random.uniform(0.5, 1.5))
+                            except Exception as e:
+                                log_exception(f"  Failed to download {file_url}", e)
+
+                        if downloaded_files:
+                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
+                            mark_seen(n.reg)
+                            results.append({"reg": n.reg, "status": "selected", "docs_url": d_url, "files": downloaded_files})
+                        else:
+                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
+                            log_skip(f"SKIP:all_downloads_failed for {n.reg}")
+                            results.append({"reg": n.reg, "status": "skip", "reason": "all_downloads_failed", "docs_url": d_url, "files": []})
+
+                    ensure_dir(os.path.dirname(STATE_PATH))
+                    context.storage_state(path=STATE_PATH)
+                    logger.info(f"[state] saved: {STATE_PATH}")
+
+                except Exception as nav_err:
+                    logger.error(f"Navigation/Page Error: {nav_err}")
+                finally:
+                    browser.close()
+                    logger.info("Browser closed.")
+
+        except Exception as global_err:
+            logger.error(f"Playwright Global Error: {global_err}", exc_info=True)
+            return [{"status": "error", "reason": str(global_err)}]
+        
+        return results
     def __init__(self):
         self.RECORDS_PER_PAGE = 50
         self.MAX_PAGES = 5
@@ -784,8 +874,7 @@ class EisService:
                 # Filter and merge
                 merged: Dict[str, Notice] = {}
                 for n in collected:
-                    if is_seen(n.reg):
-                        continue
+                    n.seen = is_seen(n.reg)
                     if n.reg not in merged:
                         merged[n.reg] = n
                     else:
