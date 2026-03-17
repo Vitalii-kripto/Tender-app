@@ -1,327 +1,464 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getTendersFromBackend, analyzeSelectedTendersLegal } from '../services/geminiService';
-import { Tender, AILawyerTenderResult, AILawyerRow } from '../types';
-import { Shield, CheckSquare, Square, Loader2, AlertTriangle, FileText, CheckCircle, XCircle } from 'lucide-react';
+import { MOCK_CATALOG } from './ProductCatalog';
+import { findProductEquivalent, analyzeLegalRisks, fetchTenderDocsText, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
+import { AnalysisResult, LegalRisk, Tender } from '../types';
+import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2 } from 'lucide-react';
 
 const Analysis = () => {
   const navigate = useNavigate();
+  const [inputText, setInputText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<'match' | 'legal' | 'batch'>('batch');
+  const [statusText, setStatusText] = useState('');
   
-  // State
-  const [allTenders, setAllTenders] = useState<Tender[]>([]);
-  const [checkedTenderIds, setCheckedTenderIds] = useState<string[]>([]);
-  const [resultsByTenderId, setResultsByTenderId] = useState<Record<string, AILawyerTenderResult>>({});
-  const [isBatchRunning, setIsBatchRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Single analysis state
+  const [matchResult, setMatchResult] = useState<AnalysisResult | null>(null);
+  const [legalRisks, setLegalRisks] = useState<LegalRisk[]>([]);
+
+  // Batch analysis state
+  const [selectedTenders, setSelectedTenders] = useState<Tender[]>([]);
+  const [batchResults, setBatchResults] = useState<Record<string, { risks: LegalRisk[], status: 'pending' | 'loading' | 'done', docText?: string, showDoc?: boolean }>>({});
 
   useEffect(() => {
-    loadTenders();
+    // Load from Unified Service (Backend + LocalStorage Fallback)
+    const loadData = async () => {
+        try {
+            const tenders = await getTendersFromBackend();
+            setSelectedTenders(tenders);
+            
+            const initialResults: any = {};
+            tenders.forEach(t => {
+                initialResults[t.id] = { risks: [], status: 'pending' };
+            });
+            setBatchResults(initialResults);
+            
+            if (tenders.length > 0) setActiveTab('batch');
+        } catch (e) {
+            console.error("Failed to load analysis tenders", e);
+        }
+    };
+    loadData();
   }, []);
 
-  const loadTenders = async () => {
+  const handleSingleAnalyze = async () => {
+    if (!inputText) return;
+    setLoading(true);
+    setStatusText("Анализ...");
+    
     try {
-      const tenders = await getTendersFromBackend();
-      setAllTenders(tenders);
-      // Remove checked IDs that are no longer in CRM
-      setCheckedTenderIds(prev => prev.filter(id => tenders.some(t => t.id === id)));
-      // Remove results for deleted tenders
-      setResultsByTenderId(prev => {
-        const next = { ...prev };
-        Object.keys(next).forEach(id => {
-          if (!tenders.some(t => t.id === id)) {
-            delete next[id];
-          }
-        });
-        return next;
-      });
+      if (activeTab === 'match') {
+        const result = await findProductEquivalent(inputText);
+        setMatchResult(result);
+      } else {
+        const risks = await analyzeLegalRisks(inputText);
+        setLegalRisks(risks);
+      }
     } catch (e) {
-      console.error("Failed to load tenders", e);
-    }
-  };
-
-  const toggleTender = (id: string) => {
-    if (isBatchRunning) return;
-    setCheckedTenderIds(prev => 
-      prev.includes(id) ? prev.filter(tId => tId !== id) : [...prev, id]
-    );
-  };
-
-  const selectAll = () => {
-    if (isBatchRunning) return;
-    setCheckedTenderIds(allTenders.map(t => t.id));
-  };
-
-  const deselectAll = () => {
-    if (isBatchRunning) return;
-    setCheckedTenderIds([]);
-  };
-
-  const formatPrice = (tender: Tender) => {
-    if (tender.initial_price_text && tender.initial_price_text !== '0' && tender.initial_price_text !== '0.0') {
-        return tender.initial_price_text;
-    }
-    if (tender.initial_price === 0 || tender.initial_price === '0' || tender.initial_price === '0.0') {
-        return 'Сумма не указана';
-    }
-    
-    const price = typeof tender.initial_price === 'string' ? parseFloat(tender.initial_price) : tender.initial_price;
-    
-    if (isNaN(price)) {
-        return 'Сумма не указана';
-    }
-    
-    return new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(price);
-  };
-
-  const handleAnalyze = async () => {
-    if (checkedTenderIds.length === 0) {
-      alert("Выберите хотя бы один тендер для анализа");
-      return;
-    }
-
-    setIsBatchRunning(true);
-    setError(null);
-
-    try {
-      const results = await analyzeSelectedTendersLegal(checkedTenderIds);
-      
-      const newResultsMap = { ...resultsByTenderId };
-      results.forEach(res => {
-        newResultsMap[res.tender_id] = res;
-      });
-      
-      setResultsByTenderId(newResultsMap);
-    } catch (err: any) {
-      console.error(err);
-      setError(err.message || "Произошла ошибка при анализе");
+      console.error(e);
     } finally {
-      setIsBatchRunning(false);
+      setLoading(false);
     }
   };
 
-  const renderRiskBadge = (level: string) => {
-    switch (level) {
-      case 'High': return <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-bold">Высокий</span>;
-      case 'Medium': return <span className="px-2 py-1 bg-amber-100 text-amber-700 rounded text-xs font-bold">Средний</span>;
-      case 'Low': return <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold">Низкий</span>;
-      default: return <span className="px-2 py-1 bg-slate-100 text-slate-700 rounded text-xs font-bold">{level}</span>;
+  const runBatchAnalysis = async () => {
+    setLoading(true);
+    
+    for (const tender of selectedTenders) {
+        // 1. Статус: скачивание
+        setBatchResults(prev => ({
+            ...prev,
+            [tender.id]: { ...prev[tender.id], status: 'loading' }
+        }));
+        setStatusText(`Скачивание документации для №${tender.eis_number}...`);
+
+        // 2. Реальное скачивание текста через Backend
+        let extractedText = "";
+        if (tender.url) {
+            extractedText = await fetchTenderDocsText(tender.url, tender.eis_number);
+        }
+
+        if (!extractedText || extractedText.length < 50) {
+             extractedText = `Не удалось скачать документы автоматически. Анализируем описание: ${tender.description}`;
+        }
+
+        setStatusText(`ИИ анализ условий контракта №${tender.eis_number}...`);
+
+        // 3. Отправка в Gemini
+        try {
+            const risks = await analyzeLegalRisks(extractedText);
+            setBatchResults(prev => ({
+                ...prev,
+                [tender.id]: { risks: risks, status: 'done', docText: extractedText, showDoc: false }
+            }));
+        } catch (e) {
+            console.error(e);
+            setBatchResults(prev => ({
+                ...prev,
+                [tender.id]: { risks: [], status: 'done', docText: extractedText, showDoc: false }
+            }));
+        }
     }
+    setLoading(false);
+    setStatusText("");
+  };
+
+  const removeTender = async (id: string) => {
+    if(confirm("Убрать этот тендер из CRM?")) {
+        const updated = selectedTenders.filter(t => t.id !== id);
+        setSelectedTenders(updated);
+        await deleteTenderFromBackend(id); // Sync delete
+        if (updated.length === 0) setActiveTab('match');
+    }
+  };
+
+  const getRecommendedProduct = (id?: string) => MOCK_CATALOG.find(p => p.id === id);
+
+  const formatSpecKey = (key: string) => {
+    const map: Record<string, string> = {
+      thickness_mm: 'Толщина (мм)',
+      weight_kg_m2: 'Вес (кг/м²)',
+      flexibility_temp_c: 'Гибкость на брусе (°C)',
+      tensile_strength_n: 'Разрывная сила (Н)'
+    };
+    return map[key] || key;
+  };
+
+  const exportToCSV = (risks: LegalRisk[], tenderNumber: string) => {
+    const headers = ['Уровень риска', 'Документ', 'Требование', 'Описание', 'Дедлайн'];
+    const rows = risks.map(r => [
+      r.risk_level,
+      `"${r.document.replace(/"/g, '""')}"`,
+      `"${r.requirement.replace(/"/g, '""')}"`,
+      `"${r.description.replace(/"/g, '""')}"`,
+      `"${r.deadline.replace(/"/g, '""')}"`
+    ]);
+    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `risks_report_${tenderNumber}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const exportToPDF = () => {
+    window.print();
   };
 
   return (
-    <div className="p-6 max-w-7xl mx-auto h-[calc(100vh-64px)] flex flex-col">
-      <div className="mb-6 flex items-center gap-3">
-        <div className="p-3 bg-indigo-100 text-indigo-600 rounded-xl">
-          <Shield size={24} />
-        </div>
-        <div>
-          <h2 className="text-2xl font-bold text-slate-900">ИИ Юрист</h2>
-          <p className="text-slate-500 text-sm">Глубокий правовой анализ документации закупки</p>
-        </div>
+    <div className="p-6 max-w-6xl mx-auto pb-20">
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold text-slate-900 flex items-center gap-2">
+          <Cpu className="text-blue-600" />
+          ИИ Анализ (AI Engine)
+        </h2>
+        <p className="text-slate-500 text-sm mt-1">
+          Реальный анализ тендерной документации на риски. Источник данных: CRM.
+        </p>
       </div>
 
-      <div className="flex gap-6 flex-1 min-h-0">
-        {/* Left Sidebar: Tender Selection */}
-        <div className="w-1/3 bg-white border border-slate-200 rounded-xl flex flex-col shadow-sm">
-          <div className="p-4 border-b border-slate-200 bg-slate-50 rounded-t-xl">
-            <h3 className="font-bold text-slate-800 mb-2">Тендеры в CRM</h3>
-            <div className="flex justify-between items-center text-sm text-slate-600 mb-3">
-              <span>Всего: {allTenders.length}</span>
-              <span className="font-medium text-indigo-600">Выбрано: {checkedTenderIds.length}</span>
-            </div>
-            <div className="flex gap-2">
-              <button 
-                onClick={selectAll} 
-                disabled={isBatchRunning || allTenders.length === 0}
-                className="text-xs px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50"
-              >
-                Выбрать все
-              </button>
-              <button 
-                onClick={deselectAll} 
-                disabled={isBatchRunning || checkedTenderIds.length === 0}
-                className="text-xs px-3 py-1.5 bg-white border border-slate-300 rounded hover:bg-slate-50 disabled:opacity-50"
-              >
-                Снять все
-              </button>
-            </div>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-2 space-y-2">
-            {allTenders.length === 0 ? (
-              <div className="text-center p-6 text-slate-500 text-sm">
-                Нет тендеров в CRM. Сначала добавьте тендеры через поиск.
-              </div>
-            ) : (
-              allTenders.map(tender => {
-                const isChecked = checkedTenderIds.includes(tender.id);
-                return (
-                  <div 
-                    key={tender.id} 
-                    onClick={() => toggleTender(tender.id)}
-                    className={`p-3 rounded-lg border cursor-pointer transition-colors flex gap-3 ${
-                      isChecked ? 'border-indigo-500 bg-indigo-50/30' : 'border-slate-200 hover:border-indigo-300'
-                    } ${isBatchRunning ? 'opacity-60 cursor-not-allowed' : ''}`}
-                  >
-                    <div className="pt-0.5 text-indigo-600">
-                      {isChecked ? <CheckSquare size={18} /> : <Square size={18} className="text-slate-400" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex justify-between items-start mb-1">
-                        <span className="text-xs font-medium text-slate-500">№ {tender.eis_number}</span>
-                        {tender.law_type && <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 rounded">{tender.law_type}</span>}
-                      </div>
-                      <h4 className="text-sm font-bold text-slate-800 leading-tight mb-1 line-clamp-2" title={tender.title}>
-                        {tender.title}
-                      </h4>
-                      <p className="text-xs text-slate-600 line-clamp-2 mb-2" title={tender.description}>
-                        {tender.description}
-                      </p>
-                      <div className="flex justify-between items-center mt-auto">
-                        <span className="text-sm font-bold text-slate-900">{formatPrice(tender)}</span>
-                        {tender.deadline && tender.deadline !== '-' && (
-                           <span className="text-[10px] text-slate-500">До {tender.deadline}</span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-          </div>
-          
-          <div className="p-4 border-t border-slate-200 bg-slate-50 rounded-b-xl">
-            <button
-              onClick={handleAnalyze}
-              disabled={isBatchRunning || checkedTenderIds.length === 0}
-              className="w-full py-3 bg-indigo-600 text-white rounded-lg font-medium flex items-center justify-center gap-2 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Input/Selection Section */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col h-[600px] overflow-hidden">
+          <div className="border-b border-slate-200 flex bg-slate-50">
+            <button 
+              onClick={() => setActiveTab('batch')}
+              className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'batch' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
             >
-              {isBatchRunning ? <Loader2 size={18} className="animate-spin" /> : <Shield size={18} />}
-              {isBatchRunning ? 'Анализ выполняется...' : 'Анализировать выбранные'}
+              <div className="relative">
+                <FileText size={16} />
+                {selectedTenders.length > 0 && <span className="absolute -top-1 -right-2 w-3 h-3 bg-red-500 rounded-full border border-white"></span>}
+              </div>
+              Тендеры в работе ({selectedTenders.length})
+            </button>
+            <button 
+              onClick={() => setActiveTab('match')}
+              className={`flex-1 py-3 text-sm font-medium flex items-center justify-center gap-2 transition-colors ${activeTab === 'match' ? 'bg-white text-blue-600 border-t-2 border-t-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              <ScanEye size={16} />
+              Ручной ввод
             </button>
           </div>
+          
+          {activeTab === 'batch' ? (
+            <div className="flex-1 flex flex-col p-4 bg-slate-50/50">
+                {selectedTenders.length === 0 ? (
+                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6">
+                        <FileText size={48} className="text-slate-300 mb-4" />
+                        <h3 className="text-lg font-medium text-slate-700">Нет тендеров в CRM</h3>
+                        <p className="text-sm text-slate-500 mb-6">Перейдите в поиск и добавьте закупки в работу.</p>
+                        <button onClick={() => navigate('/tenders')} className="px-4 py-2 bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors text-sm font-medium">
+                            Перейти к поиску
+                        </button>
+                    </div>
+                ) : (
+                    <>
+                        <div className="flex-1 overflow-y-auto space-y-3 pr-2 mb-4">
+                            {selectedTenders.map(tender => (
+                                <div key={tender.id} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm flex justify-between items-start gap-3">
+                                    <div className="flex-1 min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="text-xs font-mono bg-slate-100 px-1.5 rounded text-slate-500">#{tender.eis_number}</span>
+                                            {batchResults[tender.id]?.status === 'loading' && <span className="text-xs text-blue-600 animate-pulse font-medium">Загрузка...</span>}
+                                            {batchResults[tender.id]?.status === 'done' && <span className="text-xs text-emerald-600 font-medium flex items-center gap-1"><CheckCircle size={10}/> Готово</span>}
+                                        </div>
+                                        <h4 className="text-sm font-medium text-slate-800 line-clamp-2">{tender.title}</h4>
+                                    </div>
+                                    <button 
+                                        onClick={() => removeTender(tender.id)}
+                                        disabled={loading}
+                                        className="text-slate-400 hover:text-red-500 p-1"
+                                        title="Удалить из CRM"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                        <div className="border-t border-slate-200 pt-4">
+                            <button 
+                                onClick={runBatchAnalysis}
+                                disabled={loading || selectedTenders.length === 0}
+                                className={`w-full flex items-center justify-center gap-2 py-3 rounded-xl text-white font-bold transition-all shadow-md ${loading ? 'bg-slate-700 cursor-wait' : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:scale-[1.01]'}`}
+                            >
+                                {loading ? (
+                                    <>
+                                        <Loader2 size={20} className="animate-spin" />
+                                        Идет работа...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Cpu size={20} />
+                                        ИИ Анализ документации (Real)
+                                    </>
+                                )}
+                            </button>
+                            <p className="text-xs text-center text-slate-400 mt-2">
+                                Система скачает документы с zakupki.gov.ru, прочитает PDF и найдет риски.
+                            </p>
+                        </div>
+                    </>
+                )}
+            </div>
+          ) : (
+             <div className="p-4 flex-1 flex flex-col">
+                <textarea
+                className="w-full flex-1 p-4 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none font-mono text-sm"
+                placeholder="Вставьте тех. характеристики или текст контракта вручную..."
+                value={inputText}
+                onChange={(e) => setInputText(e.target.value)}
+                />
+                <div className="flex items-center gap-4 mt-4">
+                     <label className="flex items-center gap-2 text-sm text-slate-600">
+                        <input type="radio" name="mode" checked={activeTab === 'match'} onChange={() => setActiveTab('match')} />
+                        Подбор товара
+                     </label>
+                     <label className="flex items-center gap-2 text-sm text-slate-600">
+                        <input type="radio" name="mode" checked={activeTab === 'legal'} onChange={() => setActiveTab('legal')} />
+                        Юр. риски
+                     </label>
+                     <button 
+                        onClick={handleSingleAnalyze}
+                        disabled={loading || !inputText}
+                        className={`ml-auto flex items-center gap-2 px-6 py-2.5 rounded-lg text-white font-medium transition-all ${loading || !inputText ? 'bg-slate-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-md'}`}
+                    >
+                        {loading ? 'Анализ...' : 'Запустить'}
+                    </button>
+                </div>
+            </div>
+          )}
         </div>
 
-        {/* Right Content: Results */}
-        <div className="w-2/3 bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-slate-200 bg-slate-50 flex justify-between items-center">
-            <h3 className="font-bold text-slate-800">Результаты анализа</h3>
-            {isBatchRunning && (
-              <span className="text-sm text-indigo-600 flex items-center gap-2 font-medium">
-                <Loader2 size={16} className="animate-spin" />
-                Идет обработка документов...
-              </span>
-            )}
-          </div>
+        {/* Results Section */}
+        <div className="space-y-6 h-[600px] overflow-y-auto pr-2 custom-scrollbar">
           
-          <div className="flex-1 overflow-y-auto p-6 bg-slate-50/50">
-            {error && (
-              <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg flex items-start gap-3 text-red-700">
-                <AlertTriangle size={20} className="shrink-0 mt-0.5" />
-                <div>
-                  <h4 className="font-bold">Ошибка выполнения</h4>
-                  <p className="text-sm mt-1">{error}</p>
+          {/* 1. Loading State */}
+          {loading && (
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
+              <div className="relative">
+                <div className="w-16 h-16 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
+                    <Cpu size={24} className="text-blue-600" />
                 </div>
               </div>
-            )}
+              <p className="animate-pulse font-medium">{statusText || "Агент работает..."}</p>
+            </div>
+          )}
 
-            {Object.keys(resultsByTenderId).length === 0 && !isBatchRunning && !error ? (
-              <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
-                <FileText size={48} className="opacity-20" />
-                <p>Выберите тендеры слева и нажмите "Анализировать"</p>
-              </div>
-            ) : (
-              <div className="space-y-8">
-                {Object.values(resultsByTenderId).map(result => (
-                  <div key={result.tender_id} className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-hidden">
-                    {/* Header */}
-                    <div className="p-5 border-b border-slate-200 bg-slate-50">
-                      <div className="flex justify-between items-start mb-2">
-                        <span className="text-sm font-medium text-slate-500">№ {result.eis_number}</span>
-                        {result.status === 'success' ? (
-                          <span className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-200">
-                            <CheckCircle size={14} /> Успешно
-                          </span>
-                        ) : (
-                          <span className="flex items-center gap-1 text-xs font-bold text-red-600 bg-red-50 px-2 py-1 rounded border border-red-200">
-                            <XCircle size={14} /> Ошибка
-                          </span>
-                        )}
-                      </div>
-                      <h4 className="text-lg font-bold text-slate-900 mb-2">{result.title}</h4>
-                      <p className="text-sm text-slate-600 mb-4 line-clamp-2">{result.description}</p>
-                      
-                      {/* Summary Stats */}
-                      {result.status === 'success' && result.summary && (
-                        <div className="flex flex-wrap gap-3 mt-4">
-                          <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-lg border border-slate-200 text-sm">
-                            <span className="text-slate-500">Риски:</span>
-                            <span className="font-bold text-red-600" title="Высокие">{result.summary.high_risks}</span> /
-                            <span className="font-bold text-amber-600" title="Средние">{result.summary.medium_risks}</span> /
-                            <span className="font-bold text-green-600" title="Низкие">{result.summary.low_risks}</span>
-                          </div>
-                          <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border text-sm ${result.summary.has_contract_project ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
-                            {result.summary.has_contract_project ? <CheckCircle size={16} /> : <AlertTriangle size={16} />}
-                            {result.summary.has_contract_project ? 'Проект контракта найден' : 'Проект контракта не найден'}
-                          </div>
-                          {result.summary.unread_files > 0 && (
-                            <div className="flex items-center gap-2 bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-sm">
-                              <AlertTriangle size={16} />
-                              Непрочитанных файлов: {result.summary.unread_files}
+          {/* 2. Batch Results State */}
+          {!loading && activeTab === 'batch' && selectedTenders.length > 0 && (
+             <div className="space-y-8">
+                {selectedTenders.map(tender => {
+                    const result = batchResults[tender.id];
+                    if (!result || result.status !== 'done') return null;
+
+                    return (
+                        <div key={tender.id} className="animate-in slide-in-from-bottom-4 fade-in duration-500">
+                            <div className="flex items-center gap-2 mb-3 sticky top-0 bg-slate-50/90 backdrop-blur py-2 z-10">
+                                <span className="bg-slate-200 text-slate-600 text-xs font-mono px-2 py-0.5 rounded">#{tender.eis_number}</span>
+                                <h3 className="font-bold text-slate-800 text-sm truncate max-w-md">{tender.title}</h3>
                             </div>
-                          )}
-                        </div>
-                      )}
-                      
-                      {result.status === 'error' && (
-                        <div className="mt-3 p-3 bg-red-50 text-red-700 text-sm rounded border border-red-100">
-                          {result.error || "Неизвестная ошибка при анализе"}
-                        </div>
-                      )}
-                    </div>
+                            
+                            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                <div className="bg-slate-50 px-4 py-2 border-b border-slate-100 flex justify-between items-center">
+                                    <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Отчет ИИ-Юриста</span>
+                                    {result.risks.length > 0 ? (
+                                        <span className="text-xs font-bold text-red-600 flex items-center gap-1"><AlertTriangle size={12}/> Найдено рисков: {result.risks.length}</span>
+                                    ) : (
+                                        <span className="text-xs font-bold text-emerald-600 flex items-center gap-1"><CheckCircle size={12}/> Рисков не обнаружено</span>
+                                    )}
+                                </div>
 
-                    {/* Table */}
-                    {result.status === 'success' && result.rows && result.rows.length > 0 && (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left text-sm">
-                          <thead className="bg-slate-50 text-slate-600 border-b border-slate-200">
-                            <tr>
-                              <th className="p-3 font-semibold w-32">Блок</th>
-                              <th className="p-3 font-semibold">Что найдено</th>
-                              <th className="p-3 font-semibold w-24">Риск</th>
-                              <th className="p-3 font-semibold">Что сделать поставщику</th>
-                              <th className="p-3 font-semibold w-48">Документ / Ссылка</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {result.rows.map((row, idx) => (
-                              <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                <td className="p-3 align-top font-medium text-slate-800">{row.block}</td>
-                                <td className="p-3 align-top text-slate-700">{row.finding}</td>
-                                <td className="p-3 align-top">{renderRiskBadge(row.risk_level)}</td>
-                                <td className="p-3 align-top text-slate-700">{row.supplier_action}</td>
-                                <td className="p-3 align-top text-xs">
-                                  <div className="font-medium text-slate-800 mb-1 break-words">{row.source_document}</div>
-                                  <div className="text-slate-500 break-words">{row.source_reference}</div>
-                                  {row.legal_basis && <div className="mt-1 text-indigo-600 italic break-words">{row.legal_basis}</div>}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                    
-                    {result.status === 'success' && (!result.rows || result.rows.length === 0) && (
-                      <div className="p-8 text-center text-slate-500">
-                        Рисков и значимых условий не обнаружено.
-                      </div>
-                    )}
+                                {result.docText && (
+                                    <div className="px-4 py-2 bg-amber-50 text-[10px] text-amber-800 border-b border-amber-100 flex flex-col gap-2">
+                                        <div className="flex justify-between items-center">
+                                            <span>Проанализированный текст документации</span>
+                                            <button 
+                                                onClick={() => setBatchResults(prev => ({...prev, [tender.id]: {...prev[tender.id], showDoc: !prev[tender.id].showDoc}}))}
+                                                className="text-blue-600 hover:underline font-medium"
+                                            >
+                                                {result.showDoc ? 'Скрыть текст' : 'Показать текст'}
+                                            </button>
+                                        </div>
+                                        {result.showDoc && (
+                                            <div className="bg-white p-3 rounded border border-amber-200 h-64 overflow-y-auto font-mono whitespace-pre-wrap text-slate-700">
+                                                {result.docText}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                                
+                                {result.risks.length === 0 ? (
+                                    <div className="p-6 text-center text-slate-400">
+                                        <p className="text-sm">Документация выглядит стандартной. Критических условий не найдено.</p>
+                                    </div>
+                                ) : (
+                                    <div className="divide-y divide-slate-100">
+                                        {result.risks.map((risk, idx) => (
+                                            <div key={idx} className="p-4 hover:bg-slate-50 transition-colors">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${risk.risk_level === 'High' ? 'bg-red-100 text-red-700' : risk.risk_level === 'Medium' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                                                        {risk.risk_level === 'High' ? 'Высокий' : risk.risk_level === 'Medium' ? 'Средний' : 'НИЗКИЙ'}
+                                                    </span>
+                                                    <span className="text-xs text-slate-400">{risk.document}</span>
+                                                </div>
+                                                <p className="text-sm font-semibold text-slate-800 mt-1">{risk.requirement}</p>
+                                                <p className="text-xs text-slate-500 mt-1 leading-relaxed">{risk.description}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                                <div className="bg-slate-50 p-2 border-t border-slate-100 flex justify-end gap-4">
+                                    <button onClick={() => exportToCSV(result.risks, tender.eis_number)} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
+                                        <FileDown size={12} /> Скачать CSV
+                                    </button>
+                                    <button onClick={exportToPDF} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
+                                        <FileDown size={12} /> Печать / PDF
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    );
+                })}
+             </div>
+          )}
+
+          {/* 3. Single Result State (Match) */}
+          {!loading && matchResult && activeTab === 'match' && (
+            <div className="space-y-6">
+              <div className={`p-6 rounded-xl border ${matchResult.is_equivalent ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
+                <div className="flex items-start gap-4">
+                  <div className={`p-3 rounded-full ${matchResult.is_equivalent ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                    {matchResult.is_equivalent ? <CheckCircle size={24} /> : <AlertTriangle size={24} />}
                   </div>
-                ))}
+                  <div>
+                    <h3 className={`text-lg font-bold ${matchResult.is_equivalent ? 'text-emerald-800' : 'text-red-800'}`}>
+                      {matchResult.is_equivalent ? 'Найден эквивалент' : 'Нет прямого аналога'}
+                    </h3>
+                    <p className="text-sm mt-1 opacity-80">
+                      Уверенность ИИ: <strong>{(matchResult.confidence * 100).toFixed(0)}%</strong>
+                    </p>
+                  </div>
+                </div>
               </div>
-            )}
-          </div>
+
+              {matchResult.recommended_product_id && (
+                 <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                   <p className="text-xs text-slate-400 uppercase tracking-wider font-bold mb-3">Рекомендованный продукт</p>
+                   {(() => {
+                     const p = getRecommendedProduct(matchResult.recommended_product_id);
+                     if (!p) return null;
+                     return (
+                       <div>
+                         <h4 className="text-xl font-bold text-slate-800">{p.title}</h4>
+                         <p className="text-sm text-slate-500 mb-4">{p.category} | {p.material_type}</p>
+                         <div className="grid grid-cols-2 gap-4 bg-slate-50 p-4 rounded-lg">
+                            {Object.entries(p.specs).map(([k,v]) => (
+                                <div key={k}>
+                                    <span className="block text-xs text-slate-400 capitalize">{formatSpecKey(k)}</span>
+                                    <span className="font-medium text-slate-800">{v}</span>
+                                </div>
+                            ))}
+                         </div>
+                       </div>
+                     );
+                   })()}
+                 </div>
+              )}
+
+              <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                <h4 className="font-bold text-slate-800 mb-2">Обоснование ИИ</h4>
+                <p className="text-slate-600 text-sm leading-relaxed">{matchResult.reasoning}</p>
+                {matchResult.critical_mismatches.length > 0 && (
+                  <div className="mt-4 pt-4 border-t border-slate-100">
+                     <h5 className="text-red-600 text-sm font-bold mb-2">Критические расхождения:</h5>
+                     <ul className="list-disc pl-5 text-sm text-slate-600 space-y-1">
+                        {matchResult.critical_mismatches.map((m, i) => (
+                            <li key={i}>{m}</li>
+                        ))}
+                     </ul>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* 4. Single Result State (Legal) */}
+          {!loading && legalRisks.length > 0 && activeTab === 'legal' && (
+            <div className="space-y-4">
+               {legalRisks.map((risk, idx) => (
+                 <div key={idx} className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                    <div className={`h-1.5 w-full ${risk.risk_level === 'High' ? 'bg-red-500' : risk.risk_level === 'Medium' ? 'bg-amber-500' : 'bg-emerald-500'}`} />
+                    <div className="p-5">
+                       <div className="flex justify-between items-start mb-2">
+                          <span className="text-xs font-mono text-slate-400 bg-slate-100 px-2 py-1 rounded">
+                             {risk.document}
+                          </span>
+                          <span className={`text-xs font-bold px-2 py-1 rounded ${risk.risk_level === 'High' ? 'text-red-600 bg-red-50' : risk.risk_level === 'Medium' ? 'text-amber-600 bg-amber-50' : 'text-emerald-600 bg-emerald-50'}`}>
+                            {risk.risk_level === 'High' ? 'ВЫСОКИЙ' : risk.risk_level === 'Medium' ? 'СРЕДНИЙ' : 'НИЗКИЙ'}
+                          </span>
+                       </div>
+                       <h4 className="font-bold text-slate-800 mb-2">Требование: {risk.requirement}</h4>
+                       <p className="text-sm text-slate-600 mb-3">{risk.description}</p>
+                       <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <span className="font-semibold">Срок/Дедлайн:</span> {risk.deadline}
+                       </div>
+                    </div>
+                 </div>
+               ))}
+            </div>
+          )}
+          
+          {/* Empty State */}
+          {!loading && !matchResult && legalRisks.length === 0 && selectedTenders.length === 0 && (
+              <div className="h-full flex flex-col items-center justify-center text-slate-400 opacity-50">
+                  <Cpu size={48} className="mb-4"/>
+                  <p>Результаты появятся здесь</p>
+              </div>
+          )}
         </div>
       </div>
     </div>

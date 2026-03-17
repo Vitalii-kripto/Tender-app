@@ -245,10 +245,7 @@ const TenderCRM = () => {
         <div className="flex-1 flex gap-6 overflow-x-auto pb-4 custom-scrollbar">
             {COLUMNS.map((col) => {
             const colTenders = tenders.filter(t => t.status === col.id);
-            const totalValue = colTenders.reduce((acc, curr) => {
-                const price = typeof curr.initial_price === 'string' ? parseFloat(curr.initial_price) || 0 : curr.initial_price || 0;
-                return acc + price;
-            }, 0);
+            const totalValue = colTenders.reduce((acc, curr) => acc + curr.initial_price, 0);
 
             return (
                 <div key={col.id} className="w-80 flex-shrink-0 flex flex-col bg-slate-50 rounded-xl border border-slate-200 max-h-full transition-all">
@@ -276,7 +273,7 @@ const TenderCRM = () => {
                         <div className="flex items-center justify-between text-xs mb-3">
                             <div className="flex items-center text-slate-700 font-medium gap-1">
                                 <DollarSign size={12} className="text-slate-400"/>
-                                <span>{((typeof tender.initial_price === 'string' ? parseFloat(tender.initial_price) || 0 : tender.initial_price || 0) / 1000).toLocaleString()}k</span>
+                                <span>{(tender.initial_price / 1000).toLocaleString()}k</span>
                             </div>
                         </div>
 
