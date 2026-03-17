@@ -310,7 +310,7 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
         return;
     }
     try {
-        const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
+        const response = await fetch(`${API_BASE_URL}/api/crm/batch-add`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(tenders)
@@ -327,7 +327,7 @@ export const processTendersBatch = async (tenderIds: string[]): Promise<any[]> =
         return [];
     }
     try {
-        const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
+        const response = await fetch(`${API_BASE_URL}/api/ai/batch-analyze`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ tender_ids: tenderIds })

@@ -35,23 +35,30 @@ class AiService:
             self.client = genai.Client(api_key=self.api_key)
             logger.info("Gemini Client initialized.")
 
-    def classify_documents(self, filenames: list):
-        """Классифицирует файлы на 'контракт' и 'остальное'"""
+    def classify_documents(self, docs: list):
+        """
+        Классифицирует документы на 'contract' и 'other'.
+        docs: list of dicts {"filename": str, "text": str}
+        """
         if not self.client:
-            return {"contract": [], "other": filenames}
+            return {"contract": [], "other": [d['filename'] for d in docs]}
             
+        filenames = [d['filename'] for d in docs]
         logger.info(f"Classifying documents: {filenames}")
+        
         prompt = f"""
         Роль: Юрист по тендерам.
-        Задача: Раздели список файлов на две группы:
-        1. "contract": проекты контрактов, договоров и приложения к ним (спецификации, ТЗ к контракту).
-        2. "other": вся остальная закупочная документация (извещение, требования к заявке, критерии оценки, инструкции).
+        Задача: Раздели список файлов на две группы по их названиям и смыслу (если понятно из названия):
+        1. "contract": проекты контрактов, договоров и приложения к ним (спецификации, ТЗ к контракту, графики).
+        2. "other": вся остальная закупочная документация (извещение, требования к участнику, критерии оценки, инструкции, обоснование цены).
         
-        ФАЙЛЫ:
-        {json.dumps(filenames)}
+        ВАЖНО: Используй только те имена файлов, которые даны в списке ниже. Не меняй их и не придумывай новые.
         
-        ВЕРНИ JSON:
-        {{ "contract": ["file1.pdf", ...], "other": ["file2.pdf", ...] }}
+        СПИСОК ФАЙЛОВ:
+        {json.dumps(filenames, ensure_ascii=False)}
+        
+        ВЕРНИ ТОЛЬКО JSON:
+        {{ "contract": ["имя_файла1", ...], "other": ["имя_файла2", ...] }}
         """
         try:
             response = self.client.models.generate_content(
@@ -61,7 +68,9 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            result = json.loads(response.text)
+            logger.info(f"Classification result: {result}")
+            return result
         except Exception as e:
             logger.error(f"Classification Error: {e}")
             return {"contract": [], "other": filenames}
@@ -144,7 +153,7 @@ class AiService:
             - если в тексте есть противоречие или двусмысленность, обязательно отрази это как риск.
 
             ТЕКСТ ДОКУМЕНТОВ:
-            {contract_text[:30000]}
+            {contract_text[:100000]}
             """
             try:
                 resp1 = self.client.models.generate_content(
@@ -216,7 +225,7 @@ class AiService:
             - если условие нейтральное, допускается строка с low risk.
 
             ТЕКСТ ДОКУМЕНТОВ:
-            {other_text[:30000]}
+            {other_text[:100000]}
             """
             try:
                 resp2 = self.client.models.generate_content(

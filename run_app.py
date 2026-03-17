@@ -23,12 +23,14 @@ def run_services():
 
     try:
         # 1. Запуск Frontend (Vite)
-        print(f"🚀 Запуск Frontend ({npm_cmd} run dev)...")
+        print(f"🚀 Запуск Frontend ({npm_cmd} run dev:frontend)...")
         frontend_process = subprocess.Popen(
-            [npm_cmd, "run", "dev"],
+            f"{npm_cmd} run dev:frontend",
             cwd=project_root,
-            shell=False, # Shell=False безопаснее и позволяет лучше управлять процессом
-            env=os.environ.copy()
+            shell=True,
+            env=os.environ.copy(),
+            stdout=sys.stdout,
+            stderr=sys.stderr
         )
         processes.append(frontend_process)
 
@@ -36,14 +38,16 @@ def run_services():
         time.sleep(1)
 
         # 2. Запуск Backend (Python)
-        # Используем текущий интерпретатор python (из venv)
-        python_executable = sys.executable 
+        # Используем python3
+        python_executable = "python3"
         print(f"🐍 Запуск Backend ({python_executable} run_backend.py)...")
         
         backend_process = subprocess.Popen(
             [python_executable, "run_backend.py"],
             cwd=project_root,
-            env=os.environ.copy()
+            env=os.environ.copy(),
+            stdout=sys.stdout,
+            stderr=sys.stderr
         )
         processes.append(backend_process)
 

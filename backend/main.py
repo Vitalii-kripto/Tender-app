@@ -253,10 +253,10 @@ def search_tenders_endpoint(
         })
     return result
 
-@app.post("/api/search-tenders/process")
-def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
-    """Обработать выбранные тендеры"""
-    logger.info(f"Processing {len(tenders)} selected tenders")
+@app.post("/api/crm/batch-add")
+def api_crm_batch_add(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
+    """Добавить тендеры в CRM и запустить скачивание документов"""
+    logger.info(f"CRM Batch Add: {len(tenders)} tenders")
     try:
         for tender in tenders:
             existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
@@ -462,13 +462,13 @@ async def upload_file(file: UploadFile = File(...)):
         logger.error(f"Upload Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/search-tenders/process")
-async def api_process_tenders(data: dict = Body(...), db: Session = Depends(get_db)):
+@app.post("/api/ai/batch-analyze")
+async def api_ai_batch_analyze(data: dict = Body(...), db: Session = Depends(get_db)):
     """
-    Пакетная обработка тендеров: загрузка документов, извлечение текста, классификация и юридический анализ.
+    Пакетный юридический анализ тендеров: извлечение текста, классификация и анализ рисков.
     """
     tender_ids = data.get('tender_ids', [])
-    logger.info(f"Batch processing request for {len(tender_ids)} tenders.")
+    logger.info(f"AI Batch Analyze request for {len(tender_ids)} tenders.")
     
     results = []
     
@@ -537,8 +537,25 @@ async def api_process_tenders(data: dict = Body(...), db: Session = Depends(get_
                 
             # 3. Классификация документов
             classified = ai_service.classify_documents(all_docs_text)
-            contract_text = classified.get('contract_text', '')
-            other_text = classified.get('other_text', '')
+            contract_filenames = [f.lower() for f in classified.get('contract', [])]
+            other_filenames = [f.lower() for f in classified.get('other', [])]
+            
+            # Агрегируем текст с защитой от неточных имен файлов
+            contract_text_parts = []
+            other_text_parts = []
+            
+            for doc in all_docs_text:
+                fname_lower = doc['filename'].lower()
+                if fname_lower in contract_filenames:
+                    contract_text_parts.append(doc['text'])
+                elif fname_lower in other_filenames:
+                    other_text_parts.append(doc['text'])
+                else:
+                    # Если AI не вернул этот файл в списке, но он есть - по умолчанию в "other"
+                    other_text_parts.append(doc['text'])
+            
+            contract_text = "\n\n".join(contract_text_parts)
+            other_text = "\n\n".join(other_text_parts)
             
             # 4. Юридический анализ (v2)
             analysis_rows = ai_service.analyze_legal_v2(contract_text, other_text)
