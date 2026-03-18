@@ -18,6 +18,20 @@ class LegalAnalysisService:
             "Спорные условия договора", "Документы заявки", 
             "Недопуск/оценка", "Реестры/ограничения", "Спорные условия"
         ]
+        self.block_normalization = {
+            "поставка": "Поставка и приемка",
+            "приемка": "Поставка и приемка",
+            "оплата": "Оплата",
+            "ответственность": "Ответственность",
+            "штрафы": "Ответственность",
+            "отказ": "Односторонний отказ",
+            "документы": "Документы при поставке",
+            "спорные": "Спорные условия договора"
+        }
+        # Настройка логирования в файл
+        file_handler = logging.FileHandler('backend/logs/legal_ai.log')
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
 
     def classify_documents(self, files: List[Dict[str, str]]) -> Dict[str, Any]:
         """
@@ -93,7 +107,7 @@ class LegalAnalysisService:
             'uncertain_files': uncertain_files
         }
 
-    def _call_ai_with_retry(self, prompt: str, retries: int = 1) -> Dict[str, Any]:
+    def _call_ai_with_retry(self, prompt: str, prompt_type: str, retries: int = 1) -> Dict[str, Any]:
         """
         Вызывает ИИ с поддержкой нового формата и legacy-fallback.
         """
@@ -101,8 +115,7 @@ class LegalAnalysisService:
             return {"rows": [], "summary_notes": ["Ошибка: ИИ-клиент не инициализирован."]}
             
         # Логирование перед вызовом
-        prompt_name = "CONTRACT" if "PROMPT_CONTRACT" in str(prompt) else "OTHER"
-        logger.info(f"Calling AI with prompt: {prompt_name}, context size: {len(prompt)}")
+        logger.info(f"Calling AI with prompt type: {prompt_type}, context size: {len(prompt)}")
             
         for attempt in range(retries + 1):
             try:
@@ -204,22 +217,28 @@ class LegalAnalysisService:
                 continue
             
             # Нормализация
+            normalized_block = block.lower()
+            for key, value in self.block_normalization.items():
+                if key in normalized_block:
+                    block = value
+                    break
+            
             if block not in self.valid_blocks:
-                logger.warning(f"Unknown block: {block}")
+                logger.warning(f"Unknown block: {block}, skipping row: {row}")
                 continue
             
             if risk_level not in ["High", "Medium", "Low"]:
-                logger.warning(f"Unknown risk_level: {risk_level}")
+                logger.warning(f"Unknown risk_level: {risk_level}, defaulting to Medium")
                 risk_level = "Medium"
             
             valid_row = {
                 "block": block,
-                "finding": finding[:1000],
+                "finding": finding[:1000] if finding else "Нет описания",
                 "risk_level": risk_level,
-                "supplier_action": supplier_action[:1000],
-                "source_document": source_document[:200],
-                "source_reference": source_reference[:200],
-                "legal_basis": legal_basis[:1000],
+                "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа.",
+                "source_document": source_document[:200] if source_document else "Не указано",
+                "source_reference": source_reference[:200] if source_reference else "Не указано",
+                "legal_basis": legal_basis[:1000] if legal_basis else "",
                 "doc_group": "contract" if group_name == "contract" else "other"
             }
             
@@ -325,7 +344,7 @@ class LegalAnalysisService:
             update_stage("Анализ договора", 50)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group1])
             chunked_text = self._chunk_text(combined_text)
-            res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text))
+            res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text), prompt_type="contract")
             
             rows = self._validate_and_filter_rows(res.get('rows', []), "contract")
             logger.info(f"Rows after validation (contract): {len(rows)}")
@@ -344,7 +363,7 @@ class LegalAnalysisService:
             update_stage("Анализ остальной документации", 80)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group2])
             chunked_text = self._chunk_text(combined_text)
-            res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text))
+            res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text), prompt_type="other")
             
             rows = self._validate_and_filter_rows(res.get('rows', []), "other")
             logger.info(f"Rows after validation (other): {len(rows)}")
