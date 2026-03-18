@@ -1,15 +1,22 @@
 import uvicorn
 import asyncio
 import sys
+import os
+import logging
+import tempfile
+import openpyxl
+import re
+import sqlite3
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from typing import List, Dict, Any
+
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-from typing import List, Dict, Any
-import os
-import logging
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
@@ -18,7 +25,8 @@ from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
 from .services.legal_analysis_service import LegalAnalysisService
-from .services.batch_analysis import analyze_tenders_batch
+from .services.batch_analysis import analyze_tenders_batch_job
+from .services.job_service import job_service
 
 # --- LOGGING SETUP ---
 log_file = "fastapi_app_log.txt"
@@ -39,7 +47,6 @@ logger = logging.getLogger("FastAPI_Main")
 # --- SETUP ---
 def migrate_db():
     """Простейшая миграция для добавления недостающих колонок в SQLite"""
-    import sqlite3
     from .database import DB_PATH
     
     logger.info(f"Checking schema for {DB_PATH}...")
@@ -127,7 +134,6 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
         raw_price = tender.get('initial_price', 0)
         parsed_price = 0.0
         if isinstance(raw_price, str):
-            import re
             cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
             try:
                 parsed_price = float(cleaned)
@@ -232,7 +238,6 @@ def search_tenders_endpoint(
         raw_price = n.initial_price
         parsed_price = 0.0
         if isinstance(raw_price, str):
-            import re
             cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
             try:
                 parsed_price = float(cleaned)
@@ -275,7 +280,6 @@ def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...)
             raw_price = tender.get('initial_price', 0)
             parsed_price = 0.0
             if isinstance(raw_price, str):
-                import re
                 cleaned = re.sub(r'[^\d,.-]', '', raw_price).replace(',', '.')
                 try:
                     parsed_price = float(cleaned)
@@ -419,10 +423,6 @@ def get_tender_files(tender_id: str):
             })
     return files
 
-from fastapi import FastAPI, HTTPException, Body, BackgroundTasks
-from backend.services.batch_analysis import analyze_tenders_batch_job
-from backend.services.job_service import job_service
-
 @app.post("/api/ai/analyze-tenders-batch")
 async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...)):
     logger.info("Batch AI Analysis request received.")
@@ -523,11 +523,6 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "tasks": [{"id": "1", "title": "Запустить парсер", "time": "Сейчас", "type": "info"}],
         "is_demo": False
     }
-
-from fastapi.responses import FileResponse
-import tempfile
-import openpyxl
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 @app.post("/api/ai/export-risks-excel")
 async def api_export_risks_excel(data: dict = Body(...)):
