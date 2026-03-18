@@ -2,6 +2,7 @@ import time
 import json
 import logging
 import re
+import os
 from typing import List, Dict, Any
 from google import genai
 from google.genai import types
@@ -21,17 +22,46 @@ class LegalAnalysisService:
         self.block_normalization = {
             "поставка": "Поставка и приемка",
             "приемка": "Поставка и приемка",
+            "условия поставки": "Поставка и приемка",
+            "приемочные условия": "Поставка и приемка",
             "оплата": "Оплата",
+            "расчеты": "Оплата",
+            "условия оплаты": "Оплата",
             "ответственность": "Ответственность",
+            "пени": "Ответственность",
+            "неустойка": "Ответственность",
+            "санкции": "Ответственность",
+            "убытки": "Ответственность",
             "штрафы": "Ответственность",
             "отказ": "Односторонний отказ",
+            "расторжение": "Односторонний отказ",
+            "отказ от договора": "Односторонний отказ",
             "документы": "Документы при поставке",
-            "спорные": "Спорные условия договора"
+            "сопроводительные документы": "Документы при поставке",
+            "приемочные документы": "Документы при поставке",
+            "спорные": "Спорные условия договора",
+            "неясные условия договора": "Спорные условия договора",
+            "состав заявки": "Документы заявки",
+            "заявка": "Документы заявки",
+            "отклонение": "Недопуск/оценка",
+            "критерии оценки": "Недопуск/оценка",
+            "оценка": "Недопуск/оценка",
+            "недопуск": "Недопуск/оценка",
+            "нацрежим": "Реестры/ограничения",
+            "национальный режим": "Реестры/ограничения",
+            "реестр": "Реестры/ограничения",
+            "ограничения": "Реестры/ограничения",
+            "неясные требования": "Спорные условия"
         }
         # Настройка логирования в файл
-        file_handler = logging.FileHandler('backend/logs/legal_ai.log')
-        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-        logger.addHandler(file_handler)
+        if not os.path.exists('backend/logs'):
+            os.makedirs('backend/logs')
+        
+        logger.setLevel(logging.INFO)
+        if not logger.handlers:
+            file_handler = logging.FileHandler('backend/logs/legal_ai.log')
+            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+            logger.addHandler(file_handler)
 
     def classify_documents(self, files: List[Dict[str, str]]) -> Dict[str, Any]:
         """
@@ -135,7 +165,7 @@ class LegalAnalysisService:
                 
                 text = response.text.strip()
                 # Логирование ответа
-                logger.info(f"AI Response snippet: {text[:1000]}")
+                logger.info(f"AI Response snippet (first 2000 chars): {text[:2000]}")
                 
                 # Очистка от markdown если есть
                 if text.startswith("```json"):
@@ -148,7 +178,8 @@ class LegalAnalysisService:
                     # Логирование структуры JSON
                     keys = list(data.keys())
                     rows_count = len(data.get("rows", [])) if isinstance(data, dict) else 0
-                    logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}")
+                    summary_notes_count = len(data.get("summary_notes", [])) if isinstance(data, dict) else 0
+                    logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}, summary_notes_count={summary_notes_count}")
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON Decode Error on attempt {attempt}: {e}")
                     logger.error(f"Raw AI Response:\n{text}")
@@ -194,26 +225,34 @@ class LegalAnalysisService:
                 logger.warning("Row is not a dict, skipping.")
                 continue
             
+            # Валидация
+            if not isinstance(row, dict):
+                logger.warning("Row is not a dict, skipping.")
+                continue
+            
             # Обязательные поля
             block = str(row.get("block", "")).strip()
             finding = str(row.get("finding", "")).strip()
             risk_level = str(row.get("risk_level", "Medium")).strip()
             supplier_action = str(row.get("supplier_action", "")).strip()
-            source_document = str(row.get("source_document", "Не найдено")).strip()
-            source_reference = str(row.get("source_reference", "Не найдено")).strip()
+            source_document = str(row.get("source_document", "")).strip()
+            source_reference = str(row.get("source_reference", "")).strip()
             legal_basis = str(row.get("legal_basis", "")).strip()
             
             # Валидация
-            if not block or not finding or not risk_level or not supplier_action:
-                logger.warning(f"Row missing required fields: {row}")
+            if not block:
+                logger.warning(f"Row missing block: {row}")
                 continue
-            
+            if not finding:
+                logger.warning(f"Row missing finding: {row}")
+                continue
+            if not supplier_action:
+                logger.warning(f"Row missing supplier_action: {row}")
             if not source_document:
-                logger.warning(f"Row has empty source_document: {row}")
+                logger.warning(f"Row missing source_document: {row}")
                 continue
-                
             if not source_reference:
-                logger.warning(f"Row has empty source_reference: {row}")
+                logger.warning(f"Row missing source_reference: {row}")
                 continue
             
             # Нормализация
@@ -236,8 +275,8 @@ class LegalAnalysisService:
                 "finding": finding[:1000] if finding else "Нет описания",
                 "risk_level": risk_level,
                 "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа.",
-                "source_document": source_document[:200] if source_document else "Не указано",
-                "source_reference": source_reference[:200] if source_reference else "Не указано",
+                "source_document": source_document[:200],
+                "source_reference": source_reference[:200],
                 "legal_basis": legal_basis[:1000] if legal_basis else "",
                 "doc_group": "contract" if group_name == "contract" else "other"
             }
@@ -346,7 +385,9 @@ class LegalAnalysisService:
             chunked_text = self._chunk_text(combined_text)
             res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text), prompt_type="contract")
             
-            rows = self._validate_and_filter_rows(res.get('rows', []), "contract")
+            rows = res.get('rows', [])
+            logger.info(f"Rows before validation (contract): {len(rows)}")
+            rows = self._validate_and_filter_rows(rows, "contract")
             logger.info(f"Rows after validation (contract): {len(rows)}")
             rows += self._add_missing_critical_topics(rows, "contract")
             logger.info(f"Rows after adding critical topics (contract): {len(rows)}")
@@ -365,7 +406,9 @@ class LegalAnalysisService:
             chunked_text = self._chunk_text(combined_text)
             res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text), prompt_type="other")
             
-            rows = self._validate_and_filter_rows(res.get('rows', []), "other")
+            rows = res.get('rows', [])
+            logger.info(f"Rows before validation (other): {len(rows)}")
+            rows = self._validate_and_filter_rows(rows, "other")
             logger.info(f"Rows after validation (other): {len(rows)}")
             rows += self._add_missing_critical_topics(rows, "other")
             logger.info(f"Rows after adding critical topics (other): {len(rows)}")
