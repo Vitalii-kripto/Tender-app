@@ -19,3 +19,4 @@ requests==2.31.0
 openpyxl==3.1.2
 striprtf==0.0.26
 xlrd==2.0.1
+pywin32==306; sys_platform == 'win32'

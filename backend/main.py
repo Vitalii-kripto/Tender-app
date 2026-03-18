@@ -506,6 +506,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
 
 from fastapi.responses import FileResponse
 import tempfile
+import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
 @app.post("/api/ai/export-risks-excel")
@@ -522,33 +523,36 @@ async def api_export_risks_excel(data: dict = Body(...)):
         ws.title = "Risk Analysis"
 
         # Headers
-        headers = ["ID Тендера", "Риск / Условие", "Описание", "Уровень риска", "Рекомендация"]
+        headers = ["ID Тендера", "Блок", "Выявленное условие / Риск", "Уровень риска", "Действие поставщика", "Документ-источник", "Ссылка на пункт", "Правовое основание"]
         ws.append(headers)
 
         # Styling headers
         header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
         for cell in ws[1]:
             cell.font = header_font
             cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center", vertical="center")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         # Data
         for tender in results:
             tid = tender.get('id', 'N/A')
             rows = tender.get('rows', [])
             if not rows:
-                ws.append([tid, "Нет данных", "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-"])
+                ws.append([tid, "Ошибка", "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-", "-", "-", "-"])
                 continue
 
             for row in rows:
                 risk_level = row.get('risk_level', 'Low')
                 ws.append([
                     tid,
-                    row.get('risk_name', ''),
-                    row.get('description', ''),
+                    row.get('block', ''),
+                    row.get('finding', ''),
                     risk_level,
-                    row.get('recommendation', '')
+                    row.get('supplier_action', ''),
+                    row.get('source_document', ''),
+                    row.get('source_reference', ''),
+                    row.get('legal_basis', '')
                 ])
                 
                 # Color code risk level
@@ -556,22 +560,29 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 risk_cell = ws.cell(row=last_row, column=4)
                 if risk_level == 'High':
                     risk_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-                    risk_cell.font = Font(color="9C0006")
+                    risk_cell.font = Font(color="9C0006", bold=True)
                 elif risk_level == 'Medium':
                     risk_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-                    risk_cell.font = Font(color="9C6500")
+                    risk_cell.font = Font(color="9C6500", bold=True)
                 elif risk_level == 'Low':
                     risk_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-                    risk_cell.font = Font(color="006100")
+                    risk_cell.font = Font(color="006100", bold=True)
 
-        # Column widths
-        dims = {}
-        for row in ws.rows:
+        # Column widths and wrapping
+        column_widths = [15, 20, 40, 15, 40, 25, 20, 30]
+        for i, width in enumerate(column_widths):
+            col_letter = openpyxl.utils.get_column_letter(i + 1)
+            ws.column_dimensions[col_letter].width = width
+            
+        for row in ws.iter_rows(min_row=2):
             for cell in row:
-                if cell.value:
-                    dims[cell.column_letter] = max((dims.get(cell.column_letter, 0), len(str(cell.value))))
-        for col, value in dims.items():
-            ws.column_dimensions[col].width = min(value + 2, 50) # Max width 50
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
+                # Add borders
+                thin_border = Border(left=Side(style='thin'), 
+                                  right=Side(style='thin'), 
+                                  top=Side(style='thin'), 
+                                  bottom=Side(style='thin'))
+                cell.border = thin_border
 
         # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:

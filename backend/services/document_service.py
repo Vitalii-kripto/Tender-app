@@ -50,15 +50,78 @@ class DocumentService:
             await out_file.write(content)
         return file_path
 
+    def _convert_doc_to_docx(self, doc_path: str) -> str:
+        """
+        Пытается конвертировать .doc в .docx.
+        Возвращает путь к новому файлу или оригинальный путь, если не удалось.
+        """
+        docx_path = doc_path + "x"
+        if os.path.exists(docx_path):
+            logger.info(f"DOCX version already exists: {docx_path}")
+            return docx_path
+
+        # 1. Попытка через win32com (только Windows + Word)
+        if platform.system() == "Windows":
+            try:
+                import win32com.client as win32
+                import pythoncom
+                # Инициализация COM для текущего потока (важно для FastAPI/async)
+                pythoncom.CoInitialize()
+                
+                word = win32.gencache.EnsureDispatch('Word.Application')
+                word.Visible = False
+                doc = word.Documents.Open(os.path.abspath(doc_path))
+                # 16 = wdFormatXMLDocument (.docx)
+                doc.SaveAs2(os.path.abspath(docx_path), FileFormat=16)
+                doc.Close()
+                word.Quit()
+                logger.info(f"Successfully converted {doc_path} to {docx_path} using MS Word.")
+                return docx_path
+            except Exception as e:
+                logger.warning(f"win32com conversion failed (check if Word is installed): {e}")
+            finally:
+                try:
+                    pythoncom.CoUninitialize()
+                except:
+                    pass
+
+        # 2. Попытка через извлечение текста и создание нового .docx (fallback)
+        text = self._extract_text_from_doc(doc_path)
+        if text and not text.startswith("[ОШИБКА"):
+            try:
+                import docx
+                new_doc = docx.Document()
+                new_doc.add_paragraph(f"--- АВТОМАТИЧЕСКАЯ КОНВЕРТАЦИЯ ИЗ .DOC ---\nОригинал: {os.path.basename(doc_path)}\n\n")
+                new_doc.add_paragraph(text)
+                new_doc.save(docx_path)
+                logger.info(f"Created {docx_path} from extracted text of {doc_path}")
+                return docx_path
+            except Exception as e:
+                logger.error(f"Failed to create docx from text: {e}")
+
+        return doc_path
+
     def extract_text(self, file_path: str) -> str:
         """
         Умное извлечение текста с защитой от сбоев.
-        Поддерживает PDF, DOCX, XLSX.
+        Поддерживает PDF, DOCX, XLSX, XLS, DOC.
         """
         full_text = ""
         logger.info(f"Extracting text from: {file_path}")
         
         ext = os.path.splitext(file_path)[1].lower()
+
+        # Автоматическая конвертация .doc -> .docx
+        if ext == '.doc':
+            logger.info(f"Legacy .doc detected. Attempting auto-conversion to .docx...")
+            new_path = self._convert_doc_to_docx(file_path)
+            if new_path.endswith('.docx'):
+                file_path = new_path
+                ext = '.docx'
+                logger.info(f"Switched to converted file: {file_path}")
+            else:
+                # Если конвертация не удалась, используем старый метод извлечения напрямую
+                return self._extract_text_from_doc(file_path)
 
         if ext == '.docx':
             try:
@@ -209,22 +272,40 @@ class DocumentService:
         except Exception as e:
             logger.warning(f"Striprtf failed for .doc: {e}")
 
-        # 2. Попытка через системную команду antiword (если установлена)
-        try:
-            import subprocess
-            # На Windows antiword может называться antiword.exe
-            cmd = ['antiword', file_path]
-            result = subprocess.run(cmd, capture_output=True, text=True, errors='ignore')
-            if result.returncode == 0 and result.stdout.strip():
-                logger.info(f"Antiword extracted {len(result.stdout)} characters from .doc")
-                return result.stdout
-        except Exception as e:
-            logger.warning(f"Antiword command failed: {e}")
-
-        msg = "Не удалось извлечь текст из .doc файла."
-        if platform.system() == "Windows":
-            msg += " Для поддержки .doc на Windows установите утилиту Antiword (например, через Chocolatey: choco install antiword) и добавьте её в PATH, либо пересохраните файл в .docx."
+        # 2. Попытка через системную команду antiword
+        import shutil
+        import subprocess
+        
+        antiword_cmd = shutil.which('antiword')
+        if antiword_cmd:
+            try:
+                result = subprocess.run([antiword_cmd, file_path], capture_output=True, text=True, errors='ignore')
+                if result.returncode == 0 and result.stdout.strip():
+                    logger.info(f"Antiword extracted {len(result.stdout)} characters from .doc")
+                    return result.stdout
+            except Exception as e:
+                logger.warning(f"Antiword execution failed: {e}")
         else:
-            msg += " Установите пакет antiword (sudo apt install antiword)."
+            logger.warning("Antiword executable not found in PATH.")
+
+        # 3. Последняя попытка: чтение как простого текста (иногда помогает для очень старых или поврежденных файлов)
+        try:
+            with open(file_path, 'r', errors='ignore') as f:
+                raw_content = f.read()
+                # Пытаемся найти хоть какой-то осмысленный текст среди бинарных данных
+                import re
+                clean_text = re.sub(r'[^\x20-\x7E\u0400-\u04FF\n\t]', ' ', raw_content)
+                clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+                if len(clean_text) > 100:
+                    logger.info("Extracted partial text from .doc using raw fallback.")
+                    return f"[ВНИМАНИЕ: Текст извлечен частично]\n\n{clean_text}"
+        except:
+            pass
+
+        msg = f"Не удалось прочитать файл {os.path.basename(file_path)}."
+        if platform.system() == "Windows":
+            msg += "\n\nДЛЯ ИСПРАВЛЕНИЯ:\n1. Установите утилиту Antiword и добавьте её в PATH.\n2. ИЛИ (проще) пересохраните файл в формате .docx."
+        else:
+            msg += "\n\nУстановите пакет antiword (sudo apt install antiword)."
             
-        return f"[SYSTEM INFO] {msg}"
+        return f"[ОШИБКА ФОРМАТА] {msg}"
