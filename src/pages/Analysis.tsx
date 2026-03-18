@@ -247,29 +247,11 @@ const Analysis = () => {
   };
 
   const getFilteredRows = (rows: any[]) => {
-    let filtered = [...rows];
-    if (filterBlock !== 'all') {
-        filtered = filtered.filter(r => r.block === filterBlock);
-    }
-    if (filterRisk !== 'all') {
-        filtered = filtered.filter(r => r.risk_level === filterRisk);
-    }
-    if (filterProblematic) {
-        filtered = filtered.filter(r => r.risk_level === 'High' || r.risk_level === 'Medium');
-    }
-    
-    if (sortBy === 'risk') {
-        const order: Record<string, number> = { 'High': 0, 'Medium': 1, 'Low': 2 };
-        filtered.sort((a, b) => order[a.risk_level] - order[b.risk_level]);
-    } else {
-        filtered.sort((a, b) => a.block.localeCompare(b.block));
-    }
-    
-    return filtered;
+    return rows;
   };
 
   const getUniqueBlocks = (rows: any[]) => {
-    return Array.from(new Set(rows.map(r => r.block)));
+    return [];
   };
 
   const exportToExcelFiltered = async (tenderId: string) => {
@@ -674,50 +656,6 @@ const Analysis = () => {
 
                                 {/* Filtering & Sorting UI */}
                                 <div className="px-5 py-3 bg-white border-b border-slate-100 flex flex-wrap items-center gap-4">
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-black text-slate-400 uppercase">Блок:</span>
-                                        <select 
-                                            value={filterBlock} 
-                                            onChange={(e) => setFilterBlock(e.target.value)}
-                                            className="text-[11px] font-bold border-slate-200 rounded px-2 py-1 focus:ring-blue-500"
-                                        >
-                                            <option value="all">Все блоки</option>
-                                            {getUniqueBlocks(result.rows).map(b => <option key={b} value={b}>{b}</option>)}
-                                        </select>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <span className="text-[10px] font-black text-slate-400 uppercase">Риск:</span>
-                                        <select 
-                                            value={filterRisk} 
-                                            onChange={(e) => setFilterRisk(e.target.value)}
-                                            className="text-[11px] font-bold border-slate-200 rounded px-2 py-1 focus:ring-blue-500"
-                                        >
-                                            <option value="all">Все риски</option>
-                                            <option value="High">Высокий</option>
-                                            <option value="Medium">Средний</option>
-                                            <option value="Low">Низкий</option>
-                                        </select>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                        <label className="flex items-center gap-1.5 cursor-pointer group">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={filterProblematic}
-                                                onChange={(e) => setFilterProblematic(e.target.checked)}
-                                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                            />
-                                            <span className="text-[10px] font-black text-slate-400 uppercase group-hover:text-slate-600">Только проблемные</span>
-                                        </label>
-                                    </div>
-                                    <div className="flex items-center gap-2 ml-auto">
-                                        <span className="text-[10px] font-black text-slate-400 uppercase">Сортировка:</span>
-                                        <button 
-                                            onClick={() => setSortBy(sortBy === 'risk' ? 'block' : 'risk')}
-                                            className="text-[11px] font-bold text-blue-600 hover:underline"
-                                        >
-                                            {sortBy === 'risk' ? 'По риску' : 'По блоку'}
-                                        </button>
-                                    </div>
                                 </div>
 
                                  {result.status === 'success' && result.rows.length === 0 ? (
@@ -730,36 +668,27 @@ const Analysis = () => {
                                         <table className="w-full text-left text-sm border-collapse">
                                             <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-200">
                                                 <tr>
-                                                    <th className="px-5 py-4 font-black">Блок / Риск</th>
-                                                    <th className="px-5 py-4 font-black w-24">Уровень</th>
-                                                    <th className="px-5 py-4 font-black">Действие поставщика</th>
-                                                    <th className="px-5 py-4 font-black">Источник</th>
+                                                    <th className="px-5 py-4 font-black w-1/4">Условие / Риск</th>
+                                                    <th className="px-5 py-4 font-black w-1/2">Значение</th>
+                                                    <th className="px-5 py-4 font-black w-1/4">Комментарий</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
                                                 {getFilteredRows(result.rows).map((row, idx) => (
-                                                    <tr key={idx} className={`transition-colors ${row.risk_level === 'High' ? 'bg-red-50/20 hover:bg-red-50/40' : row.risk_level === 'Medium' ? 'bg-amber-50/20 hover:bg-amber-50/40' : 'hover:bg-slate-50/50'}`}>
+                                                    <tr key={idx} className="transition-colors hover:bg-slate-50/50">
                                                         <td className="px-5 py-4 align-top">
                                                             <div className="flex items-center gap-2 mb-1">
-                                                                <div className="font-black text-slate-900">{row.block}</div>
+                                                                <div className="font-black text-slate-900">{row.name}</div>
                                                                 <span className={`text-[8px] font-black px-1 py-0.5 rounded uppercase ${row.doc_group === 'contract' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
                                                                     {row.doc_group === 'contract' ? 'Контракт' : 'ТЗ/Прочее'}
                                                                 </span>
                                                             </div>
-                                                            <div className="text-slate-700 text-xs leading-relaxed font-medium">{row.finding}</div>
-                                                        </td>
-                                                        <td className="px-5 py-4 align-top">
-                                                            <span className={`text-[10px] uppercase font-black px-2.5 py-1 rounded-full whitespace-nowrap shadow-sm ${row.risk_level === 'High' ? 'bg-red-600 text-white' : row.risk_level === 'Medium' ? 'bg-amber-500 text-white' : 'bg-blue-500 text-white'}`}>
-                                                                {row.risk_level === 'High' ? 'Высокий' : row.risk_level === 'Medium' ? 'Средний' : 'Низкий'}
-                                                            </span>
                                                         </td>
                                                         <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">
-                                                            {row.supplier_action}
+                                                            {row.value}
                                                         </td>
-                                                        <td className="px-5 py-4 align-top">
-                                                            <div className="text-xs font-black text-slate-800 mb-1">{row.source_document}</div>
-                                                            <div className="text-[10px] text-slate-500 font-bold italic">{row.source_reference}</div>
-                                                            {row.legal_basis && <div className="text-[10px] text-blue-600 mt-2 font-black bg-blue-50 px-2 py-1 rounded border border-blue-100 inline-block">{row.legal_basis}</div>}
+                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">
+                                                            {row.comment}
                                                         </td>
                                                     </tr>
                                                 ))}

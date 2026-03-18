@@ -538,7 +538,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         ws.title = "Risk Analysis"
 
         # Headers
-        headers = ["ID Тендера", "Блок", "Выявленное условие / Риск", "Уровень риска", "Действие поставщика", "Документ-источник", "Ссылка на пункт", "Правовое основание"]
+        headers = ["ID Тендера", "Условие / Риск", "Значение", "Комментарий"]
         ws.append(headers)
 
         # Styling headers
@@ -554,37 +554,19 @@ async def api_export_risks_excel(data: dict = Body(...)):
             tid = tender.get('id', 'N/A')
             rows = tender.get('rows', [])
             if not rows:
-                ws.append([tid, "Ошибка", "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-", "-", "-", "-"])
+                ws.append([tid, "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-"])
                 continue
 
             for row in rows:
-                risk_level = row.get('risk_level', 'Low')
                 ws.append([
                     tid,
-                    row.get('block', ''),
-                    row.get('finding', ''),
-                    risk_level,
-                    row.get('supplier_action', ''),
-                    row.get('source_document', ''),
-                    row.get('source_reference', ''),
-                    row.get('legal_basis', '')
+                    row.get('name', ''),
+                    row.get('value', ''),
+                    row.get('comment', '')
                 ])
-                
-                # Color code risk level
-                last_row = ws.max_row
-                risk_cell = ws.cell(row=last_row, column=4)
-                if risk_level == 'High':
-                    risk_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
-                    risk_cell.font = Font(color="9C0006", bold=True)
-                elif risk_level == 'Medium':
-                    risk_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
-                    risk_cell.font = Font(color="9C6500", bold=True)
-                elif risk_level == 'Low':
-                    risk_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-                    risk_cell.font = Font(color="006100", bold=True)
 
         # Column widths and wrapping
-        column_widths = [15, 20, 40, 15, 40, 25, 20, 30]
+        column_widths = [15, 30, 50, 40]
         for i, width in enumerate(column_widths):
             col_letter = openpyxl.utils.get_column_letter(i + 1)
             ws.column_dimensions[col_letter].width = width

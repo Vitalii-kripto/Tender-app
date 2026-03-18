@@ -51,6 +51,21 @@ class AiService:
                     raise e
         return None
 
+    def _parse_json_response(self, text: str):
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text.replace("```json", "", 1).replace("```", "", 1).strip()
+        elif text.startswith("```"):
+            text = text.replace("```", "", 1).replace("```", "", 1).strip()
+        
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON Decode Error: {e}")
+            logger.error(f"Raw AI Response:\n{text}")
+            from fastapi import HTTPException
+            raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}. Raw response: {text}")
+
     def find_product_equivalent(self, tender_specs: str, catalog: list):
         if not self.client:
             logger.error("Find product equivalent called without API Key.")
@@ -86,8 +101,11 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return self._parse_json_response(response.text)
         except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
             logger.error(f"AI Error (find_product_equivalent): {e}", exc_info=True)
             return []
 
@@ -207,8 +225,11 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return self._parse_json_response(response.text)
         except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
             logger.error(f"Extraction Error: {e}", exc_info=True)
             return []
 
@@ -267,8 +288,11 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return self._parse_json_response(response.text)
         except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
             logger.error(f"Comparison Error: {e}", exc_info=True)
             return {"score": 0, "summary": f"Error: {e}", "items": []}
 
@@ -295,8 +319,11 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return self._parse_json_response(response.text)
         except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
             logger.error(f"Compliance Check Error: {e}", exc_info=True)
             return {"overallStatus": "failed", "summary": str(e)}
 
@@ -338,7 +365,10 @@ class AiService:
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            return self._parse_json_response(response.text)
         except Exception as e:
+            from fastapi import HTTPException
+            if isinstance(e, HTTPException):
+                raise e
             logger.error(f"Extraction Error: {e}", exc_info=True)
             return {}

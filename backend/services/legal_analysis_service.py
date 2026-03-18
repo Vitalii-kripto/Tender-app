@@ -120,8 +120,19 @@ class LegalAnalysisService:
                 # Очистка от markdown если есть
                 if text.startswith("```json"):
                     text = text.replace("```json", "", 1).replace("```", "", 1).strip()
+                elif text.startswith("```"):
+                    text = text.replace("```", "", 1).replace("```", "", 1).strip()
                 
-                data = json.loads(text)
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON Decode Error on attempt {attempt}: {e}")
+                    logger.error(f"Raw AI Response:\n{text}")
+                    if attempt == retries:
+                        from fastapi import HTTPException
+                        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}. Raw response: {text}")
+                    time.sleep(1)
+                    continue
                 
                 # 1. Целевой формат
                 if isinstance(data, dict) and 'rows' in data:
@@ -141,6 +152,9 @@ class LegalAnalysisService:
                 logger.warning(f"Unexpected JSON structure on attempt {attempt}: {data}")
                 
             except Exception as e:
+                from fastapi import HTTPException
+                if isinstance(e, HTTPException):
+                    raise e
                 logger.error(f"AI Error on attempt {attempt}: {e}")
                 if attempt < retries:
                     time.sleep(1)
@@ -149,41 +163,28 @@ class LegalAnalysisService:
                     
         return {"rows": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
 
-    def _normalize_block(self, block: str) -> str:
-        block_lower = block.lower()
-        for valid in self.valid_blocks:
-            if valid.lower() in block_lower or block_lower in valid.lower():
-                return valid
-        return "Прочее"
-
     def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str) -> List[Dict[str, Any]]:
         valid_rows = []
         for row in rows:
+            if not isinstance(row, dict):
+                continue
+            
             # Обязательные поля
-            if not row.get('source_document') or not row.get('source_reference') or not row.get('finding'):
+            name = str(row.get("name", "")).strip()
+            value = str(row.get("value", "")).strip()
+            comment = str(row.get("comment", "")).strip()
+            
+            if not name or not value or not comment:
                 continue
             
             # Нормализация и обрезка
             valid_row = {
-                "block": self._normalize_block(row.get("block", "Прочее")),
-                "finding": str(row.get("finding", ""))[:500],
-                "risk_level": row.get("risk_level", "Low"),
-                "supplier_action": str(row.get("supplier_action", ""))[:500],
-                "source_document": str(row.get("source_document", ""))[:100],
-                "source_reference": str(row.get("source_reference", ""))[:100],
-                "legal_basis": str(row.get("legal_basis", ""))[:200],
+                "name": name[:200],
+                "value": value[:1000],
+                "comment": comment[:1000],
                 "doc_group": "contract" if group_name == "contract" else "other"
             }
             
-            # Нормализация риска
-            risk = str(valid_row["risk_level"]).lower()
-            if "high" in risk or "высок" in risk:
-                valid_row["risk_level"] = "High"
-            elif "medium" in risk or "средн" in risk:
-                valid_row["risk_level"] = "Medium"
-            else:
-                valid_row["risk_level"] = "Low"
-                
             valid_rows.append(valid_row)
         return valid_rows
 
@@ -221,36 +222,32 @@ class LegalAnalysisService:
         """
         Добавляет строки "не найдено" для критически важных тем.
         """
-        existing_findings = " ".join([r['finding'].lower() for r in rows])
+        existing_names = " ".join([r.get('name', '').lower() for r in rows])
         added_rows = []
         
         if doc_group == "contract":
             topics = [
-                ("разгрузка", "Поставка и приемка", "условие о разгрузке (кто и за чей счет)"),
-                ("аванс", "Оплата", "условие о наличии или отсутствии аванса"),
-                ("эдо", "Оплата", "условие об использовании ЭДО (электронного документооборота)"),
-                ("казначейск", "Оплата", "условие о казначейском сопровождении"),
-                ("срок оплаты", "Оплата", "точный срок оплаты"),
+                ("разгрузка", "Разгрузка", "условие о разгрузке (кто и за чей счет)"),
+                ("аванс", "Аванс", "условие о наличии или отсутствии аванса"),
+                ("эдо", "ЭДО", "условие об использовании ЭДО (электронного документооборота)"),
+                ("казначейск", "Казначейское сопровождение", "условие о казначейском сопровождении"),
+                ("срок оплаты", "Срок оплаты", "точный срок оплаты"),
                 ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
-                ("приемк", "Поставка и приемка", "перечень документов о приемке (акты, накладные)")
+                ("приемк", "Приемка", "перечень документов о приемке (акты, накладные)")
             ]
         else:
             topics = [
-                ("реестр", "Реестры/ограничения", "требования о включении в реестры (РФ/ЕАЭС/РРП)"),
-                ("национальный режим", "Реестры/ограничения", "применение национального режима (ПП 616/617/878)"),
-                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
+                ("реестр", "Реестры", "требования о включении в реестры (РФ/ЕАЭС/РРП)"),
+                ("национальный режим", "Национальный режим", "применение национального режима (ПП 616/617/878)"),
+                ("состав заявки", "Состав заявки", "полный перечень документов в составе заявки")
             ]
             
-        for kw, block, label in topics:
-            if kw not in existing_findings:
+        for kw, name, label in topics:
+            if kw not in existing_names:
                 added_rows.append({
-                    "block": block,
-                    "finding": f"В просмотренных документах не найдено {label}.",
-                    "risk_level": "Medium",
-                    "supplier_action": "Проверить наличие условия в полном комплекте документации до подачи заявки или подписания договора.",
-                    "source_document": "Не найдено",
-                    "source_reference": "Критичное условие не выявлено в просмотренных документах",
-                    "legal_basis": "",
+                    "name": name,
+                    "value": f"В просмотренных документах не найдено {label}.",
+                    "comment": "Проверить наличие условия в полном комплекте документации до подачи заявки или подписания договора.",
                     "doc_group": doc_group
                 })
         return added_rows
