@@ -1,32 +1,34 @@
 import { spawn } from 'child_process';
-import os from 'os';
+import fs from 'fs';
+import path from 'path';
 
-console.log("🚀 run_app.js is starting!");
+console.log('🚀 run_app.js is starting!');
 
-const isWin = os.platform() === 'win32';
-const pythonCmd = isWin ? 'python' : 'python3';
-const npmCmd = isWin ? 'npm.cmd' : 'npm';
+const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+console.log(`🚀 Starting Frontend (${npmCmd} run dev:frontend)...`);
 
-function startService(command, args, name) {
-    console.log(`🚀 Starting ${name} (${command} ${args.join(' ')})...`);
-    const proc = spawn(command, args, {
-        stdio: 'inherit',
-        shell: isWin
-    });
+const frontend = spawn(npmCmd, ['run', 'dev:frontend'], {
+  stdio: 'inherit',
+  shell: true
+});
 
-    proc.on('error', (err) => {
-        console.error(`❌ Failed to start ${name}:`, err);
-    });
+const venvPython = '.\\\\.venv\\\\Scripts\\\\python.exe';
+const venvPythonPath = path.join(process.cwd(), '.venv', 'Scripts', 'python.exe');
 
-    return proc;
+if (!fs.existsSync(venvPythonPath)) {
+  console.error('Не найден Python виртуального окружения .venv. Сначала создайте/установите зависимости в виртуальное окружение.');
+  process.exit(1);
 }
 
-const frontend = startService(npmCmd, ['run', 'dev:frontend'], 'Frontend');
-const backend = startService(pythonCmd, ['run_backend.py'], 'Backend');
+console.log(`🚀 Starting Backend (${venvPython} run_backend.py)...`);
+
+const backend = spawn(venvPython, ['run_backend.py'], {
+  stdio: 'inherit',
+  shell: true
+});
 
 process.on('SIGINT', () => {
-    console.log("\n🛑 Stopping services...");
-    frontend.kill();
-    backend.kill();
-    process.exit();
+  frontend.kill('SIGINT');
+  backend.kill('SIGINT');
+  process.exit();
 });
