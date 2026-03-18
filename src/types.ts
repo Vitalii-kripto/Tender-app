@@ -74,6 +74,9 @@ export interface LegalAnalysisResult {
   docText?: string;
   showDoc?: boolean;
   classification_notes?: string[];
+  uncertain_files?: string[];
+  stage?: string;
+  progress?: number;
 }
 
 export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';

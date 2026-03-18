@@ -16,6 +16,21 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
         logger.info(f"Starting analysis for tender {tid}")
         tender_dir = os.path.join(OUT_DIR, tid)
         
+        # 1. Проверка выбора файлов (Task 3)
+        if tid not in selected_files or not selected_files[tid]:
+            logger.warning(f"No files selected for tender {tid}")
+            results.append({
+                "id": tid,
+                "status": "error",
+                "summary_notes": ["Ошибка: не выбрано ни одного файла для анализа. Пожалуйста, выберите хотя бы один документ."],
+                "rows": [],
+                "has_contract": False,
+                "file_statuses": [],
+                "stage": "Ошибка",
+                "progress": 100
+            })
+            continue
+
         if not os.path.exists(tender_dir):
             logger.warning(f"No documents found for tender {tid}")
             results.append({
@@ -30,12 +45,21 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
             
         files_data = []
         file_statuses = []
+        missing_files = []
         
-        # Get list of files to process
-        target_files = os.listdir(tender_dir)
-        if tid in selected_files and selected_files[tid]:
-            target_files = [f for f in target_files if f in selected_files[tid]]
-            logger.info(f"Filtering files for {tid}: {len(target_files)} selected out of {len(os.listdir(tender_dir))}")
+        # 2. Фильтрация и проверка существования файлов (Task 3)
+        available_files = os.listdir(tender_dir)
+        requested_files = selected_files[tid]
+        
+        target_files = []
+        for f in requested_files:
+            if f in available_files:
+                target_files.append(f)
+            else:
+                missing_files.append(f)
+        
+        if missing_files:
+            logger.warning(f"Some selected files are missing for {tid}: {missing_files}")
 
         for filename in target_files:
             filepath = os.path.join(tender_dir, filename)
@@ -54,22 +78,34 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
                 file_statuses.append({"filename": filename, "status": "extract_error", "message": str(e)})
                 
         if not files_data:
+            summary = ["Не удалось извлечь текст ни из одного документа."]
+            if missing_files:
+                summary.append(f"Некоторые выбранные файлы не найдены на диске: {', '.join(missing_files)}")
+                
             results.append({
                 "id": tid,
                 "status": "error",
-                "summary_notes": ["Не удалось извлечь текст ни из одного документа."],
+                "summary_notes": summary,
                 "rows": [],
                 "has_contract": False,
-                "file_statuses": file_statuses
+                "file_statuses": file_statuses,
+                "stage": "Ошибка",
+                "progress": 100
             })
             continue
             
         try:
             analysis_result = legal_service.analyze_tender(files_data)
+            
+            # Добавляем инфо о пропущенных файлах в summary_notes
+            final_summary = analysis_result.get('summary_notes', [])
+            if missing_files:
+                final_summary.insert(0, f"ВНИМАНИЕ: Следующие выбранные файлы отсутствуют в системе: {', '.join(missing_files)}")
+
             results.append({
                 "id": tid,
                 "status": analysis_result.get('status', 'success'),
-                "summary_notes": analysis_result.get('summary_notes', []),
+                "summary_notes": final_summary,
                 "rows": analysis_result.get('rows', []),
                 "has_contract": analysis_result.get('has_contract', False),
                 "classification_notes": analysis_result.get('classification_notes', []),

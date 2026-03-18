@@ -228,16 +228,17 @@ class LegalAnalysisService:
             topics = [
                 ("разгрузка", "Поставка и приемка", "условие о разгрузке (кто и за чей счет)"),
                 ("аванс", "Оплата", "условие о наличии или отсутствии аванса"),
-                ("эдо", "Оплата", "условие об использовании ЭДО"),
+                ("эдо", "Оплата", "условие об использовании ЭДО (электронного документооборота)"),
                 ("казначейск", "Оплата", "условие о казначейском сопровождении"),
                 ("срок оплаты", "Оплата", "точный срок оплаты"),
-                ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа")
+                ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
+                ("приемк", "Поставка и приемка", "перечень документов о приемке (акты, накладные)")
             ]
         else:
             topics = [
-                ("реестр", "Реестры/ограничения", "требования о включении в реестры (РФ/ЕАЭС)"),
+                ("реестр", "Реестры/ограничения", "требования о включении в реестры (РФ/ЕАЭС/РРП)"),
                 ("национальный режим", "Реестры/ограничения", "применение национального режима (ПП 616/617/878)"),
-                ("состав заявки", "Документы заявки", "полный перечень документов заявки")
+                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
             ]
             
         for kw, block, label in topics:
@@ -247,7 +248,7 @@ class LegalAnalysisService:
                     "finding": f"В просмотренных документах не найдено {label}.",
                     "risk_level": "Medium",
                     "supplier_action": "Проверить наличие условия в полном комплекте документации до подачи заявки или подписания договора.",
-                    "source_document": "Не найдено",
+                    "source_document": "Not Found",
                     "source_reference": "Критичное условие не выявлено",
                     "legal_basis": "",
                     "doc_group": doc_group
@@ -279,6 +280,7 @@ class LegalAnalysisService:
         classified = self.classify_documents(files)
         group1 = classified['group1']
         group2 = classified['group2']
+        uncertain_files = classified.get('uncertain_files', [])
         
         all_rows = []
         all_notes = classified.get('classification_notes', [])
@@ -296,6 +298,8 @@ class LegalAnalysisService:
             all_notes.extend(res.get('summary_notes', []))
         else:
             all_notes.append("Проект договора/контракта среди обработанных файлов не найден.")
+            # Если контракта нет, все равно добавляем "не найдено" для критических тем контракта
+            all_rows += self._add_missing_critical_topics([], "contract")
 
         # 2. Анализ прочей документации
         update_stage("Анализ остальной документации", 80)
@@ -310,6 +314,7 @@ class LegalAnalysisService:
             all_notes.extend(res.get('summary_notes', []))
         else:
             all_notes.append("Иная закупочная документация среди обработанных файлов не найдена.")
+            all_rows += self._add_missing_critical_topics([], "other")
 
         update_stage("Формирование отчета", 95)
         
@@ -335,7 +340,7 @@ class LegalAnalysisService:
         ))
 
         # 3. Лимит и фильтрация заметок
-        final_rows = unique_rows[:24]
+        final_rows = unique_rows[:30] # Увеличим лимит
         final_notes = []
         seen_notes = set()
         for note in all_notes:
@@ -344,7 +349,7 @@ class LegalAnalysisService:
                 seen_notes.add(note_clean)
                 final_notes.append(note_clean)
         
-        final_notes = final_notes[:8]
+        final_notes = final_notes[:12]
 
         update_stage("Готово", 100, "success")
         
@@ -353,6 +358,7 @@ class LegalAnalysisService:
             "summary_notes": final_notes,
             "has_contract": len(group1) > 0,
             "classification_notes": classified['classification_notes'],
+            "uncertain_files": uncertain_files,
             "status": "success" if final_rows else "partial",
             "stage": "Готово",
             "progress": 100

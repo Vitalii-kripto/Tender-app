@@ -27,6 +27,7 @@ const Analysis = () => {
   // Filtering & Sorting state
   const [filterBlock, setFilterBlock] = useState<string>('all');
   const [filterRisk, setFilterRisk] = useState<string>('all');
+  const [filterProblematic, setFilterProblematic] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'risk' | 'block'>('risk');
 
   useEffect(() => {
@@ -208,6 +209,9 @@ const Analysis = () => {
     }
     if (filterRisk !== 'all') {
         filtered = filtered.filter(r => r.risk_level === filterRisk);
+    }
+    if (filterProblematic) {
+        filtered = filtered.filter(r => r.risk_level === 'High' || r.risk_level === 'Medium');
     }
     
     if (sortBy === 'risk') {
@@ -559,19 +563,34 @@ const Analysis = () => {
                                             ))}
                                         </div>
                                     </div>
-                                    {result.classification_notes && result.classification_notes.length > 0 && (
-                                        <div>
-                                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
-                                            <div className="space-y-1">
-                                                {result.classification_notes.map((note, i) => (
-                                                    <div key={i} className="text-[10px] text-slate-500 flex items-start gap-1.5 leading-tight">
-                                                        <div className="w-1 h-1 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
-                                                        {note}
-                                                    </div>
-                                                ))}
+                                    <div className="space-y-4">
+                                        {result.classification_notes && result.classification_notes.length > 0 && (
+                                            <div>
+                                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
+                                                <div className="space-y-1">
+                                                    {result.classification_notes.map((note, i) => (
+                                                        <div key={i} className="text-[10px] text-slate-500 flex items-start gap-1.5 leading-tight">
+                                                            <div className="w-1 h-1 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
+                                                            {note}
+                                                        </div>
+                                                    ))}
+                                                </div>
                                             </div>
-                                        </div>
-                                    )}
+                                        )}
+                                        {result.uncertain_files && result.uncertain_files.length > 0 && (
+                                            <div>
+                                                <h4 className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-2">Неопределенные файлы</h4>
+                                                <div className="space-y-1">
+                                                    {result.uncertain_files.map((file, i) => (
+                                                        <div key={i} className="text-[10px] text-red-500 flex items-start gap-1.5 leading-tight bg-red-50 p-1 rounded">
+                                                            <AlertTriangle size={10} className="mt-0.5 shrink-0" />
+                                                            {file}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
 
                                 {result.summary_notes && result.summary_notes.length > 0 && (
@@ -583,7 +602,7 @@ const Analysis = () => {
                                             <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Сводка юридического анализа</h4>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                                            {result.summary_notes.slice(0, 8).map((note, i) => (
+                                            {result.summary_notes.slice(0, 12).map((note, i) => (
                                                 <div key={i} className="flex items-start gap-2.5 text-[11px] text-blue-800 leading-relaxed font-medium bg-white/50 p-2 rounded-lg border border-blue-100/50">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0 shadow-sm"></div>
                                                     {note.length > 200 ? note.substring(0, 200) + '...' : note}
@@ -618,6 +637,17 @@ const Analysis = () => {
                                             <option value="Medium">Средний</option>
                                             <option value="Low">Низкий</option>
                                         </select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <label className="flex items-center gap-1.5 cursor-pointer group">
+                                            <input 
+                                                type="checkbox" 
+                                                checked={filterProblematic}
+                                                onChange={(e) => setFilterProblematic(e.target.checked)}
+                                                className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                            />
+                                            <span className="text-[10px] font-black text-slate-400 uppercase group-hover:text-slate-600">Только проблемные</span>
+                                        </label>
                                     </div>
                                     <div className="flex items-center gap-2 ml-auto">
                                         <span className="text-[10px] font-black text-slate-400 uppercase">Сортировка:</span>
