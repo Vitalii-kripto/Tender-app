@@ -194,19 +194,9 @@ class DocumentService:
     def _extract_text_from_doc(self, file_path: str) -> str:
         """
         Извлечение текста из старого формата .doc.
-        Использует textract или striprtf (если это RTF).
+        Использует striprtf (если это RTF) или системную команду antiword.
         """
-        # 1. Попытка через textract
-        try:
-            import textract
-            text = textract.process(file_path).decode('utf-8')
-            if text.strip():
-                logger.info(f"Textract extracted {len(text)} characters from .doc")
-                return text
-        except Exception as e:
-            logger.warning(f"Textract failed for .doc: {e}. Trying fallback...")
-
-        # 2. Попытка через striprtf (некоторые .doc - это на самом деле RTF)
+        # 1. Попытка через striprtf (некоторые .doc - это на самом деле RTF)
         try:
             from striprtf.striprtf import rtf_to_text
             with open(file_path, 'r', errors='ignore') as f:
@@ -219,10 +209,12 @@ class DocumentService:
         except Exception as e:
             logger.warning(f"Striprtf failed for .doc: {e}")
 
-        # 3. Попытка через системную команду antiword (если установлена)
+        # 2. Попытка через системную команду antiword (если установлена)
         try:
             import subprocess
-            result = subprocess.run(['antiword', file_path], capture_output=True, text=True)
+            # На Windows antiword может называться antiword.exe
+            cmd = ['antiword', file_path]
+            result = subprocess.run(cmd, capture_output=True, text=True, errors='ignore')
             if result.returncode == 0 and result.stdout.strip():
                 logger.info(f"Antiword extracted {len(result.stdout)} characters from .doc")
                 return result.stdout
@@ -231,7 +223,7 @@ class DocumentService:
 
         msg = "Не удалось извлечь текст из .doc файла."
         if platform.system() == "Windows":
-            msg += " Для поддержки .doc на Windows установите утилиту Antiword и добавьте её в PATH, либо пересохраните файл в .docx."
+            msg += " Для поддержки .doc на Windows установите утилиту Antiword (например, через Chocolatey: choco install antiword) и добавьте её в PATH, либо пересохраните файл в .docx."
         else:
             msg += " Установите пакет antiword (sudo apt install antiword)."
             

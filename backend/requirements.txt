@@ -13,9 +13,9 @@ pytesseract==0.3.10
 python-dotenv==1.0.1
 aiohttp==3.9.3
 langchain-community==0.0.28
+langsmith==0.0.87
 python-docx==1.1.0
 requests==2.31.0
 openpyxl==3.1.2
-textract==1.6.5
 striprtf==0.0.26
 xlrd==2.0.1
