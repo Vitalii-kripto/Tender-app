@@ -73,6 +73,7 @@ export interface LegalAnalysisResult {
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
   showDoc?: boolean;
+  classification_notes?: string[];
 }
 
 export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';

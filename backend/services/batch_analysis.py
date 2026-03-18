@@ -68,11 +68,14 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
             analysis_result = legal_service.analyze_tender(files_data)
             results.append({
                 "id": tid,
-                "status": "success",
-                "summary_notes": analysis_result['summary_notes'],
-                "rows": analysis_result['rows'],
-                "has_contract": analysis_result['has_contract'],
-                "file_statuses": file_statuses
+                "status": analysis_result.get('status', 'success'),
+                "summary_notes": analysis_result.get('summary_notes', []),
+                "rows": analysis_result.get('rows', []),
+                "has_contract": analysis_result.get('has_contract', False),
+                "classification_notes": analysis_result.get('classification_notes', []),
+                "file_statuses": file_statuses,
+                "stage": analysis_result.get('stage', 'Готово'),
+                "progress": analysis_result.get('progress', 100)
             })
         except Exception as e:
             logger.error(f"Analysis failed for tender {tid}: {e}")
@@ -82,7 +85,10 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
                 "summary_notes": [f"Ошибка ИИ-анализа: {str(e)}"],
                 "rows": [],
                 "has_contract": False,
-                "file_statuses": file_statuses
+                "classification_notes": [],
+                "file_statuses": file_statuses,
+                "stage": "Ошибка",
+                "progress": 100
             })
             
     return results

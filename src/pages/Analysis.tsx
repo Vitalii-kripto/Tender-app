@@ -22,6 +22,12 @@ const Analysis = () => {
   const [selectedFiles, setSelectedFiles] = useState<Record<string, Set<string>>>({});
   const [batchResults, setBatchResults] = useState<Record<string, LegalAnalysisResult>>({});
   const [analysisError, setAnalysisError] = useState('');
+  const [analysisStages, setAnalysisStages] = useState<Record<string, { stage: string, progress: number }>>({});
+
+  // Filtering & Sorting state
+  const [filterBlock, setFilterBlock] = useState<string>('all');
+  const [filterRisk, setFilterRisk] = useState<string>('all');
+  const [sortBy, setSortBy] = useState<'risk' | 'block'>('risk');
 
   useEffect(() => {
     const loadData = async () => {
@@ -36,8 +42,8 @@ const Analysis = () => {
                     const response = await fetch(`/api/tenders/${t.id}/files`);
                     const files = await response.json();
                     setTenderFiles(prev => ({ ...prev, [t.id]: files }));
-                    // Select all by default
-                    setSelectedFiles(prev => ({ ...prev, [t.id]: new Set(files.map((f: any) => f.name)) }));
+                    // Manual selection: don't select all by default
+                    setSelectedFiles(prev => ({ ...prev, [t.id]: new Set() }));
                 } catch (e) {
                     console.error(`Failed to load files for tender ${t.id}`, e);
                 }
@@ -78,6 +84,15 @@ const Analysis = () => {
     try {
         const idsArray = Array.from(selectedTenderIds);
         
+        // Validation: check if files are selected for each tender
+        for (const tid of idsArray) {
+            if (!selectedFiles[tid] || selectedFiles[tid].size === 0) {
+                setAnalysisError(`Выберите файлы для тендера ${tid}`);
+                setLoading(false);
+                return;
+            }
+        }
+
         // Prepare selected files mapping
         const filesMapping: Record<string, string[]> = {};
         idsArray.forEach(id => {
@@ -86,6 +101,7 @@ const Analysis = () => {
             }
         });
 
+        // Start analysis
         const results = await analyzeTendersBatch(idsArray, filesMapping);
         
         const newResults: Record<string, LegalAnalysisResult> = { ...batchResults };
@@ -185,7 +201,41 @@ const Analysis = () => {
     }
   };
 
-  const getRecommendedProduct = (id?: string) => MOCK_CATALOG.find(p => p.id === id);
+  const getFilteredRows = (rows: any[]) => {
+    let filtered = [...rows];
+    if (filterBlock !== 'all') {
+        filtered = filtered.filter(r => r.block === filterBlock);
+    }
+    if (filterRisk !== 'all') {
+        filtered = filtered.filter(r => r.risk_level === filterRisk);
+    }
+    
+    if (sortBy === 'risk') {
+        const order: Record<string, number> = { 'High': 0, 'Medium': 1, 'Low': 2 };
+        filtered.sort((a, b) => order[a.risk_level] - order[b.risk_level]);
+    } else {
+        filtered.sort((a, b) => a.block.localeCompare(b.block));
+    }
+    
+    return filtered;
+  };
+
+  const getUniqueBlocks = (rows: any[]) => {
+    return Array.from(new Set(rows.map(r => r.block)));
+  };
+
+  const exportToExcelFiltered = async (tenderId: string) => {
+    const result = batchResults[tenderId];
+    if (!result) return;
+    
+    const filteredRows = getFilteredRows(result.rows);
+    const filteredResult = { ...result, rows: filteredRows };
+    exportToExcel([filteredResult]);
+  };
+
+  const getRecommendedProduct = (id: string) => {
+    return MOCK_CATALOG.find(p => p.id === id);
+  };
 
   const formatSpecKey = (key: string) => {
     const map: Record<string, string> = {
@@ -301,11 +351,20 @@ const Analysis = () => {
                                     </button>
                                     <div className="flex-1 min-w-0 cursor-pointer" onClick={() => toggleSelection(tender.id)}>
                                         <div className="flex items-center gap-2 mb-1">
-                                            <span className="text-xs font-mono bg-slate-100 px-1.5 rounded text-slate-500">#{tender.eis_number}</span>
-                                            <span className="text-xs font-bold text-slate-700">{formatCurrency(tender.initial_price)}</span>
+                                            <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 border border-slate-200">#{tender.eis_number}</span>
+                                            <span className="text-xs font-black text-blue-700">{formatCurrency(tender.initial_price)}</span>
+                                            {batchResults[tender.id] && (
+                                                <span className={`ml-auto text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter ${
+                                                    batchResults[tender.id].rows.some(r => r.risk_level === 'High') ? 'bg-red-100 text-red-600' : 
+                                                    batchResults[tender.id].rows.some(r => r.risk_level === 'Medium') ? 'bg-amber-100 text-amber-600' : 
+                                                    'bg-emerald-100 text-emerald-600'
+                                                }`}>
+                                                    {batchResults[tender.id].rows.some(r => r.risk_level === 'High') ? 'High Risk' : 'Analyzed'}
+                                                </span>
+                                            )}
                                         </div>
-                                        <h4 className="text-sm font-bold text-slate-800 line-clamp-1 mb-1">{tender.title}</h4>
-                                        <p className="text-xs text-slate-500 line-clamp-2 mb-2">{tender.description}</p>
+                                        <h4 className="text-sm font-black text-slate-800 line-clamp-1 mb-1 group-hover:text-blue-600 transition-colors">{tender.title}</h4>
+                                        <p className="text-[11px] text-slate-500 line-clamp-2 mb-2 leading-tight">{tender.description}</p>
                                         
                                         {/* File List for Selection */}
                                         {tenderFiles[tender.id] && tenderFiles[tender.id].length > 0 && (
@@ -407,14 +466,32 @@ const Analysis = () => {
           
           {/* 1. Loading State */}
           {loading && (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-4">
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 space-y-6">
               <div className="relative">
-                <div className="w-16 h-16 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
+                <div className="w-20 h-20 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
-                    <Cpu size={24} className="text-blue-600" />
+                    <Cpu size={32} className="text-blue-600" />
                 </div>
               </div>
-              <p className="animate-pulse font-medium">{statusText || "Агент работает..."}</p>
+              <div className="text-center">
+                <p className="font-black text-slate-700 text-lg mb-1">{statusText || "Анализ запущен"}</p>
+                <p className="text-xs text-slate-400 uppercase tracking-widest font-bold">ИИ обрабатывает документы...</p>
+              </div>
+              
+              <div className="w-64 space-y-3">
+                 {Object.entries(analysisStages).map(([tid, stage]) => (
+                    <div key={tid} className="bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                        <div className="flex justify-between text-[10px] font-black uppercase mb-1">
+                            <span className="truncate max-w-[100px]">Тендер {tid}</span>
+                            <span className="text-blue-600">{stage.progress}%</span>
+                        </div>
+                        <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-blue-600 h-full transition-all duration-500" style={{ width: `${stage.progress}%` }}></div>
+                        </div>
+                        <div className="text-[9px] text-slate-500 mt-1 font-bold">{stage.stage}</div>
+                    </div>
+                 ))}
+              </div>
             </div>
           )}
 
@@ -470,34 +547,90 @@ const Analysis = () => {
                                 </div>
 
                                 {/* File Statuses Block */}
-                                <div className="px-5 py-3 bg-slate-50 border-b border-slate-100">
-                                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Статус документов</h4>
-                                    <div className="flex flex-wrap gap-2">
-                                        {result.file_statuses.map((fs, i) => (
-                                            <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded border text-[11px] font-medium ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`} title={fs.message}>
-                                                {fs.status === 'ok' ? <CheckCircle size={12} className="text-emerald-500" /> : <AlertTriangle size={12} className="text-red-500" />}
-                                                <span className="truncate max-w-[200px]">{fs.filename}</span>
-                                                {fs.status !== 'ok' && <span className="text-[9px] font-bold opacity-70">({fs.status})</span>}
-                                            </div>
-                                        ))}
+                                <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Статус документов</h4>
+                                        <div className="flex flex-wrap gap-2">
+                                            {result.file_statuses.map((fs, i) => (
+                                                <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded border text-[11px] font-medium ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`} title={fs.message}>
+                                                    {fs.status === 'ok' ? <CheckCircle size={12} className="text-emerald-500" /> : <AlertTriangle size={12} className="text-red-500" />}
+                                                    <span className="truncate max-w-[150px]">{fs.filename}</span>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
+                                    {result.classification_notes && result.classification_notes.length > 0 && (
+                                        <div>
+                                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
+                                            <div className="space-y-1">
+                                                {result.classification_notes.map((note, i) => (
+                                                    <div key={i} className="text-[10px] text-slate-500 flex items-start gap-1.5 leading-tight">
+                                                        <div className="w-1 h-1 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
+                                                        {note}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {result.summary_notes && result.summary_notes.length > 0 && (
-                                    <div className="px-5 py-4 bg-blue-50/30 border-b border-blue-100">
-                                        <h4 className="text-xs font-black text-blue-800 uppercase tracking-wider mb-2">Сводка анализа:</h4>
-                                        <ul className="space-y-1.5">
-                                            {result.summary_notes.map((note, i) => (
-                                                <li key={i} className="flex items-start gap-2 text-xs text-blue-700 leading-relaxed">
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-400 mt-1.5 shrink-0"></div>
-                                                    {note}
-                                                </li>
+                                    <div className="px-5 py-4 bg-blue-50/40 border-b border-blue-100">
+                                        <div className="flex items-center gap-2 mb-3">
+                                            <div className="p-1 bg-blue-600 rounded text-white">
+                                                <ScanEye size={14} />
+                                            </div>
+                                            <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Сводка юридического анализа</h4>
+                                        </div>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
+                                            {result.summary_notes.slice(0, 8).map((note, i) => (
+                                                <div key={i} className="flex items-start gap-2.5 text-[11px] text-blue-800 leading-relaxed font-medium bg-white/50 p-2 rounded-lg border border-blue-100/50">
+                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0 shadow-sm"></div>
+                                                    {note.length > 200 ? note.substring(0, 200) + '...' : note}
+                                                </div>
                                             ))}
-                                        </ul>
+                                        </div>
                                     </div>
                                 )}
-                                
-                                {result.status === 'success' && result.rows.length === 0 ? (
+
+                                {/* Filtering & Sorting UI */}
+                                <div className="px-5 py-3 bg-white border-b border-slate-100 flex flex-wrap items-center gap-4">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase">Блок:</span>
+                                        <select 
+                                            value={filterBlock} 
+                                            onChange={(e) => setFilterBlock(e.target.value)}
+                                            className="text-[11px] font-bold border-slate-200 rounded px-2 py-1 focus:ring-blue-500"
+                                        >
+                                            <option value="all">Все блоки</option>
+                                            {getUniqueBlocks(result.rows).map(b => <option key={b} value={b}>{b}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase">Риск:</span>
+                                        <select 
+                                            value={filterRisk} 
+                                            onChange={(e) => setFilterRisk(e.target.value)}
+                                            className="text-[11px] font-bold border-slate-200 rounded px-2 py-1 focus:ring-blue-500"
+                                        >
+                                            <option value="all">Все риски</option>
+                                            <option value="High">Высокий</option>
+                                            <option value="Medium">Средний</option>
+                                            <option value="Low">Низкий</option>
+                                        </select>
+                                    </div>
+                                    <div className="flex items-center gap-2 ml-auto">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase">Сортировка:</span>
+                                        <button 
+                                            onClick={() => setSortBy(sortBy === 'risk' ? 'block' : 'risk')}
+                                            className="text-[11px] font-bold text-blue-600 hover:underline"
+                                        >
+                                            {sortBy === 'risk' ? 'По риску' : 'По блоку'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                 {result.status === 'success' && result.rows.length === 0 ? (
                                     <div className="p-10 text-center text-slate-400 bg-white">
                                         <Shield size={48} className="mx-auto mb-4 opacity-20" />
                                         <p className="text-sm font-medium">Документация выглядит стандартной. Критических условий не найдено.</p>
@@ -514,10 +647,15 @@ const Analysis = () => {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
-                                                {result.rows.map((row, idx) => (
+                                                {getFilteredRows(result.rows).map((row, idx) => (
                                                     <tr key={idx} className={`transition-colors ${row.risk_level === 'High' ? 'bg-red-50/20 hover:bg-red-50/40' : row.risk_level === 'Medium' ? 'bg-amber-50/20 hover:bg-amber-50/40' : 'hover:bg-slate-50/50'}`}>
                                                         <td className="px-5 py-4 align-top">
-                                                            <div className="font-black text-slate-900 mb-1.5">{row.block}</div>
+                                                            <div className="flex items-center gap-2 mb-1">
+                                                                <div className="font-black text-slate-900">{row.block}</div>
+                                                                <span className={`text-[8px] font-black px-1 py-0.5 rounded uppercase ${row.doc_group === 'contract' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
+                                                                    {row.doc_group === 'contract' ? 'Контракт' : 'ТЗ/Прочее'}
+                                                                </span>
+                                                            </div>
                                                             <div className="text-slate-700 text-xs leading-relaxed font-medium">{row.finding}</div>
                                                         </td>
                                                         <td className="px-5 py-4 align-top">
@@ -542,6 +680,9 @@ const Analysis = () => {
                                 
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-6">
+                                        <button onClick={() => exportToExcelFiltered(result.id)} className="text-xs text-emerald-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
+                                            <FileDown size={16} /> Скачать Excel (с фильтрами)
+                                        </button>
                                         <button onClick={() => exportToExcel([result])} className="text-xs text-emerald-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
                                             <FileDown size={16} /> Скачать Excel
                                         </button>
