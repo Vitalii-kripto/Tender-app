@@ -75,6 +75,8 @@ class SshSocksTunnel:
         cmd = [
             "ssh",
             "-N",
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
             "-o", "ExitOnForwardFailure=yes",
             "-o", f"ConnectTimeout={c.connect_timeout_sec}",
             "-o", f"ServerAliveInterval={c.keepalive_interval_sec}",

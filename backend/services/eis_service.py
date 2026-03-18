@@ -43,7 +43,7 @@ TXT_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor.log")
 SKIP_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor_skip.log")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
 
-USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
+USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
 LOCAL_SOCKS_PORT = 1080
 
 def ensure_dir(p: str):
@@ -757,7 +757,7 @@ class EisService:
         logger.info(f"После 'Применить': has_results={has_results}")
         return has_results
 
-    def goto_with_human_delays(self, page, url: str, wait: str = "domcontentloaded", timeout: int = 30000, op_counter: Optional[int] = None, retries: int = 2):
+    def goto_with_human_delays(self, page, url: str, wait: str = "domcontentloaded", timeout: int = 60000, op_counter: Optional[int] = None, retries: int = 2):
         last_exc = None
         for attempt in range(1, retries + 1):
             try:
@@ -774,12 +774,22 @@ class EisService:
                 if attempt < retries:
                     human_sleep(3.0, 7.0)
                     continue
-                raise
+                raise RuntimeError(
+                    f"Превышено время ожидания при подключении к zakupki.gov.ru. "
+                    "Сайт может быть недоступен или блокировать ваш IP. Попробуйте VPN с российским IP."
+                )
             except Exception as e:
                 last_exc = e
+                err_msg = str(e)
                 if attempt < retries:
                     human_sleep(3.0, 7.0)
                     continue
+                
+                if "ERR_CONNECTION_TIMED_OUT" in err_msg or "ERR_CONNECTION_RESET" in err_msg:
+                    raise RuntimeError(
+                        f"Ошибка подключения к zakupki.gov.ru ({err_msg}). "
+                        "Сайт может блокировать доступ с вашего IP. Попробуйте VPN с российским IP или настройте прокси в .env."
+                    )
                 raise
         if last_exc:
             raise last_exc
