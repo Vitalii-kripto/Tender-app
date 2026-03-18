@@ -84,79 +84,7 @@ class LegalAnalysisService:
             logger.error(f"Error assembling prompt for {prompt_type}: {e}")
             return None
 
-    def classify_documents(self, files: List[Dict[str, str]]) -> Dict[str, Any]:
-        """
-        Классифицирует документы на Группу 1 (Контракт) и Группу 2 (Прочее).
-        Использует расширенные признаки по имени и тексту.
-        """
-        group1 = []
-        group2 = []
-        notes = []
-        uncertain_files = []
-        
-        # Признаки договорной группы
-        contract_kw = [
-            'контракт', 'договор', 'проект договора', 'проект контракта', 
-            'спецификация', 'график поставки', 'условия поставки', 
-            'приложение к договору', 'порядок приемки', 'условия оплаты', 
-            'ответственность сторон', 'односторонний отказ', 'реквизиты сторон',
-            'contract', 'agreement', 'draft', 'specification'
-        ]
-        
-        # Признаки закупочной документации
-        other_kw = [
-            'извещение', 'информационная карта', 'инструкция', 
-            'описание объекта закупки', 'техническое задание', 
-            'обоснование нмцк', 'критерии оценки', 'требования к заявке', 
-            'форма заявки', 'состав заявки', 'национальный режим', 
-            'реестр', 'страна происхождения', 'notice', 'requirements', 'tender'
-        ]
-        
-        for file in files:
-            filename = file.get('filename', '').lower()
-            text_sample = file.get('text', '')[:3000].lower()
-            
-            score_contract = 0
-            score_other = 0
-            reasons = []
-
-            # Проверка по имени
-            for kw in contract_kw:
-                if kw in filename:
-                    score_contract += 2
-                    reasons.append(f"имя содержит '{kw}'")
-            for kw in other_kw:
-                if kw in filename:
-                    score_other += 2
-                    reasons.append(f"имя содержит '{kw}'")
-
-            # Проверка по тексту
-            for kw in contract_kw:
-                if kw in text_sample:
-                    score_contract += 1
-                    reasons.append(f"текст содержит '{kw}'")
-            for kw in other_kw:
-                if kw in text_sample:
-                    score_other += 1
-                    reasons.append(f"текст содержит '{kw}'")
-
-            if score_contract > score_other:
-                group1.append(file)
-                notes.append(f"Файл '{file['filename']}' отнесен к договорной группе ({', '.join(reasons[:2])}).")
-            elif score_other > score_contract:
-                group2.append(file)
-                notes.append(f"Файл '{file['filename']}' отнесен к закупочной документации ({', '.join(reasons[:2])}).")
-            else:
-                group2.append(file)
-                uncertain_files.append(file['filename'])
-                notes.append(f"Файл '{file['filename']}' классифицирован как прочая документация (неуверенно).")
-                
-        return {
-            'group1': group1, 
-            'group2': group2, 
-            'classification_notes': notes,
-            'uncertain_files': uncertain_files
-        }
+    # LEGACY: classify_documents removed.
 
     def _call_ai_with_retry(self, prompt: str, prompt_type: str, retries: int = 1) -> Dict[str, Any]:
         """
@@ -342,35 +270,19 @@ class LegalAnalysisService:
         existing_blocks = " ".join([r.get('block', '').lower() for r in rows])
         added_rows = []
         
-        if doc_group == "full":
-            topics = [
-                ("оплата", "Оплата", "срок оплаты"),
-                ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
-                ("аванс", "Оплата", "условие об авансе"),
-                ("эдо", "Оплата", "условие об ЭДО"),
-                ("казначейск", "Оплата", "условие о казначейском сопровождении"),
-                ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
-                ("приемк", "Документы при поставке", "документы о приемке"),
-                ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
-                ("национальный режим", "Реестры/ограничения", "применение национального режима"),
-                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
-            ]
-        elif doc_group == "contract":
-            topics = [
-                ("оплата", "Оплата", "срок оплаты"),
-                ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
-                ("аванс", "Оплата", "условие об авансе"),
-                ("эдо", "Оплата", "условие об ЭДО"),
-                ("казначейск", "Оплата", "условие о казначейском сопровождении"),
-                ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
-                ("приемк", "Документы при поставке", "документы о приемке")
-            ]
-        else:
-            topics = [
-                ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
-                ("национальный режим", "Реестры/ограничения", "применение национального режима"),
-                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
-            ]
+        # В новой архитектуре всегда doc_group == "full"
+        topics = [
+            ("оплата", "Оплата", "срок оплаты"),
+            ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
+            ("аванс", "Оплата", "условие об авансе"),
+            ("эдо", "Оплата", "условие об ЭДО"),
+            ("казначейск", "Оплата", "условие о казначейском сопровождении"),
+            ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
+            ("приемк", "Документы при поставке", "документы о приемке"),
+            ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
+            ("национальный режим", "Реестры/ограничения", "применение национального режима"),
+            ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
+        ]
             
         for kw, block, label in topics:
             if kw not in existing_blocks:
@@ -386,9 +298,9 @@ class LegalAnalysisService:
                 })
         return added_rows
 
-    def analyze_tender(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
+    def analyze_full_package(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
         """
-        Основной метод анализа тендера с этапами и прогрессом.
+        Основной метод анализа всего пакета тендерной документации.
         """
         def update_stage(stage, progress, status="process"):
             if callback:
@@ -403,14 +315,16 @@ class LegalAnalysisService:
                 "progress": 100
             }
         
-        update_stage("Классификация", 30)
+        logger.info(f"Starting full package analysis for {len(files)} files.")
+        update_stage("Анализ документации", 30)
+
         # Собираем все документы в один контекст
         all_text = ""
         for f in files:
             all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
         
-        update_stage("Анализ документации", 60)
         chunked_text = self._chunk_text(all_text)
+        logger.info(f"Context size after chunking: {len(chunked_text)} chars")
         
         # Используем новый промпт для всего пакета
         assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
@@ -476,10 +390,111 @@ class LegalAnalysisService:
         return {
             "rows": final_rows,
             "summary_notes": final_notes,
-            "has_contract": len(group1) > 0,
-            "classification_notes": classified['classification_notes'],
-            "uncertain_files": uncertain_files,
             "status": "success" if final_rows else "partial",
             "stage": "Готово",
             "progress": 100
         }
+
+    def analyze_full_package(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
+        """
+        Основной метод анализа всего пакета тендерной документации.
+        """
+        def update_stage(stage, progress, status="process"):
+            if callback:
+                callback(stage, progress, status)
+
+        if not files:
+            return {
+                "rows": [],
+                "summary_notes": ["Ошибка: нет файлов для анализа."],
+                "status": "error",
+                "stage": "Ошибка",
+                "progress": 100
+            }
+        
+        logger.info(f"Starting full package analysis for {len(files)} files.")
+        update_stage("Анализ документации", 30)
+
+        # Собираем все документы в один контекст
+        all_text = ""
+        for f in files:
+            all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
+        
+        chunked_text = self._chunk_text(all_text)
+        logger.info(f"Context size after chunking: {len(chunked_text)} chars")
+        
+        # Используем новый промпт для всего пакета
+        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
+        if not assembled_prompt:
+            res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
+        else:
+            res = self._call_ai_with_retry(assembled_prompt, prompt_type="full")
+        
+        rows = res.get('rows', [])
+        logger.info(f"Rows before validation (full): {len(rows)}")
+        rows = self._validate_and_filter_rows(rows, "full")
+        logger.info(f"Rows after validation (full): {len(rows)}")
+        rows += self._add_missing_critical_topics(rows, "full")
+        logger.info(f"Rows after adding critical topics (full): {len(rows)}")
+        
+        all_rows = rows
+        all_notes = res.get('summary_notes', [])
+        
+        update_stage("Формирование отчета", 95)
+        
+        # Пост-обработка
+        # 1. Дедупликация с нормализацией
+        def normalize(s):
+            return re.sub(r'[^\w\s]', '', str(s).lower().strip())
+
+        unique_rows = []
+        seen_keys = set()
+        for r in all_rows:
+            # Защитная проверка
+            if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
+                logger.warning(f"Row missing required keys, skipping: {r}")
+                continue
+                
+            key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
+            if key not in seen_keys:
+                seen_keys.add(key)
+                unique_rows.append(r)
+        
+        logger.info(f"Rows after deduplication: {len(unique_rows)}")
+
+        # 2. Сортировка
+        risk_order = {"High": 0, "Medium": 1, "Low": 2}
+        unique_rows.sort(key=lambda x: (
+            risk_order.get(x.get('risk_level', 'Medium'), 3), 
+            x.get('block', ''), 
+            x.get('source_document', '')
+        ))
+
+        # 3. Лимит и фильтрация заметок
+        final_rows = unique_rows[:30] # Увеличим лимит
+        final_notes = []
+        seen_notes = set()
+        for note in all_notes:
+            note_clean = note.strip()
+            if note_clean and note_clean not in seen_notes:
+                seen_notes.add(note_clean)
+                final_notes.append(note_clean)
+        
+        final_notes = final_notes[:12]
+
+        update_stage("Готово", 100, "success")
+        
+        return {
+            "rows": final_rows,
+            "summary_notes": final_notes,
+            "status": "success" if final_rows else "partial",
+            "stage": "Готово",
+            "progress": 100
+        }
+
+    def analyze_tender(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
+        """
+        Legacy wrapper for analyze_full_package.
+        """
+        return self.analyze_full_package(files, callback)
+
