@@ -1,4 +1,4 @@
-import os
+import time
 import json
 import logging
 from typing import List, Dict, Any
@@ -31,7 +31,7 @@ class LegalAnalysisService:
                 
         return {'group1': group1, 'group2': group2}
 
-    def _call_ai_with_retry(self, prompt: str, retries: int = 2) -> List[Dict[str, Any]]:
+    def _call_ai_with_retry(self, prompt: str, retries: int = 3) -> List[Dict[str, Any]]:
         if not self.client:
             logger.error("AI Client is not initialized.")
             return []
@@ -39,11 +39,11 @@ class LegalAnalysisService:
         for attempt in range(retries + 1):
             try:
                 response = self.client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3-flash-preview',
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        temperature=0.2
+                        temperature=0.1
                     )
                 )
                 data = json.loads(response.text)
@@ -55,7 +55,11 @@ class LegalAnalysisService:
                     logger.warning(f"Unexpected JSON structure on attempt {attempt}: {data}")
             except Exception as e:
                 logger.error(f"AI Error on attempt {attempt}: {e}")
-                if attempt == retries:
+                if attempt < retries:
+                    wait_time = (2 ** attempt) + 1
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
                     return []
         return []
 

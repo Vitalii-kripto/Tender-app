@@ -1,4 +1,5 @@
 import os
+import time
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
@@ -24,7 +25,7 @@ class AiService:
     """
     Сервис для работы с Google Gemini API.
     Выполняет анализ рисков, подбор аналогов и проверку соответствия.
-    Используется стабильная модель gemini-2.5-flash.
+    Используется стабильная модель gemini-3-flash-preview.
     """
     def __init__(self):
         self.api_key = os.getenv("API_KEY")
@@ -34,6 +35,21 @@ class AiService:
         else:
             self.client = genai.Client(api_key=self.api_key)
             logger.info("Gemini Client initialized.")
+
+    def _call_ai_with_retry(self, method, **kwargs):
+        retries = 3
+        for attempt in range(retries + 1):
+            try:
+                return method(**kwargs)
+            except Exception as e:
+                logger.error(f"AI Error on attempt {attempt}: {e}")
+                if attempt < retries:
+                    wait_time = (2 ** attempt) + 1
+                    logger.info(f"Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    raise e
+        return None
 
     def find_product_equivalent(self, tender_specs: str, catalog: list):
         if not self.client:
@@ -62,8 +78,9 @@ class AiService:
         """
 
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -101,8 +118,9 @@ class AiService:
         
         try:
             # Используем Google Search Tool
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -138,8 +156,9 @@ class AiService:
         """
         
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -180,8 +199,9 @@ class AiService:
         ]
         """
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -238,8 +258,9 @@ class AiService:
         }}
         """
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -266,8 +287,9 @@ class AiService:
         """
 
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -308,8 +330,9 @@ class AiService:
         """
 
         try:
-            response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+            response = self._call_ai_with_retry(
+                self.client.models.generate_content,
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
