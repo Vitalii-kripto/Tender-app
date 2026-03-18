@@ -170,18 +170,33 @@ class LegalAnalysisService:
                 continue
             
             # Обязательные поля
-            name = str(row.get("name", "")).strip()
-            value = str(row.get("value", "")).strip()
-            comment = str(row.get("comment", "")).strip()
+            block = str(row.get("block", "")).strip()
+            finding = str(row.get("finding", "")).strip()
+            risk_level = str(row.get("risk_level", "Medium")).strip()
+            supplier_action = str(row.get("supplier_action", "")).strip()
+            source_document = str(row.get("source_document", "Не найдено")).strip()
+            source_reference = str(row.get("source_reference", "Не найдено")).strip()
+            legal_basis = str(row.get("legal_basis", "")).strip()
             
-            if not name or not value or not comment:
+            # Валидация
+            if not block or not finding or not risk_level or not supplier_action:
                 continue
             
-            # Нормализация и обрезка
+            # Нормализация
+            if block not in self.valid_blocks:
+                continue
+            
+            if risk_level not in ["High", "Medium", "Low"]:
+                risk_level = "Medium"
+            
             valid_row = {
-                "name": name[:200],
-                "value": value[:1000],
-                "comment": comment[:1000],
+                "block": block,
+                "finding": finding[:1000],
+                "risk_level": risk_level,
+                "supplier_action": supplier_action[:1000],
+                "source_document": source_document[:200],
+                "source_reference": source_reference[:200],
+                "legal_basis": legal_basis[:1000],
                 "doc_group": "contract" if group_name == "contract" else "other"
             }
             
@@ -222,32 +237,36 @@ class LegalAnalysisService:
         """
         Добавляет строки "не найдено" для критически важных тем.
         """
-        existing_names = " ".join([r.get('name', '').lower() for r in rows])
+        existing_blocks = " ".join([r.get('block', '').lower() for r in rows])
         added_rows = []
         
         if doc_group == "contract":
             topics = [
-                ("разгрузка", "Разгрузка", "условие о разгрузке (кто и за чей счет)"),
-                ("аванс", "Аванс", "условие о наличии или отсутствии аванса"),
-                ("эдо", "ЭДО", "условие об использовании ЭДО (электронного документооборота)"),
-                ("казначейск", "Казначейское сопровождение", "условие о казначейском сопровождении"),
-                ("срок оплаты", "Срок оплаты", "точный срок оплаты"),
+                ("оплата", "Оплата", "срок оплаты"),
+                ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
+                ("аванс", "Оплата", "условие об авансе"),
+                ("эдо", "Оплата", "условие об ЭДО"),
+                ("казначейск", "Оплата", "условие о казначейском сопровождении"),
                 ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
-                ("приемк", "Приемка", "перечень документов о приемке (акты, накладные)")
+                ("приемк", "Документы при поставке", "документы о приемке")
             ]
         else:
             topics = [
-                ("реестр", "Реестры", "требования о включении в реестры (РФ/ЕАЭС/РРП)"),
-                ("национальный режим", "Национальный режим", "применение национального режима (ПП 616/617/878)"),
-                ("состав заявки", "Состав заявки", "полный перечень документов в составе заявки")
+                ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
+                ("национальный режим", "Реестры/ограничения", "применение национального режима"),
+                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
             ]
             
-        for kw, name, label in topics:
-            if kw not in existing_names:
+        for kw, block, label in topics:
+            if kw not in existing_blocks:
                 added_rows.append({
-                    "name": name,
-                    "value": f"В просмотренных документах не найдено {label}.",
-                    "comment": "Проверить наличие условия в полном комплекте документации до подачи заявки или подписания договора.",
+                    "block": block,
+                    "finding": f"В просмотренных документах не найдено {label}.",
+                    "risk_level": "Medium",
+                    "supplier_action": "Проверить наличие условия.",
+                    "source_document": "Не найдено",
+                    "source_reference": "Критичное условие не выявлено в просмотренных документах",
+                    "legal_basis": "",
                     "doc_group": doc_group
                 })
         return added_rows
@@ -321,6 +340,11 @@ class LegalAnalysisService:
         unique_rows = []
         seen_keys = set()
         for r in all_rows:
+            # Защитная проверка
+            if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
+                logger.warning(f"Row missing required keys, skipping: {r}")
+                continue
+                
             key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
             if key not in seen_keys:
                 seen_keys.add(key)
@@ -329,9 +353,9 @@ class LegalAnalysisService:
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
         unique_rows.sort(key=lambda x: (
-            risk_order.get(x['risk_level'], 3), 
-            x['block'], 
-            x['source_document']
+            risk_order.get(x.get('risk_level', 'Medium'), 3), 
+            x.get('block', ''), 
+            x.get('source_document', '')
         ))
 
         # 3. Лимит и фильтрация заметок
