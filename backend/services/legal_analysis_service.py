@@ -100,6 +100,10 @@ class LegalAnalysisService:
         if not self.client:
             return {"rows": [], "summary_notes": ["Ошибка: ИИ-клиент не инициализирован."]}
             
+        # Логирование перед вызовом
+        prompt_name = "CONTRACT" if "PROMPT_CONTRACT" in str(prompt) else "OTHER"
+        logger.info(f"Calling AI with prompt: {prompt_name}, context size: {len(prompt)}")
+            
         for attempt in range(retries + 1):
             try:
                 # Если это повторная попытка, добавляем жесткую инструкцию
@@ -117,6 +121,9 @@ class LegalAnalysisService:
                 )
                 
                 text = response.text.strip()
+                # Логирование ответа
+                logger.info(f"AI Response snippet: {text[:1000]}")
+                
                 # Очистка от markdown если есть
                 if text.startswith("```json"):
                     text = text.replace("```json", "", 1).replace("```", "", 1).strip()
@@ -125,6 +132,10 @@ class LegalAnalysisService:
                 
                 try:
                     data = json.loads(text)
+                    # Логирование структуры JSON
+                    keys = list(data.keys())
+                    rows_count = len(data.get("rows", [])) if isinstance(data, dict) else 0
+                    logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}")
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON Decode Error on attempt {attempt}: {e}")
                     logger.error(f"Raw AI Response:\n{text}")
@@ -167,6 +178,7 @@ class LegalAnalysisService:
         valid_rows = []
         for row in rows:
             if not isinstance(row, dict):
+                logger.warning("Row is not a dict, skipping.")
                 continue
             
             # Обязательные поля
@@ -180,13 +192,24 @@ class LegalAnalysisService:
             
             # Валидация
             if not block or not finding or not risk_level or not supplier_action:
+                logger.warning(f"Row missing required fields: {row}")
+                continue
+            
+            if not source_document:
+                logger.warning(f"Row has empty source_document: {row}")
+                continue
+                
+            if not source_reference:
+                logger.warning(f"Row has empty source_reference: {row}")
                 continue
             
             # Нормализация
             if block not in self.valid_blocks:
+                logger.warning(f"Unknown block: {block}")
                 continue
             
             if risk_level not in ["High", "Medium", "Low"]:
+                logger.warning(f"Unknown risk_level: {risk_level}")
                 risk_level = "Medium"
             
             valid_row = {
@@ -305,7 +328,9 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text))
             
             rows = self._validate_and_filter_rows(res.get('rows', []), "contract")
+            logger.info(f"Rows after validation (contract): {len(rows)}")
             rows += self._add_missing_critical_topics(rows, "contract")
+            logger.info(f"Rows after adding critical topics (contract): {len(rows)}")
             all_rows.extend(rows)
             all_notes.extend(res.get('summary_notes', []))
         else:
@@ -322,7 +347,9 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text))
             
             rows = self._validate_and_filter_rows(res.get('rows', []), "other")
+            logger.info(f"Rows after validation (other): {len(rows)}")
             rows += self._add_missing_critical_topics(rows, "other")
+            logger.info(f"Rows after adding critical topics (other): {len(rows)}")
             all_rows.extend(rows)
             all_notes.extend(res.get('summary_notes', []))
         else:
@@ -349,6 +376,8 @@ class LegalAnalysisService:
             if key not in seen_keys:
                 seen_keys.add(key)
                 unique_rows.append(r)
+        
+        logger.info(f"Rows after deduplication: {len(unique_rows)}")
 
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
