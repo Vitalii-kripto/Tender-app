@@ -63,6 +63,27 @@ class LegalAnalysisService:
             file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
             logger.addHandler(file_handler)
 
+    def _assemble_prompt(self, template: str, text: str, prompt_type: str) -> str:
+        """
+        Безопасно собирает промпт, заменяя __TEXT__ на текст документа.
+        """
+        try:
+            if "__TEXT__" not in template:
+                logger.error(f"Prompt template for {prompt_type} missing __TEXT__ placeholder")
+                return None
+            
+            assembled = template.replace("__TEXT__", text)
+            
+            # Защитная проверка: если остались маркеры, значит что-то пошло не так
+            if "__TEXT__" in assembled or "{text}" in assembled:
+                logger.error(f"Prompt assembly failed for {prompt_type}: placeholder still present")
+                return None
+                
+            return assembled
+        except Exception as e:
+            logger.error(f"Error assembling prompt for {prompt_type}: {e}")
+            return None
+
     def classify_documents(self, files: List[Dict[str, str]]) -> Dict[str, Any]:
         """
         Классифицирует документы на Группу 1 (Контракт) и Группу 2 (Прочее).
@@ -383,7 +404,12 @@ class LegalAnalysisService:
             update_stage("Анализ договора", 50)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group1])
             chunked_text = self._chunk_text(combined_text)
-            res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text), prompt_type="contract")
+            
+            assembled_prompt = self._assemble_prompt(PROMPT_CONTRACT, chunked_text, "contract")
+            if not assembled_prompt:
+                res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа договора."]}
+            else:
+                res = self._call_ai_with_retry(assembled_prompt, prompt_type="contract")
             
             rows = res.get('rows', [])
             logger.info(f"Rows before validation (contract): {len(rows)}")
@@ -404,7 +430,12 @@ class LegalAnalysisService:
             update_stage("Анализ остальной документации", 80)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group2])
             chunked_text = self._chunk_text(combined_text)
-            res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text), prompt_type="other")
+            
+            assembled_prompt = self._assemble_prompt(PROMPT_OTHER_DOCS, chunked_text, "other")
+            if not assembled_prompt:
+                res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа прочей документации."]}
+            else:
+                res = self._call_ai_with_retry(assembled_prompt, prompt_type="other")
             
             rows = res.get('rows', [])
             logger.info(f"Rows before validation (other): {len(rows)}")
