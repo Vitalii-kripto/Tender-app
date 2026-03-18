@@ -4,6 +4,8 @@ import os
 import time
 import signal
 
+print("🚀 run_app.py is starting!")
+
 def run_services():
     """
     Запускает React Frontend и FastAPI Backend в параллельных процессах.
@@ -38,8 +40,7 @@ def run_services():
         time.sleep(1)
 
         # 2. Запуск Backend (Python)
-        # Используем python3
-        python_executable = "python3"
+        python_executable = sys.executable
         print(f"🐍 Запуск Backend ({python_executable} run_backend.py)...")
         
         backend_process = subprocess.Popen(

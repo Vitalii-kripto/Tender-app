@@ -24,22 +24,28 @@ class AiService:
     """
     Сервис для работы с Google Gemini API.
     Выполняет анализ рисков, подбор аналогов и проверку соответствия.
-    Используется стабильная модель gemini-2.5-flash.
+    Используется стабильная модель gemini-3-flash-preview.
     """
     def __init__(self):
-        self.api_key = os.getenv("API_KEY")
+        print("🤖 Initializing AiService...")
+        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
         if not self.api_key:
-            logger.warning("API_KEY not found in environment variables.")
+            logger.warning("GEMINI_API_KEY not found in environment variables.")
             self.client = None
         else:
-            self.client = genai.Client(api_key=self.api_key)
-            logger.info("Gemini Client initialized.")
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+                logger.info("Gemini Client initialized.")
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini Client: {e}")
+                self.client = None
 
     def classify_documents(self, docs: list):
         """
         Классифицирует документы на 'contract' и 'other'.
         docs: list of dicts {"filename": str, "text": str}
         """
+        print(f"🤖 AI Classifying {len(docs)} documents...")
         if not self.client:
             return {"contract": [], "other": [d['filename'] for d in docs]}
             
@@ -62,15 +68,18 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            result = json.loads(response.text)
-            logger.info(f"Classification result: {result}")
-            return result
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
             logger.error(f"Classification Error: {e}")
             return {"contract": [], "other": filenames}
@@ -157,11 +166,18 @@ class AiService:
             """
             try:
                 resp1 = self.client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3-flash-preview',
                     contents=prompt1,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-                results.extend(json.loads(resp1.text))
+                text = resp1.text
+                # Очистка от markdown если он есть
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0].strip()
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0].strip()
+                
+                results.extend(json.loads(text))
             except Exception as e:
                 logger.error(f"Prompt 1 Error: {e}")
 
@@ -229,11 +245,18 @@ class AiService:
             """
             try:
                 resp2 = self.client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3-flash-preview',
                     contents=prompt2,
                     config=types.GenerateContentConfig(response_mime_type="application/json")
                 )
-                results.extend(json.loads(resp2.text))
+                text = resp2.text
+                # Очистка от markdown если он есть
+                if "```json" in text:
+                    text = text.split("```json")[1].split("```")[0].strip()
+                elif "```" in text:
+                    text = text.split("```")[1].split("```")[0].strip()
+                
+                results.extend(json.loads(text))
             except Exception as e:
                 logger.error(f"Prompt 2 Error: {e}")
 
@@ -288,13 +311,18 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
             logger.error(f"AI Error (find_product_equivalent): {e}", exc_info=True)
             return []
@@ -327,7 +355,7 @@ class AiService:
         try:
             # Используем Google Search Tool
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -364,7 +392,7 @@ class AiService:
         
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -406,13 +434,18 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
             logger.error(f"Extraction Error: {e}", exc_info=True)
             return []
@@ -464,14 +497,17 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
             logger.error(f"Comparison Error: {e}", exc_info=True)
             return {"score": 0, "summary": f"Error: {e}", "items": []}
@@ -492,13 +528,18 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
             logger.error(f"Compliance Check Error: {e}", exc_info=True)
             return {"overallStatus": "failed", "summary": str(e)}
@@ -534,13 +575,18 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3-flash-preview',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            return json.loads(response.text)
+            text = response.text
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+            return json.loads(text)
         except Exception as e:
-            logger.error(f"Extraction Error: {e}", exc_info=True)
+            logger.error(f"Extraction Error (details): {e}", exc_info=True)
             return {}

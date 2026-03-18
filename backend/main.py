@@ -1,6 +1,22 @@
+import os
+import sys
+
+# Redirect stdout and stderr to a file for debugging
+log_file_path = os.path.join(os.getcwd(), "backend_stdout_stderr.log")
+with open(log_file_path, "a", encoding="utf-8") as f:
+    f.write("🚀 backend/main.py is starting (pre-import)!\n")
+
 import uvicorn
 import asyncio
 import sys
+import os
+
+# Redirect stdout and stderr to a file for debugging
+log_file_path = os.path.join(os.getcwd(), "backend_stdout_stderr.log")
+sys.stdout = open(log_file_path, "w", encoding="utf-8", buffering=1)
+sys.stderr = sys.stdout
+
+print("🚀 backend/main.py is starting!")
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
 
 if sys.platform == 'win32':
@@ -79,6 +95,21 @@ except Exception as e:
 
 app = FastAPI(title="TenderSmart Gidroizol API", version="2.0.0")
 
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok", "message": "Backend is running"}
+
+@app.get("/api/test-db")
+async def test_db():
+    try:
+        from .database import SessionLocal
+        db = SessionLocal()
+        db.execute("SELECT 1")
+        db.close()
+        return {"status": "ok", "message": "Database connection successful"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Разрешить все для локальной разработки
@@ -88,15 +119,19 @@ app.add_middleware(
 )
 
 # Services
-try:
-    logger.info("Initializing Services...")
-    eis_service = EisService()
-    parser_service = GidroizolParser()
-    doc_service = DocumentService()
-    ai_service = AiService()
-    logger.info("Services initialized.")
-except Exception as e:
-    logger.error(f"Service initialization error: {e}", exc_info=True)
+logger.info("Initializing Services...")
+api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
+if api_key:
+    masked_key = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "****"
+    logger.info(f"API Key found: {masked_key}")
+else:
+    logger.warning("No API Key found in environment!")
+
+eis_service = EisService()
+parser_service = GidroizolParser()
+doc_service = DocumentService()
+ai_service = AiService()
+logger.info("Services initialized.")
 
 # --- ENDPOINTS ---
 
@@ -468,6 +503,7 @@ async def api_ai_batch_analyze(data: dict = Body(...), db: Session = Depends(get
     Пакетный юридический анализ тендеров: извлечение текста, классификация и анализ рисков.
     """
     tender_ids = data.get('tender_ids', [])
+    print(f"📥 AI Batch Analyze request for {len(tender_ids)} tenders.")
     logger.info(f"AI Batch Analyze request for {len(tender_ids)} tenders.")
     
     results = []
@@ -605,6 +641,8 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "tasks": [{"id": "1", "title": "Запустить парсер", "time": "Сейчас", "type": "info"}],
         "is_demo": False
     }
+
+print("✅ backend/main.py finished loading!")
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)
