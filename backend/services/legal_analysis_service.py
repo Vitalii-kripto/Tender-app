@@ -6,7 +6,7 @@ import os
 from typing import List, Dict, Any
 from google import genai
 from google.genai import types
-from .legal_prompts import PROMPT_CONTRACT, PROMPT_OTHER_DOCS
+from .legal_prompts import PROMPT_CONTRACT, PROMPT_OTHER_DOCS, PROMPT_FULL_PACKAGE
 
 logger = logging.getLogger("LegalAnalysisService")
 
@@ -299,7 +299,7 @@ class LegalAnalysisService:
                 "source_document": source_document[:200],
                 "source_reference": source_reference[:200],
                 "legal_basis": legal_basis[:1000] if legal_basis else "",
-                "doc_group": "contract" if group_name == "contract" else "other"
+                "doc_group": group_name
             }
             
             valid_rows.append(valid_row)
@@ -342,7 +342,20 @@ class LegalAnalysisService:
         existing_blocks = " ".join([r.get('block', '').lower() for r in rows])
         added_rows = []
         
-        if doc_group == "contract":
+        if doc_group == "full":
+            topics = [
+                ("оплата", "Оплата", "срок оплаты"),
+                ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
+                ("аванс", "Оплата", "условие об авансе"),
+                ("эдо", "Оплата", "условие об ЭДО"),
+                ("казначейск", "Оплата", "условие о казначейском сопровождении"),
+                ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
+                ("приемк", "Документы при поставке", "документы о приемке"),
+                ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
+                ("национальный режим", "Реестры/ограничения", "применение национального режима"),
+                ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
+            ]
+        elif doc_group == "contract":
             topics = [
                 ("оплата", "Оплата", "срок оплаты"),
                 ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
@@ -391,65 +404,31 @@ class LegalAnalysisService:
             }
         
         update_stage("Классификация", 30)
-        classified = self.classify_documents(files)
-        group1 = classified['group1']
-        group2 = classified['group2']
-        uncertain_files = classified.get('uncertain_files', [])
+        # Собираем все документы в один контекст
+        all_text = ""
+        for f in files:
+            all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
         
-        all_rows = []
-        all_notes = classified.get('classification_notes', [])
+        update_stage("Анализ документации", 60)
+        chunked_text = self._chunk_text(all_text)
         
-        # 1. Анализ контракта
-        if group1:
-            update_stage("Анализ договора", 50)
-            combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group1])
-            chunked_text = self._chunk_text(combined_text)
-            
-            assembled_prompt = self._assemble_prompt(PROMPT_CONTRACT, chunked_text, "contract")
-            if not assembled_prompt:
-                res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа договора."]}
-            else:
-                res = self._call_ai_with_retry(assembled_prompt, prompt_type="contract")
-            
-            rows = res.get('rows', [])
-            logger.info(f"Rows before validation (contract): {len(rows)}")
-            rows = self._validate_and_filter_rows(rows, "contract")
-            logger.info(f"Rows after validation (contract): {len(rows)}")
-            rows += self._add_missing_critical_topics(rows, "contract")
-            logger.info(f"Rows after adding critical topics (contract): {len(rows)}")
-            all_rows.extend(rows)
-            all_notes.extend(res.get('summary_notes', []))
+        # Используем новый промпт для всего пакета
+        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
+        if not assembled_prompt:
+            res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
         else:
-            update_stage("Анализ договора (пропущено)", 50, "skipped")
-            all_notes.append("Проект договора/контракта среди обработанных файлов не найден.")
-            # Если контракта нет, все равно добавляем "не найдено" для критических тем контракта
-            all_rows += self._add_missing_critical_topics([], "contract")
-
-        # 2. Анализ прочей документации
-        if group2:
-            update_stage("Анализ остальной документации", 80)
-            combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group2])
-            chunked_text = self._chunk_text(combined_text)
-            
-            assembled_prompt = self._assemble_prompt(PROMPT_OTHER_DOCS, chunked_text, "other")
-            if not assembled_prompt:
-                res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа прочей документации."]}
-            else:
-                res = self._call_ai_with_retry(assembled_prompt, prompt_type="other")
-            
-            rows = res.get('rows', [])
-            logger.info(f"Rows before validation (other): {len(rows)}")
-            rows = self._validate_and_filter_rows(rows, "other")
-            logger.info(f"Rows after validation (other): {len(rows)}")
-            rows += self._add_missing_critical_topics(rows, "other")
-            logger.info(f"Rows after adding critical topics (other): {len(rows)}")
-            all_rows.extend(rows)
-            all_notes.extend(res.get('summary_notes', []))
-        else:
-            update_stage("Анализ остальной документации (пропущено)", 80, "skipped")
-            all_notes.append("Иная закупочная документация среди обработанных файлов не найдена.")
-            all_rows += self._add_missing_critical_topics([], "other")
-
+            res = self._call_ai_with_retry(assembled_prompt, prompt_type="full")
+        
+        rows = res.get('rows', [])
+        logger.info(f"Rows before validation (full): {len(rows)}")
+        rows = self._validate_and_filter_rows(rows, "full")
+        logger.info(f"Rows after validation (full): {len(rows)}")
+        rows += self._add_missing_critical_topics(rows, "full")
+        logger.info(f"Rows after adding critical topics (full): {len(rows)}")
+        
+        all_rows = rows
+        all_notes = res.get('summary_notes', [])
+        
         update_stage("Формирование отчета", 95)
         
         # Пост-обработка
