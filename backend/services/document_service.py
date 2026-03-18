@@ -50,16 +50,29 @@ class DocumentService:
             await out_file.write(content)
         return file_path
 
-    def extract_text_from_pdf(self, file_path: str) -> str:
+    def extract_text(self, file_path: str) -> str:
         """
         Умное извлечение текста с защитой от сбоев.
-        1. Сначала пробуем быстрый pypdf (текстовый слой).
-        2. Если текста мало (<50 символов), пробуем OCR, но безопасно.
+        Поддерживает PDF и DOCX.
         """
         full_text = ""
         logger.info(f"Extracting text from: {file_path}")
         
-        # Шаг 1: Быстрое чтение (текстовый слой)
+        if file_path.lower().endswith('.docx'):
+            try:
+                import docx
+                doc = docx.Document(file_path)
+                full_text = "\n".join([para.text for para in doc.paragraphs])
+                logger.info(f"DOCX extracted {len(full_text)} characters.")
+                return full_text
+            except ImportError:
+                logger.warning("python-docx is not installed. Cannot read DOCX.")
+                return "[SYSTEM INFO] python-docx не установлен."
+            except Exception as e:
+                logger.error(f"DOCX Error: {e}")
+                return f"[DOCX ERROR] Не удалось прочитать файл: {str(e)}"
+        
+        # Шаг 1: Быстрое чтение (текстовый слой) для PDF
         try:
             reader = PdfReader(file_path)
             text_pages = []

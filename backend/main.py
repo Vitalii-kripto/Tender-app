@@ -1,22 +1,6 @@
-import os
-import sys
-
-# Redirect stdout and stderr to a file for debugging
-log_file_path = os.path.join(os.getcwd(), "backend_stdout_stderr.log")
-with open(log_file_path, "a", encoding="utf-8") as f:
-    f.write("🚀 backend/main.py is starting (pre-import)!\n")
-
 import uvicorn
 import asyncio
 import sys
-import os
-
-# Redirect stdout and stderr to a file for debugging
-log_file_path = os.path.join(os.getcwd(), "backend_stdout_stderr.log")
-sys.stdout = open(log_file_path, "w", encoding="utf-8", buffering=1)
-sys.stderr = sys.stdout
-
-print("🚀 backend/main.py is starting!")
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
 
 if sys.platform == 'win32':
@@ -29,10 +13,12 @@ import logging
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
-from .services.eis_service import EisService, Notice, mark_seen, csv_append_row
+from .services.eis_service import EisService, Notice, mark_seen, csv_append_row, OUT_DIR
 from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
+from .services.legal_analysis_service import LegalAnalysisService
+from .services.batch_analysis import analyze_tenders_batch
 
 # --- LOGGING SETUP ---
 log_file = "fastapi_app_log.txt"
@@ -95,21 +81,6 @@ except Exception as e:
 
 app = FastAPI(title="TenderSmart Gidroizol API", version="2.0.0")
 
-@app.get("/api/health")
-async def health_check():
-    return {"status": "ok", "message": "Backend is running"}
-
-@app.get("/api/test-db")
-async def test_db():
-    try:
-        from .database import SessionLocal
-        db = SessionLocal()
-        db.execute("SELECT 1")
-        db.close()
-        return {"status": "ok", "message": "Database connection successful"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Разрешить все для локальной разработки
@@ -119,19 +90,16 @@ app.add_middleware(
 )
 
 # Services
-logger.info("Initializing Services...")
-api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
-if api_key:
-    masked_key = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "****"
-    logger.info(f"API Key found: {masked_key}")
-else:
-    logger.warning("No API Key found in environment!")
-
-eis_service = EisService()
-parser_service = GidroizolParser()
-doc_service = DocumentService()
-ai_service = AiService()
-logger.info("Services initialized.")
+try:
+    logger.info("Initializing Services...")
+    eis_service = EisService()
+    parser_service = GidroizolParser()
+    doc_service = DocumentService()
+    ai_service = AiService()
+    legal_analysis_service = LegalAnalysisService(ai_service.client)
+    logger.info("Services initialized.")
+except Exception as e:
+    logger.error(f"Service initialization error: {e}", exc_info=True)
 
 # --- ENDPOINTS ---
 
@@ -288,10 +256,10 @@ def search_tenders_endpoint(
         })
     return result
 
-@app.post("/api/crm/batch-add")
-def api_crm_batch_add(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
-    """Добавить тендеры в CRM и запустить скачивание документов"""
-    logger.info(f"CRM Batch Add: {len(tenders)} tenders")
+@app.post("/api/search-tenders/process")
+def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
+    """Обработать выбранные тендеры"""
+    logger.info(f"Processing {len(tenders)} selected tenders")
     try:
         for tender in tenders:
             existing = db.query(TenderModel).filter(TenderModel.id == tender['id']).first()
@@ -425,11 +393,15 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 
 # --- AI & DOCS ENDPOINTS ---
 
-@app.post("/api/ai/analyze-risks")
-async def api_analyze_risks(data: dict = Body(...)):
-    logger.info("AI Analysis request received.")
-    text = data.get('text', '')
-    return ai_service.analyze_legal_risks(text)
+@app.post("/api/ai/analyze-tenders-batch")
+async def api_analyze_tenders_batch(data: dict = Body(...)):
+    logger.info("Batch AI Analysis request received.")
+    tender_ids = data.get('tender_ids', [])
+    if not tender_ids:
+        raise HTTPException(status_code=400, detail="No tender IDs provided")
+    
+    results = analyze_tenders_batch(tender_ids, doc_service, legal_analysis_service)
+    return results
 
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):
@@ -490,143 +462,12 @@ async def upload_file(file: UploadFile = File(...)):
     try:
         file_path = await doc_service.save_file(file)
         # Запускаем OCR или извлечение текста
-        text = doc_service.extract_text_from_pdf(file_path)
+        text = doc_service.extract_text(file_path)
         logger.info("File processed successfully.")
         return {"text": text, "path": file_path}
     except Exception as e:
         logger.error(f"Upload Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/ai/batch-analyze")
-async def api_ai_batch_analyze(data: dict = Body(...), db: Session = Depends(get_db)):
-    """
-    Пакетный юридический анализ тендеров: извлечение текста, классификация и анализ рисков.
-    """
-    tender_ids = data.get('tender_ids', [])
-    print(f"📥 AI Batch Analyze request for {len(tender_ids)} tenders.")
-    logger.info(f"AI Batch Analyze request for {len(tender_ids)} tenders.")
-    
-    results = []
-    
-    # Путь к скачанным документам
-    eis_docs_dir = os.path.join(os.getcwd(), "data", "eis_docs")
-    
-    for t_id in tender_ids:
-        tender = db.query(TenderModel).filter(TenderModel.id == t_id).first()
-        if not tender:
-            logger.warning(f"Tender {t_id} not found in database.")
-            continue
-            
-        tender_result = {
-            "tender_id": t_id,
-            "eis_number": tender.id,
-            "title": tender.title,
-            "description": tender.description,
-            "initial_price": tender.initial_price,
-            "status": "processing",
-            "rows": [],
-            "summary": {
-                "high_risks": 0,
-                "medium_risks": 0,
-                "low_risks": 0,
-                "total_findings": 0,
-                "files_analyzed": 0,
-                "files_status": "No files"
-            }
-        }
-        
-        try:
-            # 1. Поиск файлов
-            reg_dir = os.path.join(eis_docs_dir, t_id)
-            files = []
-            if os.path.exists(reg_dir):
-                files = [os.path.join(reg_dir, f) for f in os.listdir(reg_dir) if os.path.isfile(os.path.join(reg_dir, f))]
-            
-            if not files:
-                tender_result["status"] = "error"
-                tender_result["error_message"] = "Документы не найдены. Сначала скачайте их."
-                tender_result["summary"]["files_status"] = "No files"
-                results.append(tender_result)
-                continue
-                
-            tender_result["summary"]["files_analyzed"] = len(files)
-            tender_result["summary"]["files_status"] = f"Найдено {len(files)} файлов"
-            
-            # 2. Извлечение текста
-            all_docs_text = []
-            for f_path in files:
-                try:
-                    text = doc_service.extract_text_from_pdf(f_path)
-                    if text:
-                        all_docs_text.append({
-                            "filename": os.path.basename(f_path),
-                            "text": text
-                        })
-                except Exception as e:
-                    logger.error(f"Error extracting text from {f_path}: {e}")
-            
-            if not all_docs_text:
-                tender_result["status"] = "error"
-                tender_result["error_message"] = "Не удалось извлечь текст из документов."
-                results.append(tender_result)
-                continue
-                
-            # 3. Классификация документов
-            classified = ai_service.classify_documents(all_docs_text)
-            contract_filenames = [f.lower() for f in classified.get('contract', [])]
-            other_filenames = [f.lower() for f in classified.get('other', [])]
-            
-            # Агрегируем текст с защитой от неточных имен файлов
-            contract_text_parts = []
-            other_text_parts = []
-            
-            for doc in all_docs_text:
-                fname_lower = doc['filename'].lower()
-                if fname_lower in contract_filenames:
-                    contract_text_parts.append(doc['text'])
-                elif fname_lower in other_filenames:
-                    other_text_parts.append(doc['text'])
-                else:
-                    # Если AI не вернул этот файл в списке, но он есть - по умолчанию в "other"
-                    other_text_parts.append(doc['text'])
-            
-            contract_text = "\n\n".join(contract_text_parts)
-            other_text = "\n\n".join(other_text_parts)
-            
-            # 4. Юридический анализ (v2)
-            analysis_rows = ai_service.analyze_legal_v2(contract_text, other_text)
-            
-            # 5. Формирование результата
-            tender_result["rows"] = analysis_rows
-            tender_result["status"] = "completed"
-            
-            # Подсчет статистики
-            high = len([r for r in analysis_rows if r.get('risk_level') == 'high'])
-            medium = len([r for r in analysis_rows if r.get('risk_level') == 'medium'])
-            low = len([r for r in analysis_rows if r.get('risk_level') == 'low'])
-            
-            tender_result["summary"]["high_risks"] = high
-            tender_result["summary"]["medium_risks"] = medium
-            tender_result["summary"]["low_risks"] = low
-            tender_result["summary"]["total_findings"] = len(analysis_rows)
-            
-            # Обновляем уровень риска в БД (для красоты)
-            if high > 0:
-                tender.risk_level = "High"
-            elif medium > 0:
-                tender.risk_level = "Medium"
-            else:
-                tender.risk_level = "Low"
-            db.commit()
-            
-        except Exception as e:
-            logger.error(f"Error processing tender {t_id}: {e}", exc_info=True)
-            tender_result["status"] = "error"
-            tender_result["error_message"] = str(e)
-            
-        results.append(tender_result)
-        
-    return results
 
 @app.get("/api/dashboard-stats")
 async def get_dashboard_stats(db: Session = Depends(get_db)):
@@ -641,8 +482,6 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "tasks": [{"id": "1", "title": "Запустить парсер", "time": "Сейчас", "type": "info"}],
         "is_demo": False
     }
-
-print("✅ backend/main.py finished loading!")
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

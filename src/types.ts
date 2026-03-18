@@ -54,29 +54,32 @@ export interface LegalRisk {
 export interface LegalAnalysisRow {
   block: string;
   finding: string;
-  risk_level: 'high' | 'medium' | 'low';
+  risk_level: 'High' | 'Medium' | 'Low';
   supplier_action: string;
   source_document: string;
   source_reference: string;
   legal_basis?: string;
+  doc_group?: 'contract' | 'other';
 }
 
-export interface TenderLegalResult {
-  tender_id: string;
-  eis_number: string;
-  title: string;
-  description: string;
-  initial_price: string;
-  status: 'preparing' | 'extracting' | 'classifying' | 'analyzing_contract' | 'analyzing_docs' | 'generating_report' | 'ready' | 'error';
-  error_message?: string;
-  summary: {
-    high_risks: number;
-    medium_risks: number;
-    low_risks: number;
-    contract_found: boolean;
-    unread_files: number;
-  };
+export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupported_format' | 'empty_file' | 'extract_error' | 'ok';
+
+export interface LegalAnalysisResult {
+  id: string;
+  status: 'success' | 'error' | 'partial';
+  summary_notes: string[];
   rows: LegalAnalysisRow[];
+  has_contract: boolean;
+  file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
+  docText?: string;
+  showDoc?: boolean;
+}
+
+export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';
+
+export interface AnalysisStageStatus {
+  stage: AnalysisStage;
+  status: 'pending' | 'loading' | 'done' | 'error';
 }
 
 export interface AnalysisResult {

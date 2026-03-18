@@ -24,264 +24,16 @@ class AiService:
     """
     Сервис для работы с Google Gemini API.
     Выполняет анализ рисков, подбор аналогов и проверку соответствия.
-    Используется стабильная модель gemini-3-flash-preview.
+    Используется стабильная модель gemini-2.5-flash.
     """
     def __init__(self):
-        print("🤖 Initializing AiService...")
-        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("API_KEY")
+        self.api_key = os.getenv("API_KEY")
         if not self.api_key:
-            logger.warning("GEMINI_API_KEY not found in environment variables.")
+            logger.warning("API_KEY not found in environment variables.")
             self.client = None
         else:
-            try:
-                self.client = genai.Client(api_key=self.api_key)
-                logger.info("Gemini Client initialized.")
-            except Exception as e:
-                logger.error(f"Failed to initialize Gemini Client: {e}")
-                self.client = None
-
-    def classify_documents(self, docs: list):
-        """
-        Классифицирует документы на 'contract' и 'other'.
-        docs: list of dicts {"filename": str, "text": str}
-        """
-        print(f"🤖 AI Classifying {len(docs)} documents...")
-        if not self.client:
-            return {"contract": [], "other": [d['filename'] for d in docs]}
-            
-        filenames = [d['filename'] for d in docs]
-        logger.info(f"Classifying documents: {filenames}")
-        
-        prompt = f"""
-        Роль: Юрист по тендерам.
-        Задача: Раздели список файлов на две группы по их названиям и смыслу (если понятно из названия):
-        1. "contract": проекты контрактов, договоров и приложения к ним (спецификации, ТЗ к контракту, графики).
-        2. "other": вся остальная закупочная документация (извещение, требования к участнику, критерии оценки, инструкции, обоснование цены).
-        
-        ВАЖНО: Используй только те имена файлов, которые даны в списке ниже. Не меняй их и не придумывай новые.
-        
-        СПИСОК ФАЙЛОВ:
-        {json.dumps(filenames, ensure_ascii=False)}
-        
-        ВЕРНИ ТОЛЬКО JSON:
-        {{ "contract": ["имя_файла1", ...], "other": ["имя_файла2", ...] }}
-        """
-        try:
-            response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json"
-                )
-            )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
-        except Exception as e:
-            logger.error(f"Classification Error: {e}")
-            return {"contract": [], "other": filenames}
-
-    def analyze_legal_v2(self, contract_text: str = "", other_text: str = ""):
-        """Выполняет юридический анализ по двум промтам"""
-        if not self.client:
-            return []
-
-        results = []
-        
-        # Промпт №1: Контракт
-        if contract_text:
-            logger.info("Running Prompt #1 (Contract)")
-            prompt1 = f"""
-            Ты — юрист по тендерному праву, работающий в интересах Поставщика материалов. Проанализируй только проект контракта/договора и приложения к нему. Используй только текст переданных документов и применимые нормы закона. Ничего не додумывай. Не добавляй требования и документы, которых нет в документации.
-
-            Задача: вернуть только самые важные условия для поставщика в виде JSON-массива строк одной таблицы.
-
-            Проверь и извлеки только следующие блоки:
-            1. Поставка и приемка:
-            - сроки поставки;
-            - порядок поставки;
-            - объемы;
-            - комплектность;
-            - упаковка;
-            - маркировка;
-            - порядок приемки по количеству и качеству;
-            - сроки приемки;
-            - обязательные документы при поставке;
-            - кто выполняет разгрузку;
-            - за чей счет выполняется разгрузка.
-            2. Оплата:
-            - срок оплаты;
-            - порядок расчетов;
-            - есть ли аванс;
-            - есть ли ЭДО;
-            - есть ли казначейское сопровождение;
-            - есть ли условия, влияющие на дату оплаты.
-            3. Ответственность:
-            - штрафы;
-            - пени;
-            - убытки;
-            - ответственность поставщика;
-            - ответственность заказчика.
-            4. Односторонний отказ:
-            - основания;
-            - порядок;
-            - рисковые формулировки.
-            5. Иные явно рисковые условия договора, которые прямо влияют на поставщика.
-
-            Если по критически важным вопросам информации нет, верни отдельную строку с пометкой «не указано в просмотренных документах» только для:
-            - разгрузки;
-            - аванса;
-            - срока оплаты;
-            - ЭДО;
-            - казначейского сопровождения;
-            - одностороннего отказа.
-
-            Формат ответа:
-            верни только JSON без markdown и без пояснений.
-
-            Структура каждой строки:
-            {{
-              "block": "Поставка и приемка | Оплата | Ответственность | Односторонний отказ | Документы при поставке | Спорные условия",
-              "finding": "кратко, по сути, что найдено",
-              "risk_level": "high | medium | low",
-              "supplier_action": "только действие, прямо следующее из документации или закона",
-              "source_document": "имя файла",
-              "source_reference": "пункт / раздел / фрагмент",
-              "legal_basis": "если прямо применимо, кратко"
-            }}
-
-            Обязательные правила:
-            - каждая строка должна содержать source_document и source_reference;
-            - не пиши общих рассуждений;
-            - не пиши советы приложить документы, если они прямо не указаны;
-            - не объединяй разные условия в одну длинную строку;
-            - если условие явно выгодно или нейтрально, тоже можно вернуть строку с low risk;
-            - если в тексте есть противоречие или двусмысленность, обязательно отрази это как риск.
-
-            ТЕКСТ ДОКУМЕНТОВ:
-            {contract_text[:100000]}
-            """
-            try:
-                resp1 = self.client.models.generate_content(
-                    model='gemini-3-flash-preview',
-                    contents=prompt1,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                )
-                text = resp1.text
-                # Очистка от markdown если он есть
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0].strip()
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0].strip()
-                
-                results.extend(json.loads(text))
-            except Exception as e:
-                logger.error(f"Prompt 1 Error: {e}")
-
-        # Промпт №2: Остальная документация
-        if other_text:
-            logger.info("Running Prompt #2 (Other Docs)")
-            prompt2 = f"""
-            Ты — юрист по тендерному праву, работающий в интересах Поставщика материалов. Проанализируй только остальную закупочную документацию, кроме проекта контракта/договора и приложений к нему. Используй только текст переданных документов и применимые нормы закона. Ничего не додумывай. Не добавляй требования и документы, которых нет в документации.
-
-            Задача: вернуть только самые важные для поставщика выводы в виде JSON-массива строк одной таблицы.
-
-            Проверь и извлеки только следующие блоки:
-            1. Документы заявки:
-            - какие документы прямо и недвусмысленно входят в состав заявки.
-            2. Недопуск и оценка:
-            - требования к участнику;
-            - требования к заявке;
-            - основания отклонения;
-            - критерии оценки;
-            - условия, из-за которых можно потерять баллы.
-            3. Реестры и ограничения:
-            - запреты;
-            - ограничения;
-            - условия допуска;
-            - преференции;
-            - требования к реестрам РФ/ЕАЭС;
-            - обязательность реестрового номера.
-            4. Спорные условия:
-            - скрытые;
-            - двусмысленные;
-            - противоречивые;
-            - рисковые формулировки.
-            5. Иные существенные условия, прямо влияющие на допуск и результат участия.
-
-            Если по критически важным вопросам информации нет, верни отдельную строку с пометкой «не выявлено в просмотренных документах» только для:
-            - реестровых требований;
-            - ограничений/запретов/условий допуска;
-            - обязательности реестрового номера.
-
-            Формат ответа:
-            верни только JSON без markdown и без пояснений.
-
-            Структура каждой строки:
-            {{
-              "block": "Документы заявки | Недопуск/оценка | Реестры/ограничения | Спорные условия",
-              "finding": "кратко, по сути, что найдено",
-              "risk_level": "high | medium | low",
-              "supplier_action": "только действие, прямо следующее из документации или закона",
-              "source_document": "имя файла",
-              "source_reference": "пункт / раздел / фрагмент",
-              "legal_basis": "если прямо применимо, кратко"
-            }}
-
-            Обязательные правила:
-            - возвращай только те документы заявки, которые прямо перечислены в документации;
-            - не строй состав заявки по предположению;
-            - каждая строка должна содержать source_document и source_reference;
-            - не пиши общих рассуждений;
-            - если в документации есть противоречие или неясность, обязательно отражай это;
-            - не добавляй требований, которых нет в тексте;
-            - если условие нейтральное, допускается строка с low risk.
-
-            ТЕКСТ ДОКУМЕНТОВ:
-            {other_text[:100000]}
-            """
-            try:
-                resp2 = self.client.models.generate_content(
-                    model='gemini-3-flash-preview',
-                    contents=prompt2,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                )
-                text = resp2.text
-                # Очистка от markdown если он есть
-                if "```json" in text:
-                    text = text.split("```json")[1].split("```")[0].strip()
-                elif "```" in text:
-                    text = text.split("```")[1].split("```")[0].strip()
-                
-                results.extend(json.loads(text))
-            except Exception as e:
-                logger.error(f"Prompt 2 Error: {e}")
-
-        # Нормализация и дедупликация
-        unique_results = []
-        seen = set()
-        for r in results:
-            # Валидация: отбрасываем без источника
-            if not r.get('source_document') or not r.get('source_reference'):
-                continue
-                
-            key = (r.get('block'), r.get('finding'))
-            if key not in seen:
-                seen.add(key)
-                # Нормализация уровня риска
-                r['risk_level'] = r.get('risk_level', 'low').lower()
-                if r['risk_level'] not in ['high', 'medium', 'low']:
-                    r['risk_level'] = 'low'
-                unique_results.append(r)
-        
-        # Сортировка по приоритету
-        priority = {'high': 0, 'medium': 1, 'low': 2}
-        unique_results.sort(key=lambda x: priority.get(x['risk_level'], 2))
-        
-        return unique_results
+            self.client = genai.Client(api_key=self.api_key)
+            logger.info("Gemini Client initialized.")
 
     def find_product_equivalent(self, tender_specs: str, catalog: list):
         if not self.client:
@@ -311,18 +63,13 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
+            return json.loads(response.text)
         except Exception as e:
             logger.error(f"AI Error (find_product_equivalent): {e}", exc_info=True)
             return []
@@ -355,7 +102,7 @@ class AiService:
         try:
             # Используем Google Search Tool
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -392,7 +139,7 @@ class AiService:
         
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -434,18 +181,13 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
+            return json.loads(response.text)
         except Exception as e:
             logger.error(f"Extraction Error: {e}", exc_info=True)
             return []
@@ -497,17 +239,14 @@ class AiService:
         """
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
                     response_mime_type="application/json"
                 )
             )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            return json.loads(text)
+            return json.loads(response.text)
         except Exception as e:
             logger.error(f"Comparison Error: {e}", exc_info=True)
             return {"score": 0, "summary": f"Error: {e}", "items": []}
@@ -528,18 +267,13 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
+            return json.loads(response.text)
         except Exception as e:
             logger.error(f"Compliance Check Error: {e}", exc_info=True)
             return {"overallStatus": "failed", "summary": str(e)}
@@ -575,18 +309,13 @@ class AiService:
 
         try:
             response = self.client.models.generate_content(
-                model='gemini-3-flash-preview',
+                model='gemini-2.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
                 )
             )
-            text = response.text
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0].strip()
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0].strip()
-            return json.loads(text)
+            return json.loads(response.text)
         except Exception as e:
-            logger.error(f"Extraction Error (details): {e}", exc_info=True)
+            logger.error(f"Extraction Error: {e}", exc_info=True)
             return {}

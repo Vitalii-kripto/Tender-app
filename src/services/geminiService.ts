@@ -1,4 +1,4 @@
-import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceResult, Employee, CompanyProfile } from "../types";
+import { Product, AnalysisResult, Tender, DashboardStats, ComplianceResult, Employee, CompanyProfile, LegalAnalysisResult } from "../types";
 
 // =========================================================================================
 // КОНФИГУРАЦИЯ
@@ -8,7 +8,7 @@ import { Product, AnalysisResult, LegalRisk, Tender, DashboardStats, ComplianceR
 // Если false - пытается подключиться к API (localhost:8000).
 const IS_DEMO_MODE = false; 
 
-export const API_BASE_URL = ''; 
+export const API_BASE_URL = 'http://localhost:8000'; 
 
 const LOCAL_STORAGE_KEY_CRM = 'TENDER_SMART_CRM_DATA';
 const LOCAL_STORAGE_KEY_PRODUCTS = 'TENDER_SMART_PRODUCTS_DATA';
@@ -310,7 +310,7 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
         return;
     }
     try {
-        const response = await fetch(`${API_BASE_URL}/api/crm/batch-add`, {
+        const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(tenders)
@@ -318,25 +318,6 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
         if (!response.ok) throw new Error("Server error");
     } catch (error) {
         console.error("Failed to process tenders", error);
-    }
-};
-
-export const processTendersBatch = async (tenderIds: string[]): Promise<any[]> => {
-    if (IS_DEMO_MODE) {
-        await delay(2000);
-        return [];
-    }
-    try {
-        const response = await fetch(`${API_BASE_URL}/api/ai/batch-analyze`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tender_ids: tenderIds })
-        });
-        if (!response.ok) throw new Error("Server error");
-        return await response.json();
-    } catch (error) {
-        console.error("Failed to process tenders batch", error);
-        throw error;
     }
 };
 
@@ -435,34 +416,29 @@ export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string):
 
 // --- AI CALLS (VIA BACKEND) ---
 
-export const analyzeLegalRisks = async (tenderText: string): Promise<LegalRisk[]> => {
-    const demoRisks: LegalRisk[] = [
-        {
-            document: "Проект контракта (п. 4.2)",
-            requirement: "Срок поставки: 2 дня с момента заявки",
-            deadline: "2 дня",
-            risk_level: "High",
-            description: "Критически малый срок поставки. Высокий риск не успеть с логистикой."
-        }
-    ];
-
-    if (IS_DEMO_MODE) {
-        await delay(2000);
-        return demoRisks;
-    }
-
+export const analyzeTendersBatch = async (tenderIds: string[]): Promise<LegalAnalysisResult[]> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/ai/analyze-risks`, {
+        const response = await fetch(`${API_BASE_URL}/api/ai/analyze-tenders-batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: tenderText })
+            body: JSON.stringify({ tender_ids: tenderIds })
         });
         if(!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
-        return demoRisks;
+        console.error("Error analyzing tenders batch:", e);
+        return tenderIds.map(id => ({
+            id,
+            status: "error",
+            summary_notes: ["Ошибка связи с сервером"],
+            rows: [],
+            has_contract: false,
+            file_statuses: []
+        }));
     }
 };
+
+
 
 export const findProductEquivalent = async (tenderSpecs: string): Promise<any> => {
     const demoMatch = {
