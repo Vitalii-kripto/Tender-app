@@ -571,9 +571,13 @@ const Analysis = () => {
                                             {result.has_contract ? <CheckCircle size={14}/> : <AlertTriangle size={14}/>}
                                             Проект договора {result.has_contract ? 'найден' : 'не найден'}
                                         </span>
-                                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shadow-sm">
+                                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 shadow-sm">
                                             <FileText size={14}/>
-                                            Файлов: {result.selected_files_count !== undefined ? result.selected_files_count : result.file_statuses.length} выбрано / {result.file_statuses.filter(f => f.status === 'ok').length} ОК / {result.file_statuses.filter(f => f.status !== 'ok').length} ОШИБКИ
+                                            Файлов выбрано пользователем: {result.selected_files_count !== undefined ? result.selected_files_count : result.file_statuses.length}
+                                        </span>
+                                        <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shadow-sm">
+                                            <Shield size={14}/>
+                                            Успешно: {result.file_statuses.filter(f => f.status === 'ok').length} / Ошибок: {result.file_statuses.filter(f => f.status !== 'ok').length}
                                         </span>
                                     </div>
                                 </div>

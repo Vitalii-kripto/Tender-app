@@ -263,7 +263,6 @@ class LegalAnalysisService:
             if callback:
                 callback(stage, progress, status)
 
-        update_stage("Подготовка документов", 10)
         if not files:
             return {
                 "rows": [],
@@ -272,9 +271,6 @@ class LegalAnalysisService:
                 "stage": "Ошибка",
                 "progress": 100
             }
-
-        update_stage("Извлечение текста", 20)
-        # Текст уже извлечен в files (предполагаем)
         
         update_stage("Классификация", 30)
         classified = self.classify_documents(files)

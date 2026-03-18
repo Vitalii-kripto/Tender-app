@@ -16,6 +16,8 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
         logger.info(f"Starting analysis for tender {tid} in job {job_id}")
         tender_dir = os.path.join(OUT_DIR, tid)
         
+        job_service.update_tender_stage(job_id, tid, "Подготовка документов", 10)
+        
         # 1. Проверка выбора файлов
         if tid not in selected_files or not selected_files[tid]:
             logger.warning(f"No files selected for tender {tid}")
@@ -57,9 +59,22 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 target_files.append(f)
             else:
                 missing_files.append(f)
+                file_statuses.append({"filename": f, "status": "file_not_read", "message": "Файл не найден на диске"})
         
         if missing_files:
             logger.warning(f"Some selected files are missing for {tid}: {missing_files}")
+
+        if not target_files:
+            logger.warning(f"No valid files remaining after filtering for tender {tid}")
+            job_service.complete_tender(job_id, tid, {
+                "status": "error",
+                "summary_notes": [f"Ошибка: ни один из выбранных файлов не найден на диске. Пропущенные файлы: {', '.join(missing_files)}"],
+                "rows": [],
+                "has_contract": False,
+                "file_statuses": file_statuses,
+                "selected_files_count": selected_count
+            })
+            continue
 
         job_service.update_tender_stage(job_id, tid, "Извлечение текста", 20)
 
