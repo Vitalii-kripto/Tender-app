@@ -18,6 +18,8 @@ const Analysis = () => {
   // Batch analysis state
   const [crmTenders, setCrmTenders] = useState<Tender[]>([]);
   const [selectedTenderIds, setSelectedTenderIds] = useState<Set<string>>(new Set());
+  const [tenderFiles, setTenderFiles] = useState<Record<string, any[]>>({});
+  const [selectedFiles, setSelectedFiles] = useState<Record<string, Set<string>>>({});
   const [batchResults, setBatchResults] = useState<Record<string, LegalAnalysisResult>>({});
   const [analysisError, setAnalysisError] = useState('');
 
@@ -27,6 +29,19 @@ const Analysis = () => {
             const tenders = await getTendersFromBackend();
             setCrmTenders(tenders);
             if (tenders.length > 0) setActiveTab('batch');
+            
+            // Fetch files for all tenders
+            tenders.forEach(async (t) => {
+                try {
+                    const response = await fetch(`/api/tenders/${t.id}/files`);
+                    const files = await response.json();
+                    setTenderFiles(prev => ({ ...prev, [t.id]: files }));
+                    // Select all by default
+                    setSelectedFiles(prev => ({ ...prev, [t.id]: new Set(files.map((f: any) => f.name)) }));
+                } catch (e) {
+                    console.error(`Failed to load files for tender ${t.id}`, e);
+                }
+            });
         } catch (e) {
             console.error("Failed to load analysis tenders", e);
         }
@@ -62,7 +77,16 @@ const Analysis = () => {
     
     try {
         const idsArray = Array.from(selectedTenderIds);
-        const results = await analyzeTendersBatch(idsArray);
+        
+        // Prepare selected files mapping
+        const filesMapping: Record<string, string[]> = {};
+        idsArray.forEach(id => {
+            if (selectedFiles[id]) {
+                filesMapping[id] = Array.from(selectedFiles[id]);
+            }
+        });
+
+        const results = await analyzeTendersBatch(idsArray, filesMapping);
         
         const newResults: Record<string, LegalAnalysisResult> = { ...batchResults };
         results.forEach(res => {
@@ -114,6 +138,51 @@ const Analysis = () => {
       if (loading) return;
       setSelectedTenderIds(new Set());
       setAnalysisError('');
+  };
+
+  const toggleFileSelection = (tenderId: string, fileName: string) => {
+    if (loading) return;
+    const newSelected = new Set(selectedFiles[tenderId] || new Set());
+    if (newSelected.has(fileName)) {
+        newSelected.delete(fileName);
+    } else {
+        newSelected.add(fileName);
+    }
+    setSelectedFiles(prev => ({ ...prev, [tenderId]: newSelected }));
+  };
+
+  const selectAllFiles = (tenderId: string) => {
+    if (loading) return;
+    const files = tenderFiles[tenderId] || [];
+    setSelectedFiles(prev => ({ ...prev, [tenderId]: new Set(files.map(f => f.name)) }));
+  };
+
+  const deselectAllFiles = (tenderId: string) => {
+    if (loading) return;
+    setSelectedFiles(prev => ({ ...prev, [tenderId]: new Set() }));
+  };
+
+  const exportToExcel = async (results: LegalAnalysisResult[]) => {
+    try {
+        const response = await fetch('/api/ai/export-risks-excel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ results })
+        });
+        if (!response.ok) throw new Error('Export failed');
+        
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `tender_risks_report_${new Date().toISOString().split('T')[0]}.xlsx`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+    } catch (e) {
+        console.error("Excel export failed", e);
+        alert("Не удалось экспортировать в Excel.");
+    }
   };
 
   const getRecommendedProduct = (id?: string) => MOCK_CATALOG.find(p => p.id === id);
@@ -236,7 +305,37 @@ const Analysis = () => {
                                             <span className="text-xs font-bold text-slate-700">{formatCurrency(tender.initial_price)}</span>
                                         </div>
                                         <h4 className="text-sm font-bold text-slate-800 line-clamp-1 mb-1">{tender.title}</h4>
-                                        <p className="text-xs text-slate-500 line-clamp-2">{tender.description}</p>
+                                        <p className="text-xs text-slate-500 line-clamp-2 mb-2">{tender.description}</p>
+                                        
+                                        {/* File List for Selection */}
+                                        {tenderFiles[tender.id] && tenderFiles[tender.id].length > 0 && (
+                                            <div className="mt-2 pt-2 border-t border-slate-100">
+                                                <div className="flex justify-between items-center mb-1">
+                                                    <span className="text-[10px] font-bold text-slate-400 uppercase">Документы ({tenderFiles[tender.id].length})</span>
+                                                    <div className="flex gap-2">
+                                                        <button onClick={(e) => { e.stopPropagation(); selectAllFiles(tender.id); }} className="text-[10px] text-blue-500 hover:underline">Все</button>
+                                                        <button onClick={(e) => { e.stopPropagation(); deselectAllFiles(tender.id); }} className="text-[10px] text-slate-400 hover:underline">Ничего</button>
+                                                    </div>
+                                                </div>
+                                                <div className="max-h-24 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                                                    {tenderFiles[tender.id].map(file => (
+                                                        <div 
+                                                            key={file.name} 
+                                                            className="flex items-center gap-2 text-[11px] text-slate-600 hover:bg-slate-50 p-0.5 rounded"
+                                                            onClick={(e) => { e.stopPropagation(); toggleFileSelection(tender.id, file.name); }}
+                                                        >
+                                                            {selectedFiles[tender.id]?.has(file.name) ? (
+                                                                <CheckSquare size={12} className="text-blue-500" />
+                                                            ) : (
+                                                                <Square size={12} className="text-slate-300" />
+                                                            )}
+                                                            <span className="truncate flex-1">{file.name}</span>
+                                                            <span className="text-[9px] text-slate-400">{(file.size / 1024).toFixed(0)} KB</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                     <button 
                                         onClick={(e) => { e.stopPropagation(); removeTender(tender.id); }}
@@ -398,6 +497,9 @@ const Analysis = () => {
                                 
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-3 border-t border-slate-100 flex justify-end gap-4">
+                                        <button onClick={() => exportToExcel([result])} className="text-xs text-emerald-600 font-bold hover:underline flex items-center gap-1">
+                                            <FileDown size={14} /> Скачать Excel (.xlsx)
+                                        </button>
                                         <button onClick={() => exportToCSV(result, tender.eis_number)} className="text-xs text-blue-600 font-medium hover:underline flex items-center gap-1">
                                             <FileDown size={14} /> Скачать CSV
                                         </button>

@@ -393,14 +393,35 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 
 # --- AI & DOCS ENDPOINTS ---
 
+@app.get("/api/tenders/{tender_id}/files")
+def get_tender_files(tender_id: str):
+    """Получить список скачанных файлов для тендера"""
+    logger.info(f"Fetching files for tender {tender_id}")
+    tender_dir = os.path.join(OUT_DIR, tender_id)
+    if not os.path.exists(tender_dir):
+        return []
+    
+    files = []
+    for filename in os.listdir(tender_dir):
+        filepath = os.path.join(tender_dir, filename)
+        if os.path.isfile(filepath):
+            files.append({
+                "name": filename,
+                "size": os.path.getsize(filepath),
+                "ext": os.path.splitext(filename)[1].lower()
+            })
+    return files
+
 @app.post("/api/ai/analyze-tenders-batch")
 async def api_analyze_tenders_batch(data: dict = Body(...)):
     logger.info("Batch AI Analysis request received.")
     tender_ids = data.get('tender_ids', [])
+    selected_files = data.get('selected_files', {}) # {tender_id: [filenames]}
+    
     if not tender_ids:
         raise HTTPException(status_code=400, detail="No tender IDs provided")
     
-    results = analyze_tenders_batch(tender_ids, doc_service, legal_analysis_service)
+    results = analyze_tenders_batch(tender_ids, doc_service, legal_analysis_service, selected_files)
     return results
 
 @app.post("/api/ai/extract-details")
@@ -482,6 +503,84 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "tasks": [{"id": "1", "title": "Запустить парсер", "time": "Сейчас", "type": "info"}],
         "is_demo": False
     }
+
+from fastapi.responses import FileResponse
+import tempfile
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+@app.post("/api/ai/export-risks-excel")
+async def api_export_risks_excel(data: dict = Body(...)):
+    """Экспорт результатов анализа рисков в Excel .xlsx"""
+    logger.info("Exporting risk analysis to Excel.")
+    results = data.get('results', [])
+    if not results:
+        raise HTTPException(status_code=400, detail="No results to export")
+
+    try:
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Risk Analysis"
+
+        # Headers
+        headers = ["ID Тендера", "Риск / Условие", "Описание", "Уровень риска", "Рекомендация"]
+        ws.append(headers)
+
+        # Styling headers
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="4F81BD", end_color="4F81BD", fill_type="solid")
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+
+        # Data
+        for tender in results:
+            tid = tender.get('id', 'N/A')
+            rows = tender.get('rows', [])
+            if not rows:
+                ws.append([tid, "Нет данных", "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-"])
+                continue
+
+            for row in rows:
+                risk_level = row.get('risk_level', 'Low')
+                ws.append([
+                    tid,
+                    row.get('risk_name', ''),
+                    row.get('description', ''),
+                    risk_level,
+                    row.get('recommendation', '')
+                ])
+                
+                # Color code risk level
+                last_row = ws.max_row
+                risk_cell = ws.cell(row=last_row, column=4)
+                if risk_level == 'High':
+                    risk_cell.fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                    risk_cell.font = Font(color="9C0006")
+                elif risk_level == 'Medium':
+                    risk_cell.fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+                    risk_cell.font = Font(color="9C6500")
+                elif risk_level == 'Low':
+                    risk_cell.fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+                    risk_cell.font = Font(color="006100")
+
+        # Column widths
+        dims = {}
+        for row in ws.rows:
+            for cell in row:
+                if cell.value:
+                    dims[cell.column_letter] = max((dims.get(cell.column_letter, 0), len(str(cell.value))))
+        for col, value in dims.items():
+            ws.column_dimensions[col].width = min(value + 2, 50) # Max width 50
+
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
+            wb.save(tmp.name)
+            return FileResponse(tmp.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="tender_risks_report.xlsx")
+
+    except Exception as e:
+        logger.error(f"Excel Export Error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=True)

@@ -53,12 +53,14 @@ class DocumentService:
     def extract_text(self, file_path: str) -> str:
         """
         Умное извлечение текста с защитой от сбоев.
-        Поддерживает PDF и DOCX.
+        Поддерживает PDF, DOCX, XLSX.
         """
         full_text = ""
         logger.info(f"Extracting text from: {file_path}")
         
-        if file_path.lower().endswith('.docx'):
+        ext = os.path.splitext(file_path)[1].lower()
+
+        if ext == '.docx':
             try:
                 import docx
                 doc = docx.Document(file_path)
@@ -72,6 +74,61 @@ class DocumentService:
                 logger.error(f"DOCX Error: {e}")
                 return f"[DOCX ERROR] Не удалось прочитать файл: {str(e)}"
         
+        elif ext == '.xlsx':
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                sheets_text = []
+                for sheet in wb.worksheets:
+                    sheet_data = []
+                    for row in sheet.iter_rows(values_only=True):
+                        row_text = "\t".join([str(cell) if cell is not None else "" for cell in row])
+                        if row_text.strip():
+                            sheet_data.append(row_text)
+                    if sheet_data:
+                        sheets_text.append(f"--- Sheet: {sheet.title} ---\n" + "\n".join(sheet_data))
+                full_text = "\n\n".join(sheets_text)
+                logger.info(f"XLSX extracted {len(full_text)} characters.")
+                return full_text
+            except ImportError:
+                logger.warning("openpyxl is not installed. Cannot read XLSX.")
+                return "[SYSTEM INFO] openpyxl не установлен."
+            except Exception as e:
+                logger.error(f"XLSX Error: {e}")
+                return f"[XLSX ERROR] Не удалось прочитать файл: {str(e)}"
+        
+        elif ext == '.xls':
+            try:
+                import xlrd
+                wb = xlrd.open_workbook(file_path)
+                sheets_text = []
+                for sheet in wb.sheets():
+                    sheet_data = []
+                    for row_idx in range(sheet.nrows):
+                        row = sheet.row_values(row_idx)
+                        row_text = "\t".join([str(cell) if cell is not None else "" for cell in row])
+                        if row_text.strip():
+                            sheet_data.append(row_text)
+                    if sheet_data:
+                        sheets_text.append(f"--- Sheet: {sheet.name} ---\n" + "\n".join(sheet_data))
+                full_text = "\n\n".join(sheets_text)
+                logger.info(f"XLS extracted {len(full_text)} characters.")
+                return full_text
+            except ImportError:
+                logger.warning("xlrd is not installed. Cannot read XLS.")
+                return "[SYSTEM INFO] xlrd не установлен."
+            except Exception as e:
+                logger.error(f"XLS Error: {e}")
+                return f"[XLS ERROR] Не удалось прочитать файл: {str(e)}"
+        
+        elif ext == '.doc':
+            logger.info(f"Legacy .doc format detected: {file_path}. Attempting extraction...")
+            return self._extract_text_from_doc(file_path)
+
+        elif ext != '.pdf':
+            logger.warning(f"Unsupported file format: {ext}. Skipping.")
+            return f"[SYSTEM INFO] Формат {ext} не поддерживается."
+
         # Шаг 1: Быстрое чтение (текстовый слой) для PDF
         try:
             reader = PdfReader(file_path)
@@ -101,7 +158,10 @@ class DocumentService:
                     error_str = str(poppler_error).lower()
                     if "poppler" in error_str or "not found" in error_str:
                          logger.error("Poppler not found.")
-                         return f"{full_text}\n\n[SYSTEM INFO] Для распознавания сканов установите Poppler (и добавьте в PATH)."
+                         msg = "Для распознавания сканов (OCR) необходимо установить Poppler."
+                         if platform.system() == "Windows":
+                             msg += " Скачайте Poppler для Windows (например, с GitHub @oschwartz10612), распакуйте и добавьте папку 'bin' в системную переменную PATH."
+                         return f"{full_text}\n\n[SYSTEM INFO] {msg}"
                     raise poppler_error
 
                 ocr_text = []
@@ -112,8 +172,11 @@ class DocumentService:
                         ocr_text.append(f"--- Page {i+1} ---\n{text}")
                     except Exception as tess_err:
                         logger.error(f"Tesseract Error on page {i}: {tess_err}")
-                        if "tesseract is not installed" in str(tess_err).lower():
-                             return f"{full_text}\n\n[SYSTEM INFO] Tesseract OCR не найден. Установите его для распознавания сканов."
+                        if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
+                             msg = "Tesseract OCR не найден."
+                             if platform.system() == "Windows":
+                                 msg += " Установите Tesseract OCR (например, от UB Mannheim) и убедитесь, что он находится в C:\\Program Files\\Tesseract-OCR или добавлен в PATH."
+                             return f"{full_text}\n\n[SYSTEM INFO] {msg}"
                 
                 if ocr_text:
                     full_text = "\n".join(ocr_text)
@@ -127,3 +190,49 @@ class DocumentService:
                 return f"{full_text}\n\n[OCR ERROR] Не удалось выполнить распознавание: {str(e)}"
 
         return full_text
+
+    def _extract_text_from_doc(self, file_path: str) -> str:
+        """
+        Извлечение текста из старого формата .doc.
+        Использует textract или striprtf (если это RTF).
+        """
+        # 1. Попытка через textract
+        try:
+            import textract
+            text = textract.process(file_path).decode('utf-8')
+            if text.strip():
+                logger.info(f"Textract extracted {len(text)} characters from .doc")
+                return text
+        except Exception as e:
+            logger.warning(f"Textract failed for .doc: {e}. Trying fallback...")
+
+        # 2. Попытка через striprtf (некоторые .doc - это на самом деле RTF)
+        try:
+            from striprtf.striprtf import rtf_to_text
+            with open(file_path, 'r', errors='ignore') as f:
+                content = f.read()
+                if "{\\rtf" in content:
+                    text = rtf_to_text(content)
+                    if text.strip():
+                        logger.info(f"Striprtf extracted {len(text)} characters from .doc (RTF)")
+                        return text
+        except Exception as e:
+            logger.warning(f"Striprtf failed for .doc: {e}")
+
+        # 3. Попытка через системную команду antiword (если установлена)
+        try:
+            import subprocess
+            result = subprocess.run(['antiword', file_path], capture_output=True, text=True)
+            if result.returncode == 0 and result.stdout.strip():
+                logger.info(f"Antiword extracted {len(result.stdout)} characters from .doc")
+                return result.stdout
+        except Exception as e:
+            logger.warning(f"Antiword command failed: {e}")
+
+        msg = "Не удалось извлечь текст из .doc файла."
+        if platform.system() == "Windows":
+            msg += " Для поддержки .doc на Windows установите утилиту Antiword и добавьте её в PATH, либо пересохраните файл в .docx."
+        else:
+            msg += " Установите пакет antiword (sudo apt install antiword)."
+            
+        return f"[SYSTEM INFO] {msg}"

@@ -416,12 +416,15 @@ export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string):
 
 // --- AI CALLS (VIA BACKEND) ---
 
-export const analyzeTendersBatch = async (tenderIds: string[]): Promise<LegalAnalysisResult[]> => {
+export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: Record<string, string[]>): Promise<LegalAnalysisResult[]> => {
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/analyze-tenders-batch`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ tender_ids: tenderIds })
+            body: JSON.stringify({ 
+                tender_ids: tenderIds,
+                selected_files: selectedFiles || {}
+            })
         });
         if(!response.ok) throw new Error("Backend error");
         return await response.json();

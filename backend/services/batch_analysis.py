@@ -8,8 +8,9 @@ from .eis_service import OUT_DIR
 
 logger = logging.getLogger("BatchAnalysis")
 
-def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, legal_service: LegalAnalysisService) -> List[Dict[str, Any]]:
+def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, legal_service: LegalAnalysisService, selected_files: Dict[str, List[str]] = None) -> List[Dict[str, Any]]:
     results = []
+    selected_files = selected_files or {}
     
     for tid in tender_ids:
         logger.info(f"Starting analysis for tender {tid}")
@@ -30,7 +31,13 @@ def analyze_tenders_batch(tender_ids: List[str], doc_service: DocumentService, l
         files_data = []
         file_statuses = []
         
-        for filename in os.listdir(tender_dir):
+        # Get list of files to process
+        target_files = os.listdir(tender_dir)
+        if tid in selected_files and selected_files[tid]:
+            target_files = [f for f in target_files if f in selected_files[tid]]
+            logger.info(f"Filtering files for {tid}: {len(target_files)} selected out of {len(os.listdir(tender_dir))}")
+
+        for filename in target_files:
             filepath = os.path.join(tender_dir, filename)
             if not os.path.isfile(filepath):
                 continue
