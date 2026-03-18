@@ -401,7 +401,7 @@ class EisService:
                 except Exception as browser_err:
                     err_msg = str(browser_err)
                     if "playwright install" in err_msg.lower() or "executable doesn't exist" in err_msg.lower():
-                        raise RuntimeError("Playwright browser not installed. Run 'npx playwright install chromium'.")
+                        raise RuntimeError("Браузер Playwright не найден. Пожалуйста, выполните команду в терминале: .venv\\Scripts\\python.exe -m playwright install chromium")
                     raise browser_err
                 
                 try:
@@ -817,7 +817,7 @@ class EisService:
                 except Exception as browser_err:
                     err_msg = str(browser_err)
                     if "playwright install" in err_msg.lower() or "executable doesn't exist" in err_msg.lower():
-                        raise RuntimeError("Playwright browser not installed. Run 'npx playwright install chromium'.")
+                        raise RuntimeError("Браузер Playwright не найден. Пожалуйста, выполните команду в терминале: .venv\\Scripts\\python.exe -m playwright install chromium")
                     raise browser_err
                 
                 try:
@@ -904,4 +904,4 @@ class EisService:
 
         except Exception as global_err:
             logger.error(f"Playwright Global Error: {global_err}", exc_info=True)
-            return []
+            raise global_err
