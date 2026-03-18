@@ -211,13 +211,20 @@ def search_tenders_endpoint(
 ):
     """Поиск через Playwright"""
     logger.info(f"Search request received: {query}")
-    notices = eis_service.search_tenders(
-        query=query, 
-        fz44=fz44, 
-        fz223=fz223, 
-        only_application_stage=only_application_stage, 
-        publish_days_back=publish_days_back
-    )
+    try:
+        notices = eis_service.search_tenders(
+            query=query, 
+            fz44=fz44, 
+            fz223=fz223, 
+            only_application_stage=only_application_stage, 
+            publish_days_back=publish_days_back
+        )
+    except RuntimeError as e:
+        logger.error(f"Search failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        logger.error(f"Search failed with unexpected error: {e}")
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
     
     # Convert Notice dataclass to dict for JSON response
     result = []

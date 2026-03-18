@@ -399,8 +399,10 @@ class EisService:
                         proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"} if USE_PROXY else None
                     )
                 except Exception as browser_err:
-                    logger.critical(f"Failed to launch browser. Error: {browser_err}")
-                    return [{"status": "error", "reason": str(browser_err)}]
+                    err_msg = str(browser_err)
+                    if "playwright install" in err_msg.lower() or "executable doesn't exist" in err_msg.lower():
+                        raise RuntimeError("Playwright browser not installed. Run 'npx playwright install chromium'.")
+                    raise browser_err
                 
                 try:
                     if os.path.exists(STATE_PATH):
@@ -813,8 +815,10 @@ class EisService:
                         proxy={"server": f"socks5://127.0.0.1:{LOCAL_SOCKS_PORT}"} if USE_PROXY else None
                     )
                 except Exception as browser_err:
-                    logger.critical(f"Failed to launch browser. Error: {browser_err}")
-                    return []
+                    err_msg = str(browser_err)
+                    if "playwright install" in err_msg.lower() or "executable doesn't exist" in err_msg.lower():
+                        raise RuntimeError("Playwright browser not installed. Run 'npx playwright install chromium'.")
+                    raise browser_err
                 
                 try:
                     if os.path.exists(STATE_PATH):

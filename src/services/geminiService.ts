@@ -315,9 +315,13 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(tenders)
         });
-        if (!response.ok) throw new Error("Server error");
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `Server error: ${response.status}`);
+        }
     } catch (error) {
         console.error("Failed to process tenders", error);
+        throw error;
     }
 };
 
@@ -375,14 +379,18 @@ export const searchTenders = async (
         const response = await fetch(`${API_BASE_URL}/api/search-tenders?${params.toString()}`, {
             signal
         });
-        if (!response.ok) throw new Error("Server error");
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || `Server error: ${response.status}`);
+        }
         return await response.json();
     } catch (error: any) {
         if (error.name === 'AbortError') {
             console.log('Search aborted');
             return [];
         }
-        return demoTenders;
+        console.error('Search error:', error);
+        throw error;
     }
 };
 

@@ -10,6 +10,7 @@ const TenderSearch = () => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Tender[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [searchMode, setSearchMode] = useState<'keyword' | 'catalog'>('keyword');
   const [isActive, setIsActive] = useState(true);
@@ -63,6 +64,7 @@ const TenderSearch = () => {
     setLoading(true);
     setResults([]);
     setSelectedTenders([]);
+    setError(null);
     
     abortControllerRef.current = new AbortController();
 
@@ -87,8 +89,9 @@ const TenderSearch = () => {
           abortControllerRef.current.signal
       );
       setResults(tenders);
-    } catch (error) {
-      console.error(error);
+    } catch (err: any) {
+      console.error(err);
+      setError(err.message || 'Произошла ошибка при поиске');
     } finally {
       setLoading(false);
       abortControllerRef.current = null;
@@ -198,6 +201,16 @@ const TenderSearch = () => {
           )}
         </div>
       </div>
+
+      {error && (
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-start gap-3 text-red-700">
+            <AlertCircle className="shrink-0 mt-0.5" size={20} />
+            <div>
+                <p className="font-bold">Ошибка при поиске</p>
+                <p className="text-sm opacity-90">{error}</p>
+            </div>
+        </div>
+      )}
 
       {/* Results List */}
       <div className="flex-1 overflow-auto space-y-4 pb-6">
