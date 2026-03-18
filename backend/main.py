@@ -538,7 +538,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         ws.title = "Risk Analysis"
 
         # Headers
-        headers = ["ID Тендера", "Условие / Риск", "Значение", "Комментарий"]
+        headers = ["ID Тендера", "Блок", "Что найдено", "Риск", "Что делать поставщику", "Источник", "Основание"]
         ws.append(headers)
 
         # Styling headers
@@ -554,19 +554,22 @@ async def api_export_risks_excel(data: dict = Body(...)):
             tid = tender.get('id', 'N/A')
             rows = tender.get('rows', [])
             if not rows:
-                ws.append([tid, "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-"])
+                ws.append([tid, "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-", "-", "-", "-"])
                 continue
 
             for row in rows:
                 ws.append([
                     tid,
-                    row.get('name', ''),
-                    row.get('value', ''),
-                    row.get('comment', '')
+                    row.get('block', ''),
+                    row.get('finding', ''),
+                    row.get('risk_level', ''),
+                    row.get('supplier_action', ''),
+                    f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
+                    row.get('legal_basis', '')
                 ])
 
         # Column widths and wrapping
-        column_widths = [15, 30, 50, 40]
+        column_widths = [15, 20, 40, 15, 40, 30, 30]
         for i, width in enumerate(column_widths):
             col_letter = openpyxl.utils.get_column_letter(i + 1)
             ws.column_dimensions[col_letter].width = width

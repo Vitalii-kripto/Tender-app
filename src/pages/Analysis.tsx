@@ -668,28 +668,34 @@ const Analysis = () => {
                                         <table className="w-full text-left text-sm border-collapse">
                                             <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-200">
                                                 <tr>
-                                                    <th className="px-5 py-4 font-black w-1/4">Условие / Риск</th>
-                                                    <th className="px-5 py-4 font-black w-1/2">Значение</th>
-                                                    <th className="px-5 py-4 font-black w-1/4">Комментарий</th>
+                                                    <th className="px-5 py-4 font-black">Блок</th>
+                                                    <th className="px-5 py-4 font-black">Что найдено</th>
+                                                    <th className="px-5 py-4 font-black">Риск</th>
+                                                    <th className="px-5 py-4 font-black">Что делать поставщику</th>
+                                                    <th className="px-5 py-4 font-black">Источник</th>
+                                                    <th className="px-5 py-4 font-black">Основание</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-slate-100">
                                                 {getFilteredRows(result.rows).map((row, idx) => (
                                                     <tr key={idx} className="transition-colors hover:bg-slate-50/50">
+                                                        <td className="px-5 py-4 align-top font-black text-slate-900">{row.block}</td>
+                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.finding}</td>
                                                         <td className="px-5 py-4 align-top">
-                                                            <div className="flex items-center gap-2 mb-1">
-                                                                <div className="font-black text-slate-900">{row.name}</div>
-                                                                <span className={`text-[8px] font-black px-1 py-0.5 rounded uppercase ${row.doc_group === 'contract' ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-100 text-slate-600'}`}>
-                                                                    {row.doc_group === 'contract' ? 'Контракт' : 'ТЗ/Прочее'}
-                                                                </span>
-                                                            </div>
+                                                            <span className={`text-[10px] font-black px-2 py-1 rounded uppercase ${
+                                                                row.risk_level === 'High' ? 'bg-red-100 text-red-600' : 
+                                                                row.risk_level === 'Medium' ? 'bg-amber-100 text-amber-600' : 
+                                                                'bg-emerald-100 text-emerald-600'
+                                                            }`}>
+                                                                {row.risk_level}
+                                                            </span>
                                                         </td>
+                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.supplier_action}</td>
                                                         <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">
-                                                            {row.value}
+                                                            <div className="font-bold">{row.source_document}</div>
+                                                            <div className="text-slate-500">{row.source_reference}</div>
                                                         </td>
-                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">
-                                                            {row.comment}
-                                                        </td>
+                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.legal_basis}</td>
                                                     </tr>
                                                 ))}
                                             </tbody>
