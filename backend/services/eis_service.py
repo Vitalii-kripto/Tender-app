@@ -43,7 +43,7 @@ TXT_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor.log")
 SKIP_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor_skip.log")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
 
-USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
+USE_PROXY = os.getenv("USE_PROXY", "false").lower() == "true"
 LOCAL_SOCKS_PORT = 1080
 
 def ensure_dir(p: str):
@@ -386,6 +386,7 @@ class EisService:
                 client.warmup()
             except Exception as e:
                 logger.error(f"Proxy warmup failed: {e}")
+                raise e
 
         results = []
 
@@ -799,6 +800,7 @@ class EisService:
                 client.warmup()
             except Exception as e:
                 logger.error(f"Proxy warmup failed: {e}")
+                raise e
 
         self._cancel_flag = False
         logger.info(f"Searching EIS via Playwright for: {query}")
