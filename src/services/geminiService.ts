@@ -424,7 +424,7 @@ export const fetchTenderDocsText = async (tenderUrl: string, eisNumber: string):
 
 // --- AI CALLS (VIA BACKEND) ---
 
-export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: Record<string, string[]>): Promise<LegalAnalysisResult[]> => {
+export const startBatchAnalysisJob = async (tenderIds: string[], selectedFiles?: Record<string, string[]>): Promise<string> => {
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/analyze-tenders-batch`, {
             method: 'POST',
@@ -435,7 +435,49 @@ export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: R
             })
         });
         if(!response.ok) throw new Error("Backend error");
+        const data = await response.json();
+        return data.job_id;
+    } catch (e) {
+        console.error("Error starting batch analysis job:", e);
+        throw e;
+    }
+};
+
+export const getJobStatus = async (jobId: string): Promise<any> => {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/ai/jobs/${jobId}`);
+        if(!response.ok) throw new Error("Backend error");
         return await response.json();
+    } catch (e) {
+        console.error("Error getting job status:", e);
+        throw e;
+    }
+};
+
+export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: Record<string, string[]>): Promise<LegalAnalysisResult[]> => {
+    try {
+        const jobId = await startBatchAnalysisJob(tenderIds, selectedFiles);
+        return new Promise((resolve, reject) => {
+            const interval = setInterval(async () => {
+                try {
+                    const job = await getJobStatus(jobId);
+                    if (job.status === 'completed') {
+                        clearInterval(interval);
+                        const results: LegalAnalysisResult[] = [];
+                        for (const tid in job.tenders) {
+                            results.push({
+                                id: tid,
+                                ...job.tenders[tid]
+                            });
+                        }
+                        resolve(results);
+                    }
+                } catch (e) {
+                    clearInterval(interval);
+                    reject(e);
+                }
+            }, 1000);
+        });
     } catch (e) {
         console.error("Error analyzing tenders batch:", e);
         return tenderIds.map(id => ({

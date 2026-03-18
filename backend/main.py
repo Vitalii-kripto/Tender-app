@@ -419,8 +419,12 @@ def get_tender_files(tender_id: str):
             })
     return files
 
+from fastapi import FastAPI, HTTPException, Body, BackgroundTasks
+from backend.services.batch_analysis import analyze_tenders_batch_job
+from backend.services.job_service import job_service
+
 @app.post("/api/ai/analyze-tenders-batch")
-async def api_analyze_tenders_batch(data: dict = Body(...)):
+async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...)):
     logger.info("Batch AI Analysis request received.")
     tender_ids = data.get('tender_ids', [])
     selected_files = data.get('selected_files', {}) # {tender_id: [filenames]}
@@ -428,8 +432,17 @@ async def api_analyze_tenders_batch(data: dict = Body(...)):
     if not tender_ids:
         raise HTTPException(status_code=400, detail="No tender IDs provided")
     
-    results = analyze_tenders_batch(tender_ids, doc_service, legal_analysis_service, selected_files)
-    return results
+    job_id = job_service.create_job(tender_ids)
+    background_tasks.add_task(analyze_tenders_batch_job, job_id, tender_ids, doc_service, legal_analysis_service, selected_files)
+    
+    return {"job_id": job_id}
+
+@app.get("/api/ai/jobs/{job_id}")
+async def get_job_status(job_id: str):
+    job = job_service.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 @app.post("/api/ai/extract-details")
 async def api_extract_details(data: dict = Body(...)):

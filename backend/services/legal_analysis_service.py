@@ -248,8 +248,8 @@ class LegalAnalysisService:
                     "finding": f"В просмотренных документах не найдено {label}.",
                     "risk_level": "Medium",
                     "supplier_action": "Проверить наличие условия в полном комплекте документации до подачи заявки или подписания договора.",
-                    "source_document": "Not Found",
-                    "source_reference": "Критичное условие не выявлено",
+                    "source_document": "Не найдено",
+                    "source_reference": "Критичное условие не выявлено в просмотренных документах",
                     "legal_basis": "",
                     "doc_group": doc_group
                 })
@@ -286,8 +286,8 @@ class LegalAnalysisService:
         all_notes = classified.get('classification_notes', [])
         
         # 1. Анализ контракта
-        update_stage("Анализ договора", 50)
         if group1:
+            update_stage("Анализ договора", 50)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group1])
             chunked_text = self._chunk_text(combined_text)
             res = self._call_ai_with_retry(PROMPT_CONTRACT.format(text=chunked_text))
@@ -297,13 +297,14 @@ class LegalAnalysisService:
             all_rows.extend(rows)
             all_notes.extend(res.get('summary_notes', []))
         else:
+            update_stage("Анализ договора (пропущено)", 50, "skipped")
             all_notes.append("Проект договора/контракта среди обработанных файлов не найден.")
             # Если контракта нет, все равно добавляем "не найдено" для критических тем контракта
             all_rows += self._add_missing_critical_topics([], "contract")
 
         # 2. Анализ прочей документации
-        update_stage("Анализ остальной документации", 80)
         if group2:
+            update_stage("Анализ остальной документации", 80)
             combined_text = "\n\n".join([f"ФАЙЛ: {f['filename']}\n{f['text']}" for f in group2])
             chunked_text = self._chunk_text(combined_text)
             res = self._call_ai_with_retry(PROMPT_OTHER_DOCS.format(text=chunked_text))
@@ -313,6 +314,7 @@ class LegalAnalysisService:
             all_rows.extend(rows)
             all_notes.extend(res.get('summary_notes', []))
         else:
+            update_stage("Анализ остальной документации (пропущено)", 80, "skipped")
             all_notes.append("Иная закупочная документация среди обработанных файлов не найдена.")
             all_rows += self._add_missing_critical_topics([], "other")
 

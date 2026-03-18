@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MOCK_CATALOG } from './ProductCatalog';
-import { findProductEquivalent, analyzeTendersBatch, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
+import { findProductEquivalent, startBatchAnalysisJob, getJobStatus, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
 import { AnalysisResult, Tender, LegalAnalysisResult } from '../types';
 import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare } from 'lucide-react';
 
@@ -28,6 +28,7 @@ const Analysis = () => {
   const [filterBlock, setFilterBlock] = useState<string>('all');
   const [filterRisk, setFilterRisk] = useState<string>('all');
   const [filterProblematic, setFilterProblematic] = useState<boolean>(false);
+  const [filterProblematicFiles, setFilterProblematicFiles] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'risk' | 'block'>('risk');
 
   useEffect(() => {
@@ -86,12 +87,18 @@ const Analysis = () => {
         const idsArray = Array.from(selectedTenderIds);
         
         // Validation: check if files are selected for each tender
+        const tendersWithoutFiles = [];
         for (const tid of idsArray) {
             if (!selectedFiles[tid] || selectedFiles[tid].size === 0) {
-                setAnalysisError(`Выберите файлы для тендера ${tid}`);
-                setLoading(false);
-                return;
+                const tender = crmTenders.find(t => t.id === tid);
+                tendersWithoutFiles.push(tender ? tender.eis_number || tid : tid);
             }
+        }
+        
+        if (tendersWithoutFiles.length > 0) {
+            setAnalysisError(`Выберите файлы для следующих тендеров: ${tendersWithoutFiles.join(', ')}`);
+            setLoading(false);
+            return;
         }
 
         // Prepare selected files mapping
@@ -102,18 +109,55 @@ const Analysis = () => {
             }
         });
 
-        // Start analysis
-        const results = await analyzeTendersBatch(idsArray, filesMapping);
-        
-        const newResults: Record<string, LegalAnalysisResult> = { ...batchResults };
-        results.forEach(res => {
-            newResults[res.id] = res;
+        // Initialize stages
+        const initialStages: Record<string, { stage: string, progress: number }> = {};
+        idsArray.forEach(id => {
+            initialStages[id] = { stage: 'Ожидание', progress: 0 };
         });
-        setBatchResults(newResults);
+        setAnalysisStages(initialStages);
+
+        // Start analysis
+        const jobId = await startBatchAnalysisJob(idsArray, filesMapping);
+        
+        // Polling
+        const pollInterval = setInterval(async () => {
+            try {
+                const job = await getJobStatus(jobId);
+                
+                const newStages: Record<string, { stage: string, progress: number }> = {};
+                for (const tid in job.tenders) {
+                    newStages[tid] = {
+                        stage: job.tenders[tid].stage,
+                        progress: job.tenders[tid].progress
+                    };
+                }
+                setAnalysisStages(prev => ({ ...prev, ...newStages }));
+                
+                if (job.status === 'completed') {
+                    clearInterval(pollInterval);
+                    const newResults: Record<string, LegalAnalysisResult> = { ...batchResults };
+                    for (const tid in job.tenders) {
+                        newResults[tid] = {
+                            id: tid,
+                            ...job.tenders[tid]
+                        };
+                    }
+                    setBatchResults(newResults);
+                    setLoading(false);
+                    setStatusText("");
+                }
+            } catch (e) {
+                console.error("Error polling job status", e);
+                clearInterval(pollInterval);
+                setAnalysisError('Произошла ошибка при получении статуса анализа.');
+                setLoading(false);
+                setStatusText("");
+            }
+        }, 1500);
+        
     } catch (e) {
         console.error("Batch analysis failed", e);
-        setAnalysisError('Произошла ошибка при выполнении анализа.');
-    } finally {
+        setAnalysisError('Произошла ошибка при запуске анализа.');
         setLoading(false);
         setStatusText("");
     }
@@ -529,7 +573,7 @@ const Analysis = () => {
                                         </span>
                                         <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-slate-100 text-slate-600 border border-slate-200 shadow-sm">
                                             <FileText size={14}/>
-                                            Файлов: {result.file_statuses.filter(f => f.status === 'ok').length} ОК / {result.file_statuses.filter(f => f.status !== 'ok').length} ОШИБКИ
+                                            Файлов: {result.selected_files_count !== undefined ? result.selected_files_count : result.file_statuses.length} выбрано / {result.file_statuses.filter(f => f.status === 'ok').length} ОК / {result.file_statuses.filter(f => f.status !== 'ok').length} ОШИБКИ
                                         </span>
                                     </div>
                                 </div>
@@ -553,12 +597,24 @@ const Analysis = () => {
                                 {/* File Statuses Block */}
                                 <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Статус документов</h4>
-                                        <div className="flex flex-wrap gap-2">
-                                            {result.file_statuses.map((fs, i) => (
-                                                <div key={i} className={`flex items-center gap-2 px-2 py-1 rounded border text-[11px] font-medium ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`} title={fs.message}>
-                                                    {fs.status === 'ok' ? <CheckCircle size={12} className="text-emerald-500" /> : <AlertTriangle size={12} className="text-red-500" />}
-                                                    <span className="truncate max-w-[150px]">{fs.filename}</span>
+                                        <div className="flex justify-between items-center mb-2">
+                                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Статус документов</h4>
+                                            <label className="flex items-center gap-1.5 text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">
+                                                <input type="checkbox" checked={filterProblematicFiles} onChange={(e) => setFilterProblematicFiles(e.target.checked)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                                Только проблемные
+                                            </label>
+                                        </div>
+                                        <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                            {result.file_statuses
+                                                .filter(fs => !filterProblematicFiles || fs.status !== 'ok')
+                                                .sort((a, b) => (a.status === 'ok' ? 1 : -1) - (b.status === 'ok' ? 1 : -1))
+                                                .map((fs, i) => (
+                                                <div key={i} className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                                                    {fs.status === 'ok' ? <CheckCircle size={14} className="text-emerald-500 mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />}
+                                                    <div className="flex flex-col min-w-0">
+                                                        <span className="truncate font-bold">{fs.filename}</span>
+                                                        {fs.status !== 'ok' && <span className="text-[10px] text-red-600/80 mt-0.5 leading-tight">{fs.message}</span>}
+                                                    </div>
                                                 </div>
                                             ))}
                                         </div>

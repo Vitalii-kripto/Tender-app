@@ -77,6 +77,7 @@ export interface LegalAnalysisResult {
   uncertain_files?: string[];
   stage?: string;
   progress?: number;
+  selected_files_count?: number;
 }
 
 export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';
