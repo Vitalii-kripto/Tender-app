@@ -8,6 +8,7 @@ from typing import List, Dict, Any
 from google import genai
 from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
+from .evidence_collector import EvidenceCollector
 
 from dotenv import load_dotenv
 
@@ -18,13 +19,9 @@ env_loaded = load_dotenv()
 def setup_legal_logger():
     env_debug_val = os.environ.get('LEGAL_AI_DEBUG', 'false')
     debug_mode = env_debug_val.lower() == 'true'
-    logger = logging.getLogger("LegalAnalysisService")
-    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     
-    # Очищаем старые хендлеры
-    if logger.hasHandlers():
-        logger.handlers.clear()
-        
+    loggers = [logging.getLogger("LegalAnalysisService"), logging.getLogger("EvidenceCollector")]
+    
     log_dir = os.path.join(os.getcwd(), 'backend', 'logs')
     os.makedirs(log_dir, exist_ok=True)
     log_file = os.path.join(log_dir, 'legal_ai.log')
@@ -33,15 +30,20 @@ def setup_legal_logger():
     file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
     
     # Также в консоль
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
     
-    # Чтобы не дублировать в корневой логгер
-    logger.propagate = False
+    for l in loggers:
+        l.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+        if l.hasHandlers():
+            l.handlers.clear()
+        l.addHandler(file_handler)
+        l.addHandler(stream_handler)
+        l.propagate = False
+        
+    logger = logging.getLogger("LegalAnalysisService")
     
     # Стартовые логи для проверки .env
     logger.info(f"--- [ENV INITIALIZATION] ---")
@@ -58,6 +60,7 @@ class LegalAnalysisService:
     def __init__(self, ai_client):
         self.client = ai_client
         self.debug_mode = DEBUG_MODE
+        self.evidence_collector = EvidenceCollector()
         
         self.valid_blocks = [
             "Риски участия и исполнения", "Недопуск/оценка", "Проверка соответствия", 
@@ -295,12 +298,9 @@ class LegalAnalysisService:
                 logger.info(f"Duration: {duration:.2f} seconds")
                 logger.info(f"Attempt: {attempt}")
                 
-                if self.debug_mode:
-                    logger.info("--- [FULL RAW RESPONSE] ---")
-                    logger.info(text)
-                    logger.info("--- [END OF RAW RESPONSE] ---")
-                else:
-                    logger.info(f"Raw AI response (first 2000 chars): {text[:2000]}")
+                logger.info("--- [FULL RAW RESPONSE] ---")
+                logger.info(text)
+                logger.info("--- [END OF RAW RESPONSE] ---")
                 
                 logger.info(f"===== [AI RESPONSE END] =====")
                 
@@ -362,9 +362,21 @@ class LegalAnalysisService:
                     
         return {"rows": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
 
-    def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str) -> List[Dict[str, Any]]:
+    def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, evidence_package: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         valid_rows = []
         rejected_count = 0
+        
+        valid_docs = []
+        valid_docs_no_ext = []
+        valid_refs_text = ""
+        
+        if evidence_package:
+            valid_docs = [d.lower() for d in evidence_package.get("all_sources", [])]
+            valid_docs_no_ext = [os.path.splitext(d)[0] for d in valid_docs]
+            
+            for items in evidence_package.get("slots", {}).values():
+                for item in items:
+                    valid_refs_text += " " + str(item.get("source_reference", "")).lower()
         
         for row in rows:
             if not isinstance(row, dict):
@@ -396,6 +408,31 @@ class LegalAnalysisService:
                 logger.warning(f"Row rejection: {rejection_reason}. Row: {row}")
                 rejected_count += 1
                 continue
+                
+            # Строгая проверка evidence (Post-validation)
+            if evidence_package and source_document.lower() != "не найдено":
+                doc_str = source_document.lower()
+                
+                # Проверка документа
+                doc_is_valid = False
+                for vd, vd_no_ext in zip(valid_docs, valid_docs_no_ext):
+                    if vd in doc_str or vd_no_ext in doc_str:
+                        doc_is_valid = True
+                        break
+                
+                if not doc_is_valid:
+                    logger.warning(f"Row rejection: hallucinated source_document '{source_document}'. Row: {row}")
+                    rejected_count += 1
+                    continue
+                    
+                # Проверка ссылки (коррекция, если галлюцинация)
+                ref_str = source_reference.lower()
+                ref_numbers = re.findall(r'\d+[\d.]*', ref_str)
+                if ref_numbers:
+                    ref_is_valid = any(num in valid_refs_text for num in ref_numbers)
+                    if not ref_is_valid:
+                        logger.info(f"Row correction: hallucinated source_reference '{source_reference}'. Correcting to generic.")
+                        source_reference = "Найдено в тексте (точный пункт не определен)"
             
             # Нормализация
             normalized_block = block.lower()
@@ -429,64 +466,29 @@ class LegalAnalysisService:
         logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
         return valid_rows
 
-    def _chunk_text(self, text: str, max_chars: int = 12000) -> str:
+    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Выделяет наиболее важные фрагменты текста для анализа.
+        Добавляет строки "не найдено" для критически важных тем на основе извлеченных слотов.
         """
-        if len(text) <= max_chars:
-            return text
-            
-        # Ищем ключевые слова и берем контекст вокруг них
-        keywords = [
-            'оплата', 'срок поставки', 'приемка', 'штраф', 'неустойка', 
-            'односторонний отказ', 'состав заявки', 'отклонение', 'реестр'
-        ]
-        
-        important_parts = []
-        # Всегда берем начало (предмет)
-        important_parts.append(text[:2000])
-        
-        for kw in keywords:
-            matches = list(re.finditer(re.escape(kw), text, re.IGNORECASE))
-            for m in matches[:2]: # Берем первые 2 вхождения каждого слова
-                start = max(0, m.start() - 500)
-                end = min(len(text), m.end() + 1500)
-                important_parts.append(text[start:end])
-        
-        # Всегда берем конец (реквизиты/подписи)
-        important_parts.append(text[-2000:])
-        
-        combined = "\n\n... [CHUNK] ...\n\n".join(important_parts)
-        return combined[:max_chars]
-
-    def _add_missing_critical_topics(self, rows: List[Dict[str, Any]], doc_group: str) -> List[Dict[str, Any]]:
-        """
-        Добавляет строки "не найдено" для критически важных тем.
-        """
-        existing_text = " ".join([f"{r.get('block', '')} {r.get('finding', '')}".lower() for r in rows])
         added_rows = []
         
-        # В новой архитектуре всегда doc_group == "full"
-        topics = [
-            ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
-            ("сроки приемки", "Поставка и приемка", "сроки приемки"),
-            ("основания отказа в приемке", "Поставка и приемка", "основания отказа в приемке"),
-            ("срок оплаты", "Оплата", "срок оплаты"),
-            ("аванс", "Оплата", "условие об авансе"),
-            ("эдо", "Оплата", "условие об ЭДО"),
-            ("казначейск", "Оплата", "условие о казначейском сопровождении"),
-            ("документы при поставке", "Документы при поставке", "документы при поставке"),
-            ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки"),
-            ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
-            ("нацрежим", "Реестры/ограничения", "применение национального режима"),
-            ("ограничения", "Реестры/ограничения", "ограничения"),
-            ("противоречия", "Проверка соответствия", "противоречия"),
-            ("ошибки документации", "Проверка соответствия", "ошибки документации"),
-            ("действия поставщику", "Рекомендации поставщику", "рекомендованные действия поставщику")
-        ]
+        # Маппинг слотов на блоки и названия для отчета
+        critical_slots = {
+            "unloading": ("Поставка и приемка", "условие о разгрузке"),
+            "acceptance_deadline": ("Поставка и приемка", "сроки приемки"),
+            "acceptance_rejection_grounds": ("Поставка и приемка", "основания отказа в приемке"),
+            "payment_deadline": ("Оплата", "срок оплаты"),
+            "advance_payment": ("Оплата", "условие об авансе"),
+            "edo_eis": ("Оплата", "условие об ЭДО"),
+            "treasury_support": ("Оплата", "условие о казначейском сопровождении"),
+            "delivery_documents": ("Документы при поставке", "документы при поставке"),
+            "application_composition": ("Документы заявки", "полный перечень документов в составе заявки"),
+            "national_regime_registries": ("Реестры/ограничения", "требования о включении в реестры и применении национального режима")
+        }
             
-        for kw, block, label in topics:
-            if kw not in existing_text:
+        for slot_id, (block, label) in critical_slots.items():
+            # Если слот не найден ни в одном документе
+            if not evidence_package["slots"].get(slot_id):
                 new_row = {
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
@@ -498,7 +500,7 @@ class LegalAnalysisService:
                     "doc_group": "full"
                 }
                 added_rows.append(new_row)
-                logger.info(f"Auto-added critical topic: {label} in block {block} (reason: keyword '{kw}' not found in AI response)")
+                logger.info(f"Auto-added critical topic: {label} in block {block} (reason: slot '{slot_id}' not found in evidence package)")
         
         return added_rows
 
@@ -538,16 +540,25 @@ class LegalAnalysisService:
         
         update_stage("Анализ документации", 30)
 
-        # Собираем все документы в один контекст
-        all_text = ""
-        for f in files:
-            all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
+        # 1. Извлекаем структурированные улики (Evidence Extraction)
+        logger.info(f"Extracting evidence from {len(files)} files...")
+        evidence_package = self.evidence_collector.collect_evidence(files)
         
-        chunked_text = self._chunk_text(all_text)
-        logger.info(f"Context size (after chunking): {len(chunked_text)} characters")
+        found_slots = [slot_id for slot_id, items in evidence_package["slots"].items() if items]
+        not_found_slots = [slot_id for slot_id, items in evidence_package["slots"].items() if not items]
+        logger.info(f"Found slots: {found_slots}")
+        logger.info(f"Not found slots: {not_found_slots}")
         
-        # Используем новый промпт для всего пакета
-        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
+        formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
+        
+        logger.info(f"Evidence package size: {len(formatted_evidence)} characters")
+        
+        logger.info("--- [FORMATTED EVIDENCE PACKAGE] ---")
+        logger.info(formatted_evidence)
+        logger.info("--- [END OF EVIDENCE PACKAGE] ---")
+
+        # 2. Интерпретация улик с помощью ИИ (LLM Interpretation)
+        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, formatted_evidence, "full")
         if not assembled_prompt:
             logger.error(f"Prompt assembly failed for tender {tender_id}")
             res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
@@ -557,9 +568,9 @@ class LegalAnalysisService:
         rows = res.get('rows', [])
         logger.info(f"AI response: {len(rows)} raw rows received")
         
-        rows = self._validate_and_filter_rows(rows, "full")
+        rows = self._validate_and_filter_rows(rows, "full", evidence_package)
         
-        added_rows = self._add_missing_critical_topics(rows, "full")
+        added_rows = self._add_missing_critical_topics(evidence_package)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         
@@ -631,10 +642,9 @@ class LegalAnalysisService:
         logger.info(f"--- ANALYSIS COMPLETED FOR TENDER: {tender_id} ---")
         logger.info(f"Final result summary: rows={len(final_rows)}, notes={len(final_notes)}, has_contract={has_contract}")
         
-        if self.debug_mode:
-            logger.info("--- FINAL JSON RESULT ---")
-            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-            logger.info("--- END OF FINAL JSON ---")
+        logger.info("--- FINAL JSON RESULT ---")
+        logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+        logger.info("--- END OF FINAL JSON ---")
             
         return result
 
