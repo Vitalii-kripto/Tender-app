@@ -331,7 +331,7 @@ class LegalAnalysisService:
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
                     "risk_level": "Medium",
-                    "supplier_action": "Проверить наличие условия.",
+                    "supplier_action": "Проверить условие по первоисточнику документа и учесть его при подготовке заявки или исполнении договора.",
                     "source_document": "Не найдено",
                     "source_reference": "Критичное условие не выявлено в просмотренных документах",
                     "legal_basis": "",
@@ -438,7 +438,7 @@ class LegalAnalysisService:
                 seen_notes.add(note_clean)
                 final_notes.append(note_clean)
         
-        final_notes = final_notes[:12]
+        final_notes = final_notes[:5]
 
         update_stage("Готово", 100, "success")
         
