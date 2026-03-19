@@ -73,7 +73,7 @@ class AiService:
 
         logger.info(f"Finding product equivalent. Specs: {tender_specs[:50]}... Catalog size: {len(catalog)}")
         # Превращаем каталог в легкий контекст
-        catalog_context = json.dumps([{"id": p['id'], "title": p['title'], "specs": p['specs']} for p in catalog])
+        catalog_context = json.dumps([{"id": p['id'], "title": p['title'], "specs": p['specs']} for p in catalog], ensure_ascii=False)
 
         prompt = f"""
         Роль: Технический эксперт по гидроизоляции.
@@ -304,7 +304,7 @@ class AiService:
         prompt = f"""
         Role: Tender Compliance Officer (Russian FZ-44/223).
         Analyze if uploaded files match requirements for: "{title}".
-        Files: {json.dumps(filenames)}
+        Files: {json.dumps(filenames, ensure_ascii=False)}
         
         Return JSON:
         {{ "missingDocuments": [], "checkedFiles": [{{ "fileName": "...", "status": "valid/invalid", "comments": [] }}], "overallStatus": "passed/failed/warning", "summary": "..." }}

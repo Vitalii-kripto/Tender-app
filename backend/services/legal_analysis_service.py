@@ -72,7 +72,7 @@ class LegalAnalysisService:
         
         logger.setLevel(logging.INFO)
         if not logger.handlers:
-            file_handler = logging.FileHandler('backend/logs/legal_ai.log')
+            file_handler = logging.FileHandler('backend/logs/legal_ai.log', encoding='utf-8')
             file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
             logger.addHandler(file_handler)
 

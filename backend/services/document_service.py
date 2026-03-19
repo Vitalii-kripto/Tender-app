@@ -262,7 +262,7 @@ class DocumentService:
         # 1. Попытка через striprtf (некоторые .doc - это на самом деле RTF)
         try:
             from striprtf.striprtf import rtf_to_text
-            with open(file_path, 'r', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 content = f.read()
                 if "{\\rtf" in content:
                     text = rtf_to_text(content)
@@ -290,7 +290,7 @@ class DocumentService:
 
         # 3. Последняя попытка: чтение как простого текста (иногда помогает для очень старых или поврежденных файлов)
         try:
-            with open(file_path, 'r', errors='ignore') as f:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 raw_content = f.read()
                 # Пытаемся найти хоть какой-то осмысленный текст среди бинарных данных
                 import re
