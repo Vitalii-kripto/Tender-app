@@ -6,7 +6,7 @@ import os
 from typing import List, Dict, Any
 from google import genai
 from google.genai import types
-from .legal_prompts import PROMPT_CONTRACT, PROMPT_OTHER_DOCS, PROMPT_FULL_PACKAGE
+from .legal_prompts import PROMPT_FULL_PACKAGE
 
 logger = logging.getLogger("LegalAnalysisService")
 
@@ -14,44 +14,57 @@ class LegalAnalysisService:
     def __init__(self, ai_client):
         self.client = ai_client
         self.valid_blocks = [
+            "Риски участия и исполнения", "Недопуск/оценка", "Проверка соответствия", 
             "Поставка и приемка", "Оплата", "Ответственность", 
-            "Односторонний отказ", "Документы при поставке", 
-            "Спорные условия договора", "Документы заявки", 
-            "Недопуск/оценка", "Реестры/ограничения", "Спорные условия"
+            "Документы заявки", "Документы при поставке", 
+            "Реестры/ограничения", "Рекомендации поставщику"
         ]
         self.block_normalization = {
+            "риски участия": "Риски участия и исполнения",
+            "риски исполнения": "Риски участия и исполнения",
+            "юридические риски": "Риски участия и исполнения",
+            "финансовые риски": "Риски участия и исполнения",
+            "операционные риски": "Риски участия и исполнения",
+            "административные риски": "Риски участия и исполнения",
+            "репутационные риски": "Риски участия и исполнения",
+            "отклонение": "Недопуск/оценка",
+            "недопуск": "Недопуск/оценка",
+            "потеря баллов": "Недопуск/оценка",
+            "критерии оценки": "Недопуск/оценка",
+            "оценка": "Недопуск/оценка",
+            "несоответствие": "Проверка соответствия",
+            "противоречия": "Проверка соответствия",
+            "ошибки документации": "Проверка соответствия",
+            "рисковые формулировки": "Проверка соответствия",
             "поставка": "Поставка и приемка",
             "приемка": "Поставка и приемка",
             "условия поставки": "Поставка и приемка",
-            "приемочные условия": "Поставка и приемка",
-            "оплата": "Оплата",
+            "разгрузка": "Поставка и приемка",
+            "доставка": "Поставка и приемка",
             "расчеты": "Оплата",
             "условия оплаты": "Оплата",
-            "ответственность": "Ответственность",
+            "аванс": "Оплата",
+            "эдо": "Оплата",
+            "казначейское сопровождение": "Оплата",
+            "штрафы": "Ответственность",
             "пени": "Ответственность",
             "неустойка": "Ответственность",
+            "односторонний отказ": "Ответственность",
+            "расторжение": "Ответственность",
             "санкции": "Ответственность",
-            "убытки": "Ответственность",
-            "штрафы": "Ответственность",
-            "отказ": "Односторонний отказ",
-            "расторжение": "Односторонний отказ",
-            "отказ от договора": "Односторонний отказ",
-            "документы": "Документы при поставке",
+            "состав заявки": "Документы заявки",
+            "требования к заявке": "Документы заявки",
             "сопроводительные документы": "Документы при поставке",
             "приемочные документы": "Документы при поставке",
-            "спорные": "Спорные условия договора",
-            "неясные условия договора": "Спорные условия договора",
-            "состав заявки": "Документы заявки",
-            "заявка": "Документы заявки",
-            "отклонение": "Недопуск/оценка",
-            "критерии оценки": "Недопуск/оценка",
-            "оценка": "Недопуск/оценка",
-            "недопуск": "Недопуск/оценка",
             "нацрежим": "Реестры/ограничения",
             "национальный режим": "Реестры/ограничения",
             "реестр": "Реестры/ограничения",
             "ограничения": "Реестры/ограничения",
-            "неясные требования": "Спорные условия"
+            "преференции": "Реестры/ограничения",
+            "условие допуска": "Реестры/ограничения",
+            "запрет": "Реестры/ограничения",
+            "рекомендации": "Рекомендации поставщику",
+            "что сделать поставщику": "Рекомендации поставщику"
         }
         # Настройка логирования в файл
         if not os.path.exists('backend/logs'):
@@ -75,7 +88,7 @@ class LegalAnalysisService:
             assembled = template.replace("__TEXT__", text)
             
             # Защитная проверка: если остались маркеры, значит что-то пошло не так
-            if "__TEXT__" in assembled or "{text}" in assembled:
+            if "__TEXT__" in assembled:
                 logger.error(f"Prompt assembly failed for {prompt_type}: placeholder still present")
                 return None
                 
@@ -84,7 +97,35 @@ class LegalAnalysisService:
             logger.error(f"Error assembling prompt for {prompt_type}: {e}")
             return None
 
-    # LEGACY: classify_documents removed.
+    def classify_documents(self, files: List[Dict[str, str]]) -> Dict[str, Any]:
+        """
+        Техническая классификация документов для UI и логов.
+        Определяет наличие контракта и формирует заметки.
+        """
+        has_contract = False
+        classification_notes = []
+        uncertain_files = []
+        
+        contract_keywords = ['договор', 'контракт', 'проект', 'соглашение']
+        
+        for f in files:
+            filename = f.get('filename', '').lower()
+            is_contract = any(kw in filename for kw in contract_keywords)
+            
+            if is_contract:
+                has_contract = True
+                classification_notes.append(f"Найден проект договора: {f['filename']}")
+            else:
+                uncertain_files.append(f['filename'])
+                
+        if not has_contract:
+            classification_notes.append("Внимание: Проект договора не найден. Анализ может быть неполным.")
+            
+        return {
+            "has_contract": has_contract,
+            "classification_notes": classification_notes,
+            "uncertain_files": uncertain_files
+        }
 
     def _call_ai_with_retry(self, prompt: str, prompt_type: str, retries: int = 1) -> Dict[str, Any]:
         """
@@ -114,7 +155,7 @@ class LegalAnalysisService:
                 
                 text = response.text.strip()
                 # Логирование ответа
-                logger.info(f"AI Response snippet (first 2000 chars): {text[:2000]}")
+                logger.info(f"первые 2000 символов ответа модели: {text[:2000]}")
                 
                 # Очистка от markdown если есть
                 if text.startswith("```json"):
@@ -171,12 +212,7 @@ class LegalAnalysisService:
         valid_rows = []
         for row in rows:
             if not isinstance(row, dict):
-                logger.warning("Row is not a dict, skipping.")
-                continue
-            
-            # Валидация
-            if not isinstance(row, dict):
-                logger.warning("Row is not a dict, skipping.")
+                logger.warning(f"причины отбраковки строк: строка не является словарем. Row: {row}")
                 continue
             
             # Обязательные поля
@@ -190,18 +226,18 @@ class LegalAnalysisService:
             
             # Валидация
             if not block:
-                logger.warning(f"Row missing block: {row}")
+                logger.warning(f"причины отбраковки строк: отсутствует block. Row: {row}")
                 continue
             if not finding:
-                logger.warning(f"Row missing finding: {row}")
+                logger.warning(f"причины отбраковки строк: отсутствует finding. Row: {row}")
                 continue
             if not supplier_action:
-                logger.warning(f"Row missing supplier_action: {row}")
+                logger.warning(f"Row missing supplier_action (will use default): {row}")
             if not source_document:
-                logger.warning(f"Row missing source_document: {row}")
+                logger.warning(f"причины отбраковки строк: отсутствует source_document. Row: {row}")
                 continue
             if not source_reference:
-                logger.warning(f"Row missing source_reference: {row}")
+                logger.warning(f"причины отбраковки строк: отсутствует source_reference. Row: {row}")
                 continue
             
             # Нормализация
@@ -212,7 +248,7 @@ class LegalAnalysisService:
                     break
             
             if block not in self.valid_blocks:
-                logger.warning(f"Unknown block: {block}, skipping row: {row}")
+                logger.warning(f"причины отбраковки строк: неизвестный блок '{block}'. Row: {row}")
                 continue
             
             if risk_level not in ["High", "Medium", "Low"]:
@@ -223,7 +259,7 @@ class LegalAnalysisService:
                 "block": block,
                 "finding": finding[:1000] if finding else "Нет описания",
                 "risk_level": risk_level,
-                "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа.",
+                "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа и учесть его при подготовке заявки или исполнении договора.",
                 "source_document": source_document[:200],
                 "source_reference": source_reference[:200],
                 "legal_basis": legal_basis[:1000] if legal_basis else "",
@@ -267,25 +303,30 @@ class LegalAnalysisService:
         """
         Добавляет строки "не найдено" для критически важных тем.
         """
-        existing_blocks = " ".join([r.get('block', '').lower() for r in rows])
+        existing_text = " ".join([f"{r.get('block', '')} {r.get('finding', '')}".lower() for r in rows])
         added_rows = []
         
         # В новой архитектуре всегда doc_group == "full"
         topics = [
-            ("оплата", "Оплата", "срок оплаты"),
             ("разгрузка", "Поставка и приемка", "условие о разгрузке"),
+            ("сроки приемки", "Поставка и приемка", "сроки приемки"),
+            ("основания отказа в приемке", "Поставка и приемка", "основания отказа в приемке"),
+            ("срок оплаты", "Оплата", "срок оплаты"),
             ("аванс", "Оплата", "условие об авансе"),
             ("эдо", "Оплата", "условие об ЭДО"),
             ("казначейск", "Оплата", "условие о казначейском сопровождении"),
-            ("односторонний отказ", "Односторонний отказ", "порядок одностороннего отказа"),
-            ("приемк", "Документы при поставке", "документы о приемке"),
+            ("документы при поставке", "Документы при поставке", "документы при поставке"),
+            ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки"),
             ("реестр", "Реестры/ограничения", "требования о включении в реестры"),
-            ("национальный режим", "Реестры/ограничения", "применение национального режима"),
-            ("состав заявки", "Документы заявки", "полный перечень документов в составе заявки")
+            ("нацрежим", "Реестры/ограничения", "применение национального режима"),
+            ("ограничения", "Реестры/ограничения", "ограничения"),
+            ("противоречия", "Проверка соответствия", "противоречия"),
+            ("ошибки документации", "Проверка соответствия", "ошибки документации"),
+            ("действия поставщику", "Рекомендации поставщику", "рекомендованные действия поставщику")
         ]
             
         for kw, block, label in topics:
-            if kw not in existing_blocks:
+            if kw not in existing_text:
                 added_rows.append({
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
@@ -294,7 +335,7 @@ class LegalAnalysisService:
                     "source_document": "Не найдено",
                     "source_reference": "Критичное условие не выявлено в просмотренных документах",
                     "legal_basis": "",
-                    "doc_group": doc_group
+                    "doc_group": "full"
                 })
         return added_rows
 
@@ -315,7 +356,21 @@ class LegalAnalysisService:
                 "progress": 100
             }
         
-        logger.info(f"Starting full package analysis for {len(files)} files.")
+        filenames = [f.get('filename', 'unknown') for f in files]
+        logger.info(f"prompt_type=full")
+        logger.info(f"количество документов: {len(files)}")
+        logger.info(f"список имен файлов: {filenames}")
+        
+        update_stage("Классификация", 10)
+        
+        # Техническая классификация для логов и UI
+        classified = self.classify_documents(files)
+        has_contract = classified["has_contract"]
+        classification_notes = classified["classification_notes"]
+        uncertain_files = classified["uncertain_files"]
+        
+        file_statuses = [{"filename": f["filename"], "status": "processed"} for f in files]
+        
         update_stage("Анализ документации", 30)
 
         # Собираем все документы в один контекст
@@ -324,7 +379,7 @@ class LegalAnalysisService:
             all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
         
         chunked_text = self._chunk_text(all_text)
-        logger.info(f"Context size after chunking: {len(chunked_text)} chars")
+        logger.info(f"размер общего контекста: {len(chunked_text)} символов")
         
         # Используем новый промпт для всего пакета
         assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
@@ -334,11 +389,11 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full")
         
         rows = res.get('rows', [])
-        logger.info(f"Rows before validation (full): {len(rows)}")
+        logger.info(f"число строк до валидации: {len(rows)}")
         rows = self._validate_and_filter_rows(rows, "full")
-        logger.info(f"Rows after validation (full): {len(rows)}")
+        logger.info(f"число строк после валидации: {len(rows)}")
         rows += self._add_missing_critical_topics(rows, "full")
-        logger.info(f"Rows after adding critical topics (full): {len(rows)}")
+        logger.info(f"число строк после автодобавления критичных тем: {len(rows)}")
         
         all_rows = rows
         all_notes = res.get('summary_notes', [])
@@ -355,7 +410,7 @@ class LegalAnalysisService:
         for r in all_rows:
             # Защитная проверка
             if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
-                logger.warning(f"Row missing required keys, skipping: {r}")
+                logger.warning(f"причины отбраковки строк: отсутствуют обязательные ключи для дедупликации. Row: {r}")
                 continue
                 
             key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
@@ -363,7 +418,7 @@ class LegalAnalysisService:
                 seen_keys.add(key)
                 unique_rows.append(r)
         
-        logger.info(f"Rows after deduplication: {len(unique_rows)}")
+        logger.info(f"число строк после дедупликации: {len(unique_rows)}")
 
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
@@ -390,103 +445,10 @@ class LegalAnalysisService:
         return {
             "rows": final_rows,
             "summary_notes": final_notes,
-            "status": "success" if final_rows else "partial",
-            "stage": "Готово",
-            "progress": 100
-        }
-
-    def analyze_full_package(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
-        """
-        Основной метод анализа всего пакета тендерной документации.
-        """
-        def update_stage(stage, progress, status="process"):
-            if callback:
-                callback(stage, progress, status)
-
-        if not files:
-            return {
-                "rows": [],
-                "summary_notes": ["Ошибка: нет файлов для анализа."],
-                "status": "error",
-                "stage": "Ошибка",
-                "progress": 100
-            }
-        
-        logger.info(f"Starting full package analysis for {len(files)} files.")
-        update_stage("Анализ документации", 30)
-
-        # Собираем все документы в один контекст
-        all_text = ""
-        for f in files:
-            all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
-        
-        chunked_text = self._chunk_text(all_text)
-        logger.info(f"Context size after chunking: {len(chunked_text)} chars")
-        
-        # Используем новый промпт для всего пакета
-        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
-        if not assembled_prompt:
-            res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
-        else:
-            res = self._call_ai_with_retry(assembled_prompt, prompt_type="full")
-        
-        rows = res.get('rows', [])
-        logger.info(f"Rows before validation (full): {len(rows)}")
-        rows = self._validate_and_filter_rows(rows, "full")
-        logger.info(f"Rows after validation (full): {len(rows)}")
-        rows += self._add_missing_critical_topics(rows, "full")
-        logger.info(f"Rows after adding critical topics (full): {len(rows)}")
-        
-        all_rows = rows
-        all_notes = res.get('summary_notes', [])
-        
-        update_stage("Формирование отчета", 95)
-        
-        # Пост-обработка
-        # 1. Дедупликация с нормализацией
-        def normalize(s):
-            return re.sub(r'[^\w\s]', '', str(s).lower().strip())
-
-        unique_rows = []
-        seen_keys = set()
-        for r in all_rows:
-            # Защитная проверка
-            if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
-                logger.warning(f"Row missing required keys, skipping: {r}")
-                continue
-                
-            key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
-            if key not in seen_keys:
-                seen_keys.add(key)
-                unique_rows.append(r)
-        
-        logger.info(f"Rows after deduplication: {len(unique_rows)}")
-
-        # 2. Сортировка
-        risk_order = {"High": 0, "Medium": 1, "Low": 2}
-        unique_rows.sort(key=lambda x: (
-            risk_order.get(x.get('risk_level', 'Medium'), 3), 
-            x.get('block', ''), 
-            x.get('source_document', '')
-        ))
-
-        # 3. Лимит и фильтрация заметок
-        final_rows = unique_rows[:30] # Увеличим лимит
-        final_notes = []
-        seen_notes = set()
-        for note in all_notes:
-            note_clean = note.strip()
-            if note_clean and note_clean not in seen_notes:
-                seen_notes.add(note_clean)
-                final_notes.append(note_clean)
-        
-        final_notes = final_notes[:12]
-
-        update_stage("Готово", 100, "success")
-        
-        return {
-            "rows": final_rows,
-            "summary_notes": final_notes,
+            "has_contract": has_contract,
+            "classification_notes": classification_notes,
+            "file_statuses": file_statuses,
+            "uncertain_files": uncertain_files,
             "status": "success" if final_rows else "partial",
             "stage": "Готово",
             "progress": 100

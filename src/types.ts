@@ -59,7 +59,7 @@ export interface LegalAnalysisRow {
   source_document: string;
   source_reference: string;
   legal_basis?: string;
-  doc_group?: 'contract' | 'other';
+  doc_group?: 'contract' | 'other' | 'full';
 }
 
 export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupported_format' | 'empty_file' | 'extract_error' | 'ok';
