@@ -126,7 +126,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 "rows": analysis_result.get('rows', []),
                 "has_contract": analysis_result.get('has_contract', False),
                 "classification_notes": analysis_result.get('classification_notes', []),
-                "uncertain_files": analysis_result.get('uncertain_files', []),
+                "file_classifications": analysis_result.get('file_classifications', []),
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })
@@ -138,7 +138,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 "rows": [],
                 "has_contract": False,
                 "classification_notes": [],
-                "uncertain_files": [],
+                "file_classifications": [],
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })

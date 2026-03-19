@@ -64,6 +64,16 @@ export interface LegalAnalysisRow {
 
 export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupported_format' | 'empty_file' | 'extract_error' | 'ok';
 
+export interface FileClassification {
+  filename: string;
+  category: 'contract' | 'procurement' | 'mixed' | 'unclassified' | 'unclassified_due_to_no_text';
+  contract_score: number;
+  procurement_score: number;
+  matched_contract_signals: string[];
+  matched_procurement_signals: string[];
+  classification_reason: string;
+}
+
 export interface LegalAnalysisResult {
   id: string;
   status: 'success' | 'error' | 'partial';
@@ -74,7 +84,7 @@ export interface LegalAnalysisResult {
   docText?: string;
   showDoc?: boolean;
   classification_notes?: string[];
-  uncertain_files?: string[];
+  file_classifications?: FileClassification[];
   stage?: string;
   progress?: number;
   selected_files_count?: number;

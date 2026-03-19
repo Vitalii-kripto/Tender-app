@@ -19,7 +19,7 @@ class JobService:
                     "has_contract": False,
                     "file_statuses": [],
                     "classification_notes": [],
-                    "uncertain_files": []
+                    "file_classifications": []
                 } for tid in tender_ids
             }
         }

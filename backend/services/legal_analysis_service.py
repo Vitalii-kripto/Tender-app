@@ -103,28 +103,103 @@ class LegalAnalysisService:
         Определяет наличие контракта и формирует заметки.
         """
         has_contract = False
-        classification_notes = []
-        uncertain_files = []
+        file_classifications = []
         
-        contract_keywords = ['договор', 'контракт', 'проект', 'соглашение']
+        contract_signals = [
+            "проект контракта", "проект договора", "контракт", "договор",
+            "поставщик", "заказчик", "предмет контракта", "цена контракта",
+            "порядок расчетов", "срок оплаты", "условия оплаты", "поставка товара",
+            "приемка товара", "документ о приемке", "ответственность сторон",
+            "неустойка", "штраф", "пеня", "односторонний отказ",
+            "расторжение контракта", "реквизиты сторон"
+        ]
         
+        procurement_signals = [
+            "извещение", "описание объекта закупки", "техническое задание",
+            "инструкция по заполнению заявки", "требования к содержанию заявки",
+            "состав заявки", "критерии оценки", "порядок рассмотрения заявок",
+            "основания отклонения", "участник закупки", "национальный режим",
+            "реестровый номер", "страна происхождения", "обоснование нмцк",
+            "начальная максимальная цена", "условия допуска", "ограничение допуска",
+            "преимущества", "запрет", "характеристики товара"
+        ]
+
+        strong_contract_signals = ["проект контракта", "проект договора", "цена контракта", "ответственность сторон", "порядок расчетов"]
+        strong_procurement_signals = ["извещение", "требования к содержанию заявки", "инструкция по заполнению заявки"]
+
         for f in files:
-            filename = f.get('filename', '').lower()
-            is_contract = any(kw in filename for kw in contract_keywords)
+            filename = f.get('filename', 'unknown')
+            text = f.get('text', '')
             
-            if is_contract:
-                has_contract = True
-                classification_notes.append(f"Найден проект договора: {f['filename']}")
+            if not text or len(text.strip()) < 100:
+                logger.info(f"classification skipped: no extracted text for {filename}")
+                file_classifications.append({
+                    "filename": filename,
+                    "category": "unclassified_due_to_no_text",
+                    "contract_score": 0,
+                    "procurement_score": 0,
+                    "matched_contract_signals": [],
+                    "matched_procurement_signals": [],
+                    "classification_reason": "Текст слишком короткий или не извлечен"
+                })
+                continue
+
+            text_to_analyze = text[:15000].lower()
+            
+            c_score = 0
+            p_score = 0
+            matched_c = []
+            matched_p = []
+            
+            for sig in contract_signals:
+                if sig in text_to_analyze:
+                    weight = 3 if sig in strong_contract_signals else 1
+                    c_score += weight
+                    matched_c.append(sig)
+                    
+            for sig in procurement_signals:
+                if sig in text_to_analyze:
+                    weight = 3 if sig in strong_procurement_signals else 1
+                    p_score += weight
+                    matched_p.append(sig)
+
+            if c_score >= 3 and p_score < 3:
+                category = "contract"
+                reason = f"Найдено {len(matched_c)} договорных признаков: {', '.join(matched_c[:3])}..."
+            elif p_score >= 3 and c_score < 3:
+                category = "procurement"
+                reason = f"Найдено {len(matched_p)} закупочных признаков: {', '.join(matched_p[:3])}..."
+            elif c_score >= 3 and p_score >= 3:
+                category = "mixed"
+                reason = f"Файл содержит признаки обоих типов (договорные: {len(matched_c)}, закупочные: {len(matched_p)}), поэтому помечен как mixed"
             else:
-                uncertain_files.append(f['filename'])
-                
+                category = "unclassified"
+                reason = "Текст слишком короткий или признаки не обнаружены"
+
+            if any(sig in text_to_analyze for sig in strong_contract_signals):
+                has_contract = True
+
+            classification_data = {
+                "filename": filename,
+                "category": category,
+                "contract_score": c_score,
+                "procurement_score": p_score,
+                "matched_contract_signals": matched_c,
+                "matched_procurement_signals": matched_p,
+                "classification_reason": reason
+            }
+            file_classifications.append(classification_data)
+            
+            logger.info(f"Classified {filename} (len: {len(text)}): category={category}, c_score={c_score}, p_score={p_score}, matched_c={matched_c}, matched_p={matched_p}, reason={reason}")
+
+        classification_notes = []
         if not has_contract:
-            classification_notes.append("Внимание: Проект договора не найден. Анализ может быть неполным.")
+            classification_notes.append("Внимание: Явные признаки проекта договора не найдены в текстах документов. Анализ может быть неполным.")
             
         return {
             "has_contract": has_contract,
             "classification_notes": classification_notes,
-            "uncertain_files": uncertain_files
+            "file_classifications": file_classifications
         }
 
     def _call_ai_with_retry(self, prompt: str, prompt_type: str, retries: int = 1) -> Dict[str, Any]:
@@ -367,7 +442,7 @@ class LegalAnalysisService:
         classified = self.classify_documents(files)
         has_contract = classified["has_contract"]
         classification_notes = classified["classification_notes"]
-        uncertain_files = classified["uncertain_files"]
+        file_classifications = classified["file_classifications"]
         
         file_statuses = [{"filename": f["filename"], "status": "processed"} for f in files]
         
@@ -448,7 +523,7 @@ class LegalAnalysisService:
             "has_contract": has_contract,
             "classification_notes": classification_notes,
             "file_statuses": file_statuses,
-            "uncertain_files": uncertain_files,
+            "file_classifications": file_classifications,
             "status": "success" if final_rows else "partial",
             "stage": "Готово",
             "progress": 100

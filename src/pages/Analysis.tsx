@@ -606,29 +606,36 @@ const Analysis = () => {
                                         </div>
                                     </div>
                                     <div className="space-y-4">
-                                        {result.classification_notes && result.classification_notes.length > 0 && (
+                                        {result.file_classifications && result.file_classifications.length > 0 && (
                                             <div>
                                                 <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
-                                                <div className="space-y-1">
-                                                    {result.classification_notes.map((note, i) => (
-                                                        <div key={i} className="text-[10px] text-slate-500 flex items-start gap-1.5 leading-tight">
-                                                            <div className="w-1 h-1 rounded-full bg-slate-300 mt-1.5 shrink-0"></div>
-                                                            {note}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                        )}
-                                        {result.uncertain_files && result.uncertain_files.length > 0 && (
-                                            <div>
-                                                <h4 className="text-[10px] font-black text-red-400 uppercase tracking-widest mb-2">Неопределенные файлы</h4>
-                                                <div className="space-y-1">
-                                                    {result.uncertain_files.map((file, i) => (
-                                                        <div key={i} className="text-[10px] text-red-500 flex items-start gap-1.5 leading-tight bg-red-50 p-1 rounded">
-                                                            <AlertTriangle size={10} className="mt-0.5 shrink-0" />
-                                                            {file}
-                                                        </div>
-                                                    ))}
+                                                <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                                    {['contract', 'procurement', 'mixed', 'unclassified', 'unclassified_due_to_no_text'].map((category) => {
+                                                        const filesInCategory = result.file_classifications!.filter(fc => fc.category === category);
+                                                        if (filesInCategory.length === 0) return null;
+                                                        
+                                                        let categoryTitle = '';
+                                                        let categoryColor = '';
+                                                        if (category === 'contract') { categoryTitle = 'Договорные документы'; categoryColor = 'text-emerald-600 bg-emerald-50 border-emerald-100'; }
+                                                        else if (category === 'procurement') { categoryTitle = 'Закупочная документация'; categoryColor = 'text-blue-600 bg-blue-50 border-blue-100'; }
+                                                        else if (category === 'mixed') { categoryTitle = 'Смешанные документы'; categoryColor = 'text-amber-600 bg-amber-50 border-amber-100'; }
+                                                        else if (category === 'unclassified') { categoryTitle = 'Не классифицировано'; categoryColor = 'text-slate-600 bg-slate-50 border-slate-200'; }
+                                                        else if (category === 'unclassified_due_to_no_text') { categoryTitle = 'Не классифицировано (нет текста)'; categoryColor = 'text-red-600 bg-red-50 border-red-100'; }
+
+                                                        return (
+                                                            <div key={category} className={`p-2 rounded-lg border ${categoryColor}`}>
+                                                                <div className="text-[10px] font-bold uppercase tracking-wider mb-1.5 opacity-80">{categoryTitle}</div>
+                                                                <div className="space-y-1.5">
+                                                                    {filesInCategory.map((fc, i) => (
+                                                                        <div key={i} className="flex flex-col gap-0.5">
+                                                                            <span className="text-[11px] font-semibold truncate">{fc.filename}</span>
+                                                                            <span className="text-[10px] opacity-75 leading-tight">{fc.classification_reason}</span>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
                                                 </div>
                                             </div>
                                         )}
