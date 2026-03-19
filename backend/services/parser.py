@@ -10,15 +10,6 @@ from langchain_community.document_loaders.recursive_url_loader import RecursiveU
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("GidroizolParser")
-if not logger.handlers:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler("parser_service_log.txt", encoding="utf-8", mode="w"),
-            logging.StreamHandler(),
-        ],
-    )
 logger.setLevel(logging.INFO)
 
 ASYNC_CONCURRENCY = 10

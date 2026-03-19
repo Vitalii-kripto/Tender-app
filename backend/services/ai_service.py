@@ -8,15 +8,36 @@ import re
 import logging
 
 # --- LOGGING SETUP ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("ai_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("AiService")
+def setup_ai_logger():
+    debug_mode = os.getenv("LEGAL_AI_DEBUG", "false").lower() == "true"
+    logger = logging.getLogger("AiService")
+    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    
+    # Очищаем старые хендлеры
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    log_dir = os.path.join(os.getcwd(), 'backend', 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'legal_ai.log')
+    
+    # Используем 'w' (write) для перезаписи при старте и utf-8
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Также в консоль
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    
+    # Чтобы не дублировать в корневой логгер
+    logger.propagate = False
+    
+    return logger, debug_mode
+
+logger, DEBUG_MODE = setup_ai_logger()
 
 # Загружаем переменные окружения (.env)
 load_dotenv()
@@ -38,9 +59,48 @@ class AiService:
 
     def _call_ai_with_retry(self, method, **kwargs):
         retries = 3
+        start_time = time.time()
+        model_name = kwargs.get('model', 'unknown')
+        
+        # Логирование перед вызовом
+        logger.info(f"===== [AI REQUEST START] =====")
+        logger.info(f"Method: {method.__name__}")
+        logger.info(f"Model: {model_name}")
+        
+        if DEBUG_MODE:
+            prompt_to_log = kwargs.get('contents', 'No contents')
+            logger.info("--- [FULL ASSEMBLED PROMPT] ---")
+            logger.info(prompt_to_log)
+            logger.info("--- [END OF PROMPT] ---")
+        
+        logger.info(f"===== [AI REQUEST END] =====")
+
         for attempt in range(retries + 1):
             try:
-                return method(**kwargs)
+                response = method(**kwargs)
+                
+                end_time = time.time()
+                duration = end_time - start_time
+                
+                # Логирование ответа
+                logger.info(f"===== [AI RESPONSE START] =====")
+                logger.info(f"Duration: {duration:.2f} seconds")
+                logger.info(f"Attempt: {attempt}")
+                
+                if response:
+                    text = response.text
+                    if DEBUG_MODE:
+                        logger.info("--- [FULL RAW RESPONSE] ---")
+                        logger.info(text)
+                        logger.info("--- [END OF RAW RESPONSE] ---")
+                    else:
+                        logger.info(f"Raw AI response (first 2000 chars): {text[:2000]}")
+                else:
+                    logger.warning("AI returned empty response.")
+                
+                logger.info(f"===== [AI RESPONSE END] =====")
+                
+                return response
             except Exception as e:
                 logger.error(f"AI Error on attempt {attempt}: {e}")
                 if attempt < retries:

@@ -113,7 +113,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             def stage_callback(stage, progress, status="running"):
                 job_service.update_tender_stage(job_id, tid, stage, progress, status)
 
-            analysis_result = legal_service.analyze_tender(files_data, callback=stage_callback)
+            analysis_result = legal_service.analyze_tender(files_data, tender_id=tid, callback=stage_callback)
             
             # Добавляем инфо о пропущенных файлах в summary_notes
             final_summary = analysis_result.get('summary_notes', [])

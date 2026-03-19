@@ -39,8 +39,6 @@ DATA_DIR = os.path.join(BASE_DIR, "data")
 OUT_DIR = os.path.join(DATA_DIR, "eis_docs")
 DB_PATH = os.path.join(DATA_DIR, "seen.sqlite")
 CSV_LOG_PATH = os.path.join(DATA_DIR, "notices_okpd2_log.csv")
-TXT_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor.log")
-SKIP_LOG_PATH = os.path.join(DATA_DIR, "eis_monitor_skip.log")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
 
 USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
@@ -50,35 +48,15 @@ def ensure_dir(p: str):
     if p:
         os.makedirs(p, exist_ok=True)
 
-ensure_dir(os.path.dirname(TXT_LOG_PATH))
-
 # Use a specific logger for this service
 logger = logging.getLogger("EIS_Service")
 logger.setLevel(logging.INFO)
-
-# Prevent duplicate handlers if module is reloaded
-if not logger.handlers:
-    # Console handler
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-
-    # File handler
-    fh = logging.FileHandler(TXT_LOG_PATH, encoding='utf-8')
-    fh.setLevel(logging.INFO)
-    fh.setFormatter(formatter)
-    logger.addHandler(fh)
 
 def log(message: str):
     logger.info(message)
 
 def log_skip(message: str):
     logger.info(message)
-    ensure_dir(os.path.dirname(SKIP_LOG_PATH))
-    with open(SKIP_LOG_PATH, "a", encoding="utf-8") as f:
-        f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}\n")
 
 def log_exception(prefix: str, exc: Exception):
     logger.error(f"{prefix}: {exc}", exc_info=True)

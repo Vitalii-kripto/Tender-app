@@ -7,15 +7,8 @@ import platform
 import logging
 
 # --- LOGGING SETUP ---
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("doc_service_log.txt", encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
-        logging.StreamHandler()
-    ]
-)
 logger = logging.getLogger("DocumentService")
+logger.setLevel(logging.INFO)
 
 # Безопасный импорт pytesseract
 try:

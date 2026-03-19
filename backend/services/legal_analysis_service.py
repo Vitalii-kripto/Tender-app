@@ -3,16 +3,49 @@ import json
 import logging
 import re
 import os
+from datetime import datetime
 from typing import List, Dict, Any
 from google import genai
 from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
 
-logger = logging.getLogger("LegalAnalysisService")
+# Настройка логгера
+def setup_legal_logger():
+    debug_mode = os.environ.get('LEGAL_AI_DEBUG', 'false').lower() == 'true'
+    logger = logging.getLogger("LegalAnalysisService")
+    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
+    
+    # Очищаем старые хендлеры
+    if logger.hasHandlers():
+        logger.handlers.clear()
+        
+    log_dir = os.path.join(os.getcwd(), 'backend', 'logs')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, 'legal_ai.log')
+    
+    # Используем 'a' (append) и utf-8
+    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='a')
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    
+    # Также в консоль
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+    
+    # Чтобы не дублировать в корневой логгер
+    logger.propagate = False
+    
+    return logger, debug_mode
+
+logger, DEBUG_MODE = setup_legal_logger()
 
 class LegalAnalysisService:
     def __init__(self, ai_client):
         self.client = ai_client
+        self.debug_mode = DEBUG_MODE
+        
         self.valid_blocks = [
             "Риски участия и исполнения", "Недопуск/оценка", "Проверка соответствия", 
             "Поставка и приемка", "Оплата", "Ответственность", 
@@ -66,15 +99,7 @@ class LegalAnalysisService:
             "рекомендации": "Рекомендации поставщику",
             "что сделать поставщику": "Рекомендации поставщику"
         }
-        # Настройка логирования в файл
-        if not os.path.exists('backend/logs'):
-            os.makedirs('backend/logs')
-        
-        logger.setLevel(logging.INFO)
-        if not logger.handlers:
-            file_handler = logging.FileHandler('backend/logs/legal_ai.log', encoding='utf-8')
-            file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-            logger.addHandler(file_handler)
+        logger.info(f"LegalAnalysisService initialized. Debug mode: {self.debug_mode}")
 
     def _assemble_prompt(self, template: str, text: str, prompt_type: str) -> str:
         """
@@ -202,15 +227,31 @@ class LegalAnalysisService:
             "file_classifications": file_classifications
         }
 
-    def _call_ai_with_retry(self, prompt: str, prompt_type: str, retries: int = 1) -> Dict[str, Any]:
+    def _call_ai_with_retry(self, prompt: str, prompt_type: str, tender_id: str = "unknown", filenames: List[str] = None, retries: int = 1) -> Dict[str, Any]:
         """
         Вызывает ИИ с поддержкой нового формата и legacy-fallback.
         """
         if not self.client:
             return {"rows": [], "summary_notes": ["Ошибка: ИИ-клиент не инициализирован."]}
             
+        start_time = datetime.now()
+        model_name = 'gemini-3-flash-preview'
+        
         # Логирование перед вызовом
-        logger.info(f"Calling AI with prompt type: {prompt_type}, context size: {len(prompt)}")
+        logger.info(f"===== [AI REQUEST START] =====")
+        logger.info(f"Tender ID: {tender_id}")
+        logger.info(f"Prompt Type: {prompt_type}")
+        logger.info(f"Model Name: {model_name}")
+        logger.info(f"Files: {filenames if filenames else 'N/A'}")
+        logger.info(f"Context Size: {len(prompt)} characters")
+        logger.info(f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+        
+        if self.debug_mode:
+            logger.info("--- [FULL ASSEMBLED PROMPT] ---")
+            logger.info(prompt)
+            logger.info("--- [END OF PROMPT] ---")
+        
+        logger.info(f"===== [AI REQUEST END] =====")
             
         for attempt in range(retries + 1):
             try:
@@ -218,9 +259,10 @@ class LegalAnalysisService:
                 current_prompt = prompt
                 if attempt > 0:
                     current_prompt += "\n\nВАЖНО: Верни строго JSON объект с полями 'rows' (массив объектов) и 'summary_notes' (массив строк). Не пиши ничего кроме JSON."
+                    logger.info(f"Retry attempt {attempt} for tender {tender_id}")
 
                 response = self.client.models.generate_content(
-                    model='gemini-3-flash-preview',
+                    model=model_name,
                     contents=current_prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
@@ -228,9 +270,26 @@ class LegalAnalysisService:
                     )
                 )
                 
+                end_time = datetime.now()
+                duration = (end_time - start_time).total_seconds()
+                
                 text = response.text.strip()
+                
                 # Логирование ответа
-                logger.info(f"первые 2000 символов ответа модели: {text[:2000]}")
+                logger.info(f"===== [AI RESPONSE START] =====")
+                logger.info(f"Tender ID: {tender_id}")
+                logger.info(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+                logger.info(f"Duration: {duration:.2f} seconds")
+                logger.info(f"Attempt: {attempt}")
+                
+                if self.debug_mode:
+                    logger.info("--- [FULL RAW RESPONSE] ---")
+                    logger.info(text)
+                    logger.info("--- [END OF RAW RESPONSE] ---")
+                else:
+                    logger.info(f"Raw AI response (first 2000 chars): {text[:2000]}")
+                
+                logger.info(f"===== [AI RESPONSE END] =====")
                 
                 # Очистка от markdown если есть
                 if text.startswith("```json"):
@@ -241,16 +300,21 @@ class LegalAnalysisService:
                 try:
                     data = json.loads(text)
                     # Логирование структуры JSON
-                    keys = list(data.keys())
-                    rows_count = len(data.get("rows", [])) if isinstance(data, dict) else 0
-                    summary_notes_count = len(data.get("summary_notes", [])) if isinstance(data, dict) else 0
-                    logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}, summary_notes_count={summary_notes_count}")
+                    if isinstance(data, dict):
+                        keys = list(data.keys())
+                        rows_count = len(data.get("rows", []))
+                        summary_notes_count = len(data.get("summary_notes", []))
+                        logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}, summary_notes_count={summary_notes_count}")
+                    else:
+                        logger.info(f"Parsed JSON is of type: {type(data)}")
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON Decode Error on attempt {attempt}: {e}")
-                    logger.error(f"Raw AI Response:\n{text}")
+                    if not self.debug_mode:
+                        logger.error(f"Raw AI Response (first 2000 chars):\n{text[:2000]}")
+                    
                     if attempt == retries:
                         from fastapi import HTTPException
-                        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}. Raw response: {text}")
+                        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}. Raw response: {text[:500]}...")
                     time.sleep(1)
                     continue
                 
@@ -263,10 +327,12 @@ class LegalAnalysisService:
                 
                 # 2. Legacy: массив
                 if isinstance(data, list):
+                    logger.info("Legacy format detected: array")
                     return {"rows": data, "summary_notes": ["(Legacy) Ответ получен в виде массива."]}
                 
                 # 3. Legacy: объект risks
                 if isinstance(data, dict) and 'risks' in data:
+                    logger.info("Legacy format detected: risks object")
                     return {"rows": data['risks'], "summary_notes": ["(Legacy) Ответ получен в формате risks."]}
                 
                 logger.warning(f"Unexpected JSON structure on attempt {attempt}: {data}")
@@ -285,9 +351,12 @@ class LegalAnalysisService:
 
     def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str) -> List[Dict[str, Any]]:
         valid_rows = []
+        rejected_count = 0
+        
         for row in rows:
             if not isinstance(row, dict):
-                logger.warning(f"причины отбраковки строк: строка не является словарем. Row: {row}")
+                logger.warning(f"Row rejection: not a dictionary. Row: {row}")
+                rejected_count += 1
                 continue
             
             # Обязательные поля
@@ -300,19 +369,19 @@ class LegalAnalysisService:
             legal_basis = str(row.get("legal_basis", "")).strip()
             
             # Валидация
+            rejection_reason = None
             if not block:
-                logger.warning(f"причины отбраковки строк: отсутствует block. Row: {row}")
-                continue
-            if not finding:
-                logger.warning(f"причины отбраковки строк: отсутствует finding. Row: {row}")
-                continue
-            if not supplier_action:
-                logger.warning(f"Row missing supplier_action (will use default): {row}")
-            if not source_document:
-                logger.warning(f"причины отбраковки строк: отсутствует source_document. Row: {row}")
-                continue
-            if not source_reference:
-                logger.warning(f"причины отбраковки строк: отсутствует source_reference. Row: {row}")
+                rejection_reason = "missing 'block'"
+            elif not finding:
+                rejection_reason = "missing 'finding'"
+            elif not source_document:
+                rejection_reason = "missing 'source_document'"
+            elif not source_reference:
+                rejection_reason = "missing 'source_reference'"
+            
+            if rejection_reason:
+                logger.warning(f"Row rejection: {rejection_reason}. Row: {row}")
+                rejected_count += 1
                 continue
             
             # Нормализация
@@ -323,7 +392,8 @@ class LegalAnalysisService:
                     break
             
             if block not in self.valid_blocks:
-                logger.warning(f"причины отбраковки строк: неизвестный блок '{block}'. Row: {row}")
+                logger.warning(f"Row rejection: unknown block '{block}'. Row: {row}")
+                rejected_count += 1
                 continue
             
             if risk_level not in ["High", "Medium", "Low"]:
@@ -342,6 +412,8 @@ class LegalAnalysisService:
             }
             
             valid_rows.append(valid_row)
+            
+        logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
         return valid_rows
 
     def _chunk_text(self, text: str, max_chars: int = 12000) -> str:
@@ -402,7 +474,7 @@ class LegalAnalysisService:
             
         for kw, block, label in topics:
             if kw not in existing_text:
-                added_rows.append({
+                new_row = {
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
                     "risk_level": "Medium",
@@ -411,10 +483,13 @@ class LegalAnalysisService:
                     "source_reference": "Критичное условие не выявлено в просмотренных документах",
                     "legal_basis": "",
                     "doc_group": "full"
-                })
+                }
+                added_rows.append(new_row)
+                logger.info(f"Auto-added critical topic: {label} in block {block} (reason: keyword '{kw}' not found in AI response)")
+        
         return added_rows
 
-    def analyze_full_package(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
+    def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
         Основной метод анализа всего пакета тендерной документации.
         """
@@ -423,6 +498,7 @@ class LegalAnalysisService:
                 callback(stage, progress, status)
 
         if not files:
+            logger.error(f"Analysis failed for tender {tender_id}: no files provided")
             return {
                 "rows": [],
                 "summary_notes": ["Ошибка: нет файлов для анализа."],
@@ -432,9 +508,10 @@ class LegalAnalysisService:
             }
         
         filenames = [f.get('filename', 'unknown') for f in files]
-        logger.info(f"prompt_type=full")
-        logger.info(f"количество документов: {len(files)}")
-        logger.info(f"список имен файлов: {filenames}")
+        logger.info(f"--- STARTING ANALYSIS FOR TENDER: {tender_id} ---")
+        logger.info(f"Prompt Type: full")
+        logger.info(f"Document Count: {len(files)}")
+        logger.info(f"Filenames: {filenames}")
         
         update_stage("Классификация", 10)
         
@@ -454,21 +531,24 @@ class LegalAnalysisService:
             all_text += f"=== ДОКУМЕНТ: {f['filename']} ===\n{f['text']}\n=== КОНЕЦ ДОКУМЕНТА ===\n\n"
         
         chunked_text = self._chunk_text(all_text)
-        logger.info(f"размер общего контекста: {len(chunked_text)} символов")
+        logger.info(f"Context size (after chunking): {len(chunked_text)} characters")
         
         # Используем новый промпт для всего пакета
         assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, chunked_text, "full")
         if not assembled_prompt:
+            logger.error(f"Prompt assembly failed for tender {tender_id}")
             res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
         else:
-            res = self._call_ai_with_retry(assembled_prompt, prompt_type="full")
+            res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
         
         rows = res.get('rows', [])
-        logger.info(f"число строк до валидации: {len(rows)}")
+        logger.info(f"AI response: {len(rows)} raw rows received")
+        
         rows = self._validate_and_filter_rows(rows, "full")
-        logger.info(f"число строк после валидации: {len(rows)}")
-        rows += self._add_missing_critical_topics(rows, "full")
-        logger.info(f"число строк после автодобавления критичных тем: {len(rows)}")
+        
+        added_rows = self._add_missing_critical_topics(rows, "full")
+        rows += added_rows
+        logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         
         all_rows = rows
         all_notes = res.get('summary_notes', [])
@@ -482,18 +562,24 @@ class LegalAnalysisService:
 
         unique_rows = []
         seen_keys = set()
+        duplicates_count = 0
+        
         for r in all_rows:
             # Защитная проверка
             if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
-                logger.warning(f"причины отбраковки строк: отсутствуют обязательные ключи для дедупликации. Row: {r}")
+                logger.warning(f"Row rejection (post-processing): missing mandatory keys. Row: {r}")
                 continue
                 
             key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 unique_rows.append(r)
+            else:
+                duplicates_count += 1
+                if self.debug_mode:
+                    logger.info(f"Duplicate removed: {r['block']} - {r['finding'][:50]}...")
         
-        logger.info(f"число строк после дедупликации: {len(unique_rows)}")
+        logger.info(f"Deduplication summary: before={len(all_rows)}, after={len(unique_rows)}, removed={duplicates_count}")
 
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
@@ -517,7 +603,7 @@ class LegalAnalysisService:
 
         update_stage("Готово", 100, "success")
         
-        return {
+        result = {
             "rows": final_rows,
             "summary_notes": final_notes,
             "has_contract": has_contract,
@@ -528,10 +614,20 @@ class LegalAnalysisService:
             "stage": "Готово",
             "progress": 100
         }
+        
+        logger.info(f"--- ANALYSIS COMPLETED FOR TENDER: {tender_id} ---")
+        logger.info(f"Final result summary: rows={len(final_rows)}, notes={len(final_notes)}, has_contract={has_contract}")
+        
+        if self.debug_mode:
+            logger.info("--- FINAL JSON RESULT ---")
+            logger.info(json.dumps(result, ensure_ascii=False, indent=2))
+            logger.info("--- END OF FINAL JSON ---")
+            
+        return result
 
-    def analyze_tender(self, files: List[Dict[str, str]], callback=None) -> Dict[str, Any]:
+    def analyze_tender(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
         Legacy wrapper for analyze_full_package.
         """
-        return self.analyze_full_package(files, callback)
+        return self.analyze_full_package(files, tender_id=tender_id, callback=callback)
 
