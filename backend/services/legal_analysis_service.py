@@ -9,9 +9,15 @@ from google import genai
 from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
 
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения (.env)
+env_loaded = load_dotenv()
+
 # Настройка логгера
 def setup_legal_logger():
-    debug_mode = os.environ.get('LEGAL_AI_DEBUG', 'false').lower() == 'true'
+    env_debug_val = os.environ.get('LEGAL_AI_DEBUG', 'false')
+    debug_mode = env_debug_val.lower() == 'true'
     logger = logging.getLogger("LegalAnalysisService")
     logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     
@@ -36,6 +42,13 @@ def setup_legal_logger():
     
     # Чтобы не дублировать в корневой логгер
     logger.propagate = False
+    
+    # Стартовые логи для проверки .env
+    logger.info(f"--- [ENV INITIALIZATION] ---")
+    logger.info(f".env file found and loaded: {env_loaded}")
+    logger.info(f"LEGAL_AI_DEBUG from env: '{env_debug_val}'")
+    logger.info(f"Actual DEBUG_MODE: {debug_mode}")
+    logger.info(f"----------------------------")
     
     return logger, debug_mode
 

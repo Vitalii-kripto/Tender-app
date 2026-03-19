@@ -8,8 +8,12 @@ import re
 import logging
 
 # --- LOGGING SETUP ---
+# Загружаем переменные окружения (.env)
+env_loaded = load_dotenv()
+
 def setup_ai_logger():
-    debug_mode = os.getenv("LEGAL_AI_DEBUG", "false").lower() == "true"
+    env_debug_val = os.getenv("LEGAL_AI_DEBUG", "false")
+    debug_mode = env_debug_val.lower() == "true"
     logger = logging.getLogger("AiService")
     logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
     
@@ -35,12 +39,16 @@ def setup_ai_logger():
     # Чтобы не дублировать в корневой логгер
     logger.propagate = False
     
+    # Стартовые логи для проверки .env
+    logger.info(f"--- [ENV INITIALIZATION - AI SERVICE] ---")
+    logger.info(f".env file found and loaded: {env_loaded}")
+    logger.info(f"LEGAL_AI_DEBUG from env: '{env_debug_val}'")
+    logger.info(f"Actual DEBUG_MODE: {debug_mode}")
+    logger.info(f"-----------------------------------------")
+    
     return logger, debug_mode
 
 logger, DEBUG_MODE = setup_ai_logger()
-
-# Загружаем переменные окружения (.env)
-load_dotenv()
 
 class AiService:
     """

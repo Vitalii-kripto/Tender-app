@@ -7,6 +7,10 @@ import tempfile
 import openpyxl
 import re
 import sqlite3
+from dotenv import load_dotenv
+
+# Загружаем переменные окружения в самом начале
+load_dotenv()
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from typing import List, Dict, Any
 
