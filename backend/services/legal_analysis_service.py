@@ -335,18 +335,19 @@ class LegalAnalysisService:
                 if isinstance(data, dict) and 'rows' in data:
                     return {
                         "rows": data.get("rows", []),
+                        "detailed_report": data.get("detailed_report", []),
                         "summary_notes": data.get("summary_notes", [])
                     }
                 
                 # 2. Legacy: массив
                 if isinstance(data, list):
                     logger.info("Legacy format detected: array")
-                    return {"rows": data, "summary_notes": ["(Legacy) Ответ получен в виде массива."]}
+                    return {"rows": data, "detailed_report": [], "summary_notes": ["(Legacy) Ответ получен в виде массива."]}
                 
                 # 3. Legacy: объект risks
                 if isinstance(data, dict) and 'risks' in data:
                     logger.info("Legacy format detected: risks object")
-                    return {"rows": data['risks'], "summary_notes": ["(Legacy) Ответ получен в формате risks."]}
+                    return {"rows": data['risks'], "detailed_report": [], "summary_notes": ["(Legacy) Ответ получен в формате risks."]}
                 
                 logger.warning(f"Unexpected JSON structure on attempt {attempt}: {data}")
                 
@@ -358,9 +359,9 @@ class LegalAnalysisService:
                 if attempt < retries:
                     time.sleep(1)
                 else:
-                    return {"rows": [], "summary_notes": [f"Техническая ошибка ИИ: {str(e)}"]}
+                    return {"rows": [], "detailed_report": [], "summary_notes": [f"Техническая ошибка ИИ: {str(e)}"]}
                     
-        return {"rows": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
+        return {"rows": [], "detailed_report": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
 
     def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, evidence_package: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         valid_rows = []
@@ -481,7 +482,7 @@ class LegalAnalysisService:
         critical_slots = {
             "unloading": ("Поставка и приемка", "условие о разгрузке"),
             "acceptance_deadline": ("Поставка и приемка", "сроки приемки"),
-            "acceptance_rejection_grounds": ("Поставка и приемка", "основания отказа в приемке"),
+            "refusal_grounds": ("Поставка и приемка", "основания отказа в приемке"),
             "payment_deadline": ("Оплата", "срок оплаты"),
             "advance_payment": ("Оплата", "условие об авансе"),
             "edo_eis": ("Оплата", "условие об ЭДО"),
@@ -541,6 +542,11 @@ class LegalAnalysisService:
         classification_notes = classified["classification_notes"]
         file_classifications = classified["file_classifications"]
         
+        # Логируем роли документов
+        logger.info("Document roles:")
+        for fc in file_classifications:
+            logger.info(f"  - {fc['filename']}: {fc['category']} (confidence: {fc['confidence_score']})")
+        
         file_statuses = [{"filename": f["filename"], "status": "processed"} for f in files]
         
         update_stage("Анализ документации", 30)
@@ -579,9 +585,59 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
         
         rows = res.get('rows', [])
-        logger.info(f"AI response: {len(rows)} raw rows received")
+        detailed_report = res.get('detailed_report', [])
+        logger.info(f"AI response: {len(rows)} raw rows received, {len(detailed_report)} detailed report sections")
         
         rows = self._validate_and_filter_rows(rows, "full", evidence_package)
+        
+        # Add contradictions directly to rows to guarantee they are not smoothed out
+        contradiction_rows = []
+        for c in contradictions:
+            contradiction_rows.append({
+                "block": "Проверка соответствия",
+                "finding": f"ПРОТИВОРЕЧИЕ ({c['slot_name']}): В документе '{c['source_1']}' указано '{c['value_1']}', а в документе '{c['source_2']}' — '{c['value_2']}'.",
+                "risk_level": c['severity'],
+                "supplier_action": "Направить запрос на разъяснение для устранения противоречия до подачи заявки.",
+                "source_document": f"{c['source_1']} / {c['source_2']}",
+                "source_reference": "Сравнение документов",
+                "legal_basis": "ч. 4 ст. 105 Закона № 44-ФЗ",
+                "doc_group": "full"
+            })
+        
+        rows = contradiction_rows + rows
+        
+        # Валидация detailed_report
+        valid_detailed_report = []
+        if isinstance(detailed_report, dict):
+            section_titles = {
+                "risks_execution": "Риски участия и исполнения",
+                "rejection_risks": "Риски недопуска/потери баллов",
+                "compliance_check": "Проверка соответствия",
+                "delivery_acceptance": "Поставка и приемка",
+                "payment_terms": "Оплата",
+                "liability": "Ответственность",
+                "application_documents": "Документы заявки",
+                "delivery_documents": "Документы при поставке",
+                "registries_restrictions": "Реестры/ограничения",
+                "supplier_recommendations": "Рекомендации поставщику"
+            }
+            for key, title in section_titles.items():
+                content_items = detailed_report.get(key, [])
+                if content_items:
+                    if isinstance(content_items, list):
+                        content_str = "\n\n".join([str(item) for item in content_items if item])
+                    else:
+                        content_str = str(content_items)
+                    
+                    if content_str.strip():
+                        valid_detailed_report.append({
+                            "section_title": title,
+                            "content": content_str.strip()
+                        })
+        elif isinstance(detailed_report, list):
+            for section in detailed_report:
+                if isinstance(section, dict) and 'section_title' in section and 'content' in section:
+                    valid_detailed_report.append(section)
         
         added_rows = self._add_missing_critical_topics(evidence_package)
         rows += added_rows
@@ -642,6 +698,7 @@ class LegalAnalysisService:
         
         result = {
             "rows": final_rows,
+            "detailed_report": valid_detailed_report,
             "summary_notes": final_notes,
             "has_contract": has_contract,
             "classification_notes": classification_notes,

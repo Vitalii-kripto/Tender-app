@@ -11,34 +11,34 @@ class EvidenceCollector:
         self.document_roles = {
             "contract": {
                 "patterns": [r"проект (контракта|договора)", r"предмет (контракта|договора)", r"права и обязанности сторон", r"реквизиты сторон", r"проект государственного контракта"],
-                "label": "проект контракта/договор"
+                "label": "contract"
             },
-            "notice": {
+            "procurement": {
                 "patterns": [r"извещение о проведении", r"электронный аукцион", r"открытый конкурс", r"запрос котировок", r"информационная карта"],
-                "label": "извещение/процедурная часть"
+                "label": "procurement"
             },
-            "technical_spec": {
+            "tz": {
                 "patterns": [r"техническое задание", r"описание объекта закупки", r"характеристики (товара|работы|услуги)", r"спецификация", r"технические требования"],
-                "label": "ТЗ/описание объекта"
+                "label": "tz"
             },
-            "instructions": {
+            "application_rules": {
                 "patterns": [r"инструкция по заполнению", r"требования к (содержанию|составу) заявки", r"порядок подачи заявок", r"требования к участникам"],
-                "label": "требования к заявке/инструкция"
+                "label": "application_rules"
             },
-            "nmcc": {
+            "nmck": {
                 "patterns": [r"обоснование (начальной|нмцк)", r"расчет цены", r"коммерческое предложение", r"анализ рынка"],
-                "label": "НМЦК/обоснование цены"
+                "label": "nmck"
             }
         }
 
         # Смысловые слоты для извлечения фактов
         self.slots = {
             "delivery_deadline": {
-                "patterns": [r"срок поставки", r"период поставки", r"график поставки", r"в течение \d+ (рабочих|календарных) дней", r"не позднее \d{2}\.\d{2}\.\d{4}"],
+                "patterns": [r"срок поставки", r"период поставки", r"график поставки", r"в течение \d+ (рабочих|календарных) дней", r"не позднее \d{2}\.\d{2}\.\d{4}", r"поставка товара осуществляется", r"сроки (выполнения|оказания|поставки)"],
                 "description": "Срок поставки"
             },
             "delivery_place": {
-                "patterns": [r"место поставки", r"адрес поставки", r"пункт назначения", r"местонахождение заказчика"],
+                "patterns": [r"место поставки", r"адрес поставки", r"пункт назначения", r"местонахождение заказчика", r"место (выполнения|оказания|передачи)"],
                 "description": "Место поставки"
             },
             "shipping_order": {
@@ -46,50 +46,51 @@ class EvidenceCollector:
                 "description": "Порядок отгрузки"
             },
             "unloading": {
-                "patterns": [r"разгрузка", r"подъем на этаж", r"силами (поставщика|заказчика)", r"разгрузочные работы"],
+                "patterns": [r"разгрузка", r"подъем на этаж", r"силами (поставщика|заказчика)", r"разгрузочные работы", r"погрузочно-разгрузочн", r"погрузка"],
                 "description": "Разгрузка"
             },
-            "acceptance": {
+            "acceptance_procedure": {
                 "patterns": [r"приемка", r"порядок приемки", r"экспертиза", r"документ о приемке", r"приемочная комиссия"],
-                "description": "Приемка"
+                "description": "Порядок приемки"
             },
             "acceptance_deadline": {
-                "patterns": [r"срок приемки", r"в течение \d+ (рабочих|календарных) дней после поставки", r"срок подписания документа о приемке"],
+                "patterns": [r"срок приемки", r"в течение \d+ (рабочих|календарных) дней после поставки", r"срок подписания документа о приемке", r"приемка осуществляется в течение"],
                 "description": "Сроки приемки"
             },
-            "acceptance_rejection_grounds": {
-                "patterns": [r"основания (отказа в приемке|неприемки)", r"несоответствие (качеству|количеству)", r"мотивированный отказ"],
+            "refusal_grounds": {
+                "patterns": [r"основания (отказа в приемке|неприемки)", r"несоответствие (качеству|количеству)", r"мотивированный отказ", r"отказ от приемки"],
                 "description": "Основания отказа в приемке"
             },
             "delivery_documents": {
                 "patterns": [
                     r"упд", r"накладная", r"акт (приемки|передачи)", r"счет-фактура", 
                     r"паспорт (качества|изделия)", r"сертификат", r"сопроводительные документы",
-                    r"документы, подтверждающие (качество|происхождение)", r"товарно-транспортная накладная"
+                    r"документы, подтверждающие (качество|происхождение)", r"товарно-транспортная накладная",
+                    r"деклараци[яи]", r"вместе с товаром передаются", r"при передаче товара"
                 ],
                 "description": "Документы при поставке"
             },
             "payment_deadline": {
-                "patterns": [r"срок оплаты", r"в течение \d+ (рабочих|календарных) дней (с даты|после)", r"оплата производится в течение"],
+                "patterns": [r"срок оплаты", r"в течение \d+ (рабочих|календарных) дней (с даты|после)", r"оплата производится в течение", r"оплата.*?(?:в течение|не позднее)"],
                 "description": "Срок оплаты"
             },
-            "payment_order": {
+            "payment_procedure": {
                 "patterns": [r"порядок (расчетов|оплаты)", r"безналичный расчет", r"платежное поручение", r"источник финансирования"],
                 "description": "Порядок расчетов"
             },
             "advance_payment": {
-                "patterns": [r"аванс", r"предоплата", r"размер аванса", r"без аванса"],
+                "patterns": [r"аванс", r"предоплата", r"размер аванса", r"без аванса", r"авансирование", r"выплата аванса"],
                 "description": "Аванс"
             },
             "edo_eis": {
-                "patterns": [r"эдо", r"электронный документооборот", r"еис", r"электронное актирование", r"цифровой контракт"],
+                "patterns": [r"эдо", r"электронный документооборот", r"еис", r"электронное актирование", r"цифровой контракт", r"электронной форме"],
                 "description": "ЭДО/ЕИС"
             },
             "treasury_support": {
-                "patterns": [r"казначейское сопровождение", r"лицевой счет в казначействе", r"казначейский счет"],
+                "patterns": [r"казначейское сопровождение", r"лицевой счет в казначействе", r"казначейский счет", r"казначейств"],
                 "description": "Казначейское сопровождение"
             },
-            "deductions": {
+            "setoff_or_penalty_deduction": {
                 "patterns": [r"удержания", r"удержание (неустойки|штрафа)", r"обеспечение гарантийных обязательств", r"удержание из суммы оплаты"],
                 "description": "Удержания"
             },
@@ -104,8 +105,8 @@ class EvidenceCollector:
             "application_composition": {
                 "patterns": [
                     r"состав заявки", r"требования к (содержанию|составу) заявки", 
-                    r"перечень документов заявки", r"участник должен предоставить",
-                    r"в составе заявки должны быть", r"документы, подтверждающие соответствие"
+                    r"перечень документов заявки", r"участник должен (предоставить|указать|задекларировать|подтвердить)",
+                    r"в составе заявки должны быть", r"документы, подтверждающие соответствие", r"заявка на участие"
                 ],
                 "description": "Состав заявки"
             },
@@ -121,25 +122,25 @@ class EvidenceCollector:
                 "patterns": [r"основания (отклонения|отказа в допуске)", r"несоответствие требованиям", r"отклонение заявки"],
                 "description": "Основания отклонения"
             },
-            "country_of_origin": {
+            "origin_country_requirement": {
                 "patterns": [r"страна происхождения", r"наименование страны", r"происхождение товара"],
-                "description": "Страна происхождения"
+                "description": "Требование к стране происхождения"
             },
             "national_regime_registries": {
-                "patterns": [r"нацрежим", r"национальный режим", r"пп рф \d+", r"реестр (рф|еаэс)", r"реестровый номер", r"приказ минфина \d+н"],
+                "patterns": [r"нацрежим", r"национальный режим", r"пп рф \d+", r"реестр (рф|еаэс)", r"реестровый номер", r"приказ минфина \d+н", r"запрет на допуск", r"ограничения допуска", r"условия допуска"],
                 "description": "Нацрежим/реестры"
             },
-            "application_security": {
-                "patterns": [r"обеспечение заявки", r"размер обеспечения заявки", r"независимая гарантия", r"банковская гарантия"],
-                "description": "Обеспечение заявки"
+            "security_requirements": {
+                "patterns": [r"обеспечение заявки", r"размер обеспечения заявки", r"независимая гарантия", r"банковская гарантия", r"обеспечение исполнения контракта", r"размер обеспечения исполнения", r"обеспечение гарантийных обязательств"],
+                "description": "Требования к обеспечению"
             },
-            "contract_security": {
-                "patterns": [r"обеспечение исполнения контракта", r"размер обеспечения исполнения", r"обеспечение гарантийных обязательств"],
-                "description": "Обеспечение контракта"
+            "nmck_method": {
+                "patterns": [r"метод сопоставимых рыночных цен", r"анализ рынка", r"затратный метод", r"тарифный метод", r"проектно-сметный метод", r"нормативный метод", r"метод определения нмцк"],
+                "description": "Метод НМЦК"
             },
-            "nmcc": {
-                "patterns": [r"нмцк", r"начальная (максимальная|) цена", r"обоснование цены", r"расчет нмцк"],
-                "description": "НМЦК"
+            "nmck_value": {
+                "patterns": [r"нмцк", r"начальная (максимальная|) цена", r"цена контракта", r"итого"],
+                "description": "Значение НМЦК"
             }
         }
 
@@ -161,10 +162,10 @@ class EvidenceCollector:
             # Если есть несколько сильных ролей, это смешанный документ
             top_roles = [r for r, s in scores.items() if s == scores[max_role]]
             if len(top_roles) > 1:
-                return "смешанный документ"
+                return "mixed"
             return self.document_roles[max_role]["label"]
         
-        return "не определено"
+        return "unknown"
 
     def _extract_slot_value(self, slot_id: str, text: str, match: re.Match) -> str:
         """
@@ -184,7 +185,7 @@ class EvidenceCollector:
                 # Попробуем захватить условие (например, "с момента подписания")
                 condition_match = re.search(r'((?:с даты|с момента|после|от даты|со дня).*?)(?:\.|\;|$)', context[val_match.end():], re.IGNORECASE)
                 condition = f" {condition_match.group(1).strip()}" if condition_match else ""
-                return f"{match.group(0).strip()} {val_match.group(0).strip()}{condition}"
+                return f"{val_match.group(0).strip()}{condition}"
                 
         elif slot_id == "delivery_place":
             # Ищем адрес (начинается с г., ул., обл., край, республика, индекс)
@@ -193,10 +194,18 @@ class EvidenceCollector:
                 return val_match.group(1).strip()
                 
         elif slot_id == "unloading":
-            # Ищем кто выполняет
-            val_match = re.search(r'(силами.*?поставщика|силами.*?заказчика|за счет.*?поставщика|за счет.*?заказчика|поставщик.*?своими силами|разгрузка.*?поставщиком)', context, re.IGNORECASE)
-            if val_match:
-                return val_match.group(1).strip()
+            # Ищем кто выполняет, за чей счет, входит ли в цену
+            who = re.search(r'(силами.*?поставщика|силами.*?заказчика|поставщик.*?своими силами|разгрузка.*?поставщиком)', context, re.IGNORECASE)
+            expense = re.search(r'(за счет.*?поставщика|за счет.*?заказчика)', context, re.IGNORECASE)
+            included = re.search(r'(включает.*?разгрузк|входит в цену|включена в цену)', context, re.IGNORECASE)
+            
+            res = []
+            if who: res.append(f"Кто выполняет: {who.group(1).strip()}")
+            if expense: res.append(f"За чей счет: {expense.group(1).strip()}")
+            if included: res.append(f"Входит ли в цену: {included.group(1).strip()}")
+            
+            if res:
+                return "; ".join(res)
                 
         elif slot_id in ["delivery_documents", "application_composition"]:
             # Берем первые 300 символов как перечень
@@ -208,7 +217,7 @@ class EvidenceCollector:
         if not default_val:
             return match.group(0).strip()
             
-        return f"{match.group(0).strip()}: {default_val}..."
+        return f"{default_val}..."
 
     def _extract_nmcc_facts(self, text: str) -> Dict[str, Any]:
         """
@@ -302,22 +311,30 @@ class EvidenceCollector:
             }
 
             # НМЦК специфичный анализ
-            if role == "НМЦК/обоснование цены":
+            if role == "nmck":
                 nmcc_facts = self._extract_nmcc_facts(text)
-                evidence_package["slots"]["nmcc"].append({
-                    "source": filename,
-                    "slot_name": "НМЦК",
-                    "value": f"Сумма: {nmcc_facts['total_sum']}, Метод: {nmcc_facts['method']}, Источников КП: {nmcc_facts['sources_count']}",
+                evidence_package["slots"]["nmck_value"].append({
+                    "source_document": filename,
+                    "slot_name": "Значение НМЦК",
+                    "slot_value": f"Сумма: {nmcc_facts['total_sum']}, Источников КП: {nmcc_facts['sources_count']}",
                     "confidence": 0.95,
                     "evidence_text": text[:1000],
                     "source_reference": "весь документ"
                 })
-                doc_info["slots_found"] += 1
+                evidence_package["slots"]["nmck_method"].append({
+                    "source_document": filename,
+                    "slot_name": "Метод НМЦК",
+                    "slot_value": nmcc_facts['method'],
+                    "confidence": 0.95,
+                    "evidence_text": text[:1000],
+                    "source_reference": "весь документ"
+                })
+                doc_info["slots_found"] += 2
 
             # Ищем паттерны в тексте для каждого слота по всему документу
             for slot_id, config in self.slots.items():
                 # Пропускаем НМЦК если уже обработали как роль
-                if slot_id == "nmcc" and role == "НМЦК/обоснование цены":
+                if slot_id in ["nmck_value", "nmck_method"] and role == "nmck":
                     continue
 
                 for pattern in config["patterns"]:
@@ -337,12 +354,12 @@ class EvidenceCollector:
                         source_ref = ref_match.group(1) if ref_match else "не указан"
 
                         evidence_package["slots"][slot_id].append({
-                            "source": filename,
+                            "source_document": filename,
                             "slot_name": config["description"],
-                            "value": value,
+                            "slot_value": value,
                             "evidence_text": chunk,
                             "source_reference": source_ref,
-                            "confidence": 0.85 if role != "не определено" else 0.65,
+                            "confidence": 0.85 if role != "unknown" else 0.65,
                             "offset": m.start()
                         })
                         doc_info["slots_found"] += 1
@@ -369,7 +386,7 @@ class EvidenceCollector:
             "delivery_deadline", "payment_deadline", "delivery_place", 
             "acceptance_deadline", "delivery_documents", "application_composition", 
             "rejection_grounds", "evaluation_criteria", "national_regime_registries",
-            "application_security", "contract_security"
+            "security_requirements"
         ]
         
         for slot_id in slots_to_compare:
@@ -383,7 +400,7 @@ class EvidenceCollector:
             # Группируем по источникам
             by_source = {}
             for item in items:
-                src = item["source"]
+                src = item["source_document"]
                 if src not in by_source:
                     by_source[src] = []
                 by_source[src].append(item)
@@ -391,25 +408,28 @@ class EvidenceCollector:
             sources = list(by_source.keys())
             if len(sources) > 1:
                 desc = self.slots[slot_id]["description"]
-                src1 = sources[0]
-                src2 = sources[1]
                 
-                val1 = by_source[src1][0].get("value", "н/д")
-                val2 = by_source[src2][0].get("value", "н/д")
-                
-                # Сравниваем значения, чтобы убедиться, что они действительно разные
-                if val1.lower() != val2.lower() and val1.lower() not in val2.lower() and val2.lower() not in val1.lower():
-                    package["contradictions"].append({
-                        "slot_name": desc,
-                        "value_1": val1,
-                        "source_1": src1,
-                        "value_2": val2,
-                        "source_2": src2,
-                        "contradiction_type": "Разные значения в разных документах",
-                        "severity": "High",
-                        "backend_comment": f"Информация по теме '{desc}' найдена в нескольких источниках и имеет разные текстовые значения. Требуется сверка на наличие расхождений."
-                    })
-                    logger.info(f"Detected contradiction for slot '{slot_id}': '{val1}' ({src1}) vs '{val2}' ({src2})")
+                # Сравниваем все пары источников
+                for i in range(len(sources)):
+                    for j in range(i + 1, len(sources)):
+                        src1 = sources[i]
+                        src2 = sources[j]
+                        
+                        val1 = by_source[src1][0].get("slot_value", "н/д")
+                        val2 = by_source[src2][0].get("slot_value", "н/д")
+                        
+                        # Сравниваем значения, чтобы убедиться, что они действительно разные
+                        if val1.lower() != val2.lower() and val1.lower() not in val2.lower() and val2.lower() not in val1.lower():
+                            package["contradictions"].append({
+                                "slot_name": desc,
+                                "value_1": val1,
+                                "source_1": src1,
+                                "value_2": val2,
+                                "source_2": src2,
+                                "contradiction_reason": "Разные значения в разных документах",
+                                "severity": "High"
+                            })
+                            logger.info(f"Detected contradiction for slot '{slot_id}': '{val1}' ({src1}) vs '{val2}' ({src2})")
 
     def format_for_llm(self, package: Dict[str, Any]) -> str:
         """
@@ -442,8 +462,7 @@ class EvidenceCollector:
                 output += f"- ТЕМА: {con['slot_name']}\n"
                 output += f"  ИСТОЧНИК 1: {con['source_1']} (Значение: '{con['value_1']}')\n"
                 output += f"  ИСТОЧНИК 2: {con['source_2']} (Значение: '{con['value_2']}')\n"
-                output += f"  ТИП: {con['contradiction_type']}, ВАЖНОСТЬ: {con['severity']}\n"
-                output += f"  КОММЕНТАРИЙ BACKEND: {con['backend_comment']}\n"
+                output += f"  ПРИЧИНА: {con.get('contradiction_reason', 'Разные значения')}, ВАЖНОСТЬ: {con['severity']}\n"
             output += "\n"
 
         # 2. Данные по слотам
@@ -466,8 +485,7 @@ class EvidenceCollector:
                 output += f"ИСТОЧНИК: {src}\n"
                 for i, item in enumerate(slot_items):
                     if i >= 5: break # Лимит фрагментов увеличен
-                    output += f"ФРАГМЕНТ {i+1} (Значение: '{item.get('value')}', Ссылка: {item.get('source_reference', 'н/д')}, Уверенность: {item.get('confidence')}):\n"
-                    output += f"[...]{item.get('evidence_text')}[...]\n"
+                    output += f"ФАКТ {i+1} (Значение: '{item.get('slot_value')}', Ссылка: {item.get('source_reference', 'н/д')})\n"
                 output += "\n"
             output += "\n"
 

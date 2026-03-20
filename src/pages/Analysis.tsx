@@ -710,6 +710,25 @@ const Analysis = () => {
                                     </div>
                                 ) : null}
                                 
+                                {result.status === 'success' && result.detailed_report && result.detailed_report.length > 0 && (
+                                    <div className="px-5 py-6 bg-slate-50 border-t border-slate-200">
+                                        <h4 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
+                                            <FileText className="text-blue-600" />
+                                            Детальный юридический отчет
+                                        </h4>
+                                        <div className="space-y-6">
+                                            {result.detailed_report.map((section, idx) => (
+                                                <div key={idx} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
+                                                    <h5 className="text-md font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">{section.section_title}</h5>
+                                                    <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
+                                                        {section.content}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-6">
                                         <button onClick={() => exportToExcelFiltered(result.id)} className="text-xs text-emerald-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">

@@ -74,11 +74,17 @@ export interface FileClassification {
   classification_reason: string;
 }
 
+export interface LegalAnalysisDetailedReportSection {
+  section_title: string;
+  content: string;
+}
+
 export interface LegalAnalysisResult {
   id: string;
   status: 'success' | 'error' | 'partial';
   summary_notes: string[];
   rows: LegalAnalysisRow[];
+  detailed_report?: LegalAnalysisDetailedReportSection[];
   has_contract: boolean;
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
