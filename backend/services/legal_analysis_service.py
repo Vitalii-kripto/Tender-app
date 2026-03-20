@@ -494,7 +494,7 @@ class LegalAnalysisService:
             
         for slot_id, (block, label) in critical_slots.items():
             # Если слот не найден ни в одном документе
-            if not evidence_package["slots"].get(slot_id):
+            if not evidence_package.get("slots", {}).get(slot_id):
                 new_row = {
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
@@ -545,9 +545,9 @@ class LegalAnalysisService:
         # Логируем роли документов
         logger.info("Document roles:")
         for fc in file_classifications:
-            logger.info(f"  - {fc['filename']}: {fc['category']} (confidence: {fc['confidence_score']})")
+            logger.info(f"  - {fc.get('filename', 'unknown')}: {fc.get('category', 'unknown')} (contract_score: {fc.get('contract_score', 0)}, procurement_score: {fc.get('procurement_score', 0)}, reason: {fc.get('classification_reason', '')})")
         
-        file_statuses = [{"filename": f["filename"], "status": "processed"} for f in files]
+        file_statuses = [{"filename": f.get("filename", "unknown"), "status": "processed"} for f in files]
         
         update_stage("Анализ документации", 30)
 
@@ -555,8 +555,8 @@ class LegalAnalysisService:
         logger.info(f"Extracting evidence from {len(files)} files...")
         evidence_package = self.evidence_collector.collect_evidence(files)
         
-        found_slots = [slot_id for slot_id, items in evidence_package["slots"].items() if items]
-        not_found_slots = [slot_id for slot_id, items in evidence_package["slots"].items() if not items]
+        found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if items]
+        not_found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if not items]
         logger.info(f"Found slots: {found_slots}")
         logger.info(f"Not found slots: {not_found_slots}")
         
@@ -564,7 +564,7 @@ class LegalAnalysisService:
         if contradictions:
             logger.info(f"Found {len(contradictions)} contradictions:")
             for c in contradictions:
-                logger.info(f"  - {c['slot_name']}: {c['value_1']} ({c['source_1']}) vs {c['value_2']} ({c['source_2']})")
+                logger.info(f"  - {c.get('slot_name', 'unknown')}: {c.get('value_1', '')} ({c.get('source_1', '')}) vs {c.get('value_2', '')} ({c.get('source_2', '')})")
         else:
             logger.info("No contradictions found.")
         
@@ -595,10 +595,10 @@ class LegalAnalysisService:
         for c in contradictions:
             contradiction_rows.append({
                 "block": "Проверка соответствия",
-                "finding": f"ПРОТИВОРЕЧИЕ ({c['slot_name']}): В документе '{c['source_1']}' указано '{c['value_1']}', а в документе '{c['source_2']}' — '{c['value_2']}'.",
-                "risk_level": c['severity'],
+                "finding": f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'.",
+                "risk_level": c.get('severity', 'High'),
                 "supplier_action": "Направить запрос на разъяснение для устранения противоречия до подачи заявки.",
-                "source_document": f"{c['source_1']} / {c['source_2']}",
+                "source_document": f"{c.get('source_1', '')} / {c.get('source_2', '')}",
                 "source_reference": "Сравнение документов",
                 "legal_basis": "ч. 4 ст. 105 Закона № 44-ФЗ",
                 "doc_group": "full"
