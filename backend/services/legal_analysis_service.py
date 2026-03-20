@@ -303,73 +303,36 @@ class LegalAnalysisService:
                 logger.info(f"Tender ID: {tender_id}")
                 logger.info(f"End Time: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
                 logger.info(f"Duration: {duration:.2f} seconds")
-                logger.info(f"Attempt: {attempt}")
-                
-                logger.info("--- [FULL RAW RESPONSE] ---")
+                logger.info(f"Response Length: {len(text)} characters")
+                logger.info(f"Full Response Text:")
                 logger.info(text)
-                logger.info("--- [END OF RAW RESPONSE] ---")
-                
                 logger.info(f"===== [AI RESPONSE END] =====")
-                
-                # Очистка от markdown если есть
-                if text.startswith("```json"):
-                    text = text.replace("```json", "", 1).replace("```", "", 1).strip()
-                elif text.startswith("```"):
-                    text = text.replace("```", "", 1).replace("```", "", 1).strip()
                 
                 try:
                     data = json.loads(text)
-                    # Логирование структуры JSON
-                    if isinstance(data, dict):
-                        keys = list(data.keys())
-                        rows_count = len(data.get("rows", []))
-                        summary_notes_count = len(data.get("summary_notes", []))
-                        logger.info(f"Parsed JSON structure: keys={keys}, rows_count={rows_count}, summary_notes_count={summary_notes_count}")
-                    else:
-                        logger.info(f"Parsed JSON is of type: {type(data)}")
+                    # Если ИИ вернул не объект, а массив (старый формат), оборачиваем
+                    if isinstance(data, list):
+                        return {"rows": data, "summary_notes": []}
+                    return data
                 except json.JSONDecodeError as e:
                     logger.error(f"JSON Decode Error on attempt {attempt}: {e}")
-                    if not self.debug_mode:
-                        logger.error(f"Raw AI Response (first 2000 chars):\n{text[:2000]}")
-                    
                     if attempt == retries:
-                        from fastapi import HTTPException
-                        raise HTTPException(status_code=500, detail=f"AI returned invalid JSON: {e}. Raw response: {text[:500]}...")
-                    time.sleep(1)
+                        # На последней попытке пытаемся вытащить JSON регуляркой
+                        json_match = re.search(r'(\{.*\})', text, re.DOTALL)
+                        if json_match:
+                            try:
+                                return json.loads(json_match.group(1))
+                            except:
+                                pass
+                        return {"rows": [], "summary_notes": [f"Ошибка парсинга JSON: {str(e)}"]}
                     continue
-                
-                # 1. Целевой формат
-                if isinstance(data, dict) and 'rows' in data:
-                    return {
-                        "rows": data.get("rows", []),
-                        "detailed_report": data.get("detailed_report", {}),
-                        "final_report_markdown": data.get("final_report_markdown", ""),
-                        "summary_notes": data.get("summary_notes", [])
-                    }
-                
-                # 2. Legacy: массив
-                if isinstance(data, list):
-                    logger.info("Legacy format detected: array")
-                    return {"rows": data, "detailed_report": [], "summary_notes": ["(Legacy) Ответ получен в виде массива."]}
-                
-                # 3. Legacy: объект risks
-                if isinstance(data, dict) and 'risks' in data:
-                    logger.info("Legacy format detected: risks object")
-                    return {"rows": data['risks'], "detailed_report": [], "summary_notes": ["(Legacy) Ответ получен в формате risks."]}
-                
-                logger.warning(f"Unexpected JSON structure on attempt {attempt}: {data}")
-                
             except Exception as e:
-                from fastapi import HTTPException
-                if isinstance(e, HTTPException):
-                    raise e
-                logger.error(f"AI Error on attempt {attempt}: {e}")
-                if attempt < retries:
-                    time.sleep(1)
-                else:
-                    return {"rows": [], "detailed_report": [], "summary_notes": [f"Техническая ошибка ИИ: {str(e)}"]}
-                    
-        return {"rows": [], "detailed_report": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
+                logger.error(f"AI Call Error on attempt {attempt}: {str(e)}")
+                if attempt == retries:
+                    return {"rows": [], "summary_notes": [f"Ошибка вызова ИИ: {str(e)}"]}
+                time.sleep(2)
+        
+        return {"rows": [], "summary_notes": ["Неизвестная ошибка при вызове ИИ."]}
 
     def _clean_text(self, text: str) -> str:
         """
@@ -405,6 +368,16 @@ class LegalAnalysisService:
                 deduped_lines.append(line)
         
         return "\n".join(deduped_lines).strip()
+
+    def _normalize_text(self, s: Any) -> str:
+        """Нормализация текста для сравнения и дедупликации."""
+        return re.sub(r'[^\w\s]', '', str(s).lower().strip())
+
+    def _log_progress(self, stage: str, progress: int, status: str = "processing", callback=None):
+        """Логирование прогресса и вызов callback."""
+        if callback:
+            callback(stage, progress, status)
+        logger.info(f"Stage: {stage}, Progress: {progress}%")
 
     def _prepare_full_context(self, files: List[Dict[str, str]], evidence_package: Dict[str, Any] = None) -> str:
         """
@@ -463,6 +436,9 @@ class LegalAnalysisService:
         valid_filenames = [f.get('filename', '').lower() for f in files] if files else []
         valid_filenames_no_ext = [os.path.splitext(f)[0].lower() for f in valid_filenames]
         
+        # Подготавливаем тексты файлов для поиска фрагментов (мягкая привязка)
+        file_texts = {f.get('filename', ''): f.get('text', '') for f in files} if files else {}
+        
         for row in rows:
             if not isinstance(row, dict):
                 logger.warning(f"Row rejection: not a dictionary. Row: {row}")
@@ -478,60 +454,84 @@ class LegalAnalysisService:
             source_reference = str(row.get("source_reference", "")).strip()
             legal_basis = str(row.get("legal_basis", "")).strip()
             
-            # Смягченная проверка: если нет finding, но есть supplier_action, используем его
-            if not finding or len(finding) < 3:
-                if supplier_action and len(supplier_action) > 10:
+            # СУПЕР-МЯГКАЯ ПРОВЕРКА: если есть хоть какой-то смысл, оставляем
+            if not finding or len(finding) < 2:
+                if supplier_action and len(supplier_action) > 5:
                     finding = f"Рекомендация: {supplier_action}"
                 else:
-                    logger.warning(f"Row rejection: missing or too short 'finding' and no substantial 'supplier_action'. Row: {json.dumps(row, ensure_ascii=False)}")
+                    logger.warning(f"Row rejection: empty finding and no supplier_action. Row: {json.dumps(row, ensure_ascii=False)}")
                     rejected_count += 1
                     continue
             
-            # Нормализация блока
-            normalized_block = block.lower()
+            # Нормализация блока (приведение к каноническим названиям)
+            normalized_block_input = block.lower()
             found_normalized = False
             for key, value in self.block_normalization.items():
-                if key in normalized_block:
+                if key in normalized_block_input:
                     block = value
                     found_normalized = True
                     break
             
             if not found_normalized and block not in self.valid_blocks:
-                # Если блок совсем странный, но есть finding, относим к общей категории
-                block = "Риски участия и исполнения договора"
+                # Если блок не распознан, пытаемся найти по смыслу в finding
+                finding_lower = finding.lower()
+                for key, value in self.block_normalization.items():
+                    if key in finding_lower:
+                        block = value
+                        found_normalized = True
+                        break
                 
+                if not found_normalized:
+                    block = "Риски участия и исполнения договора"
+            
             # Нормализация источника
-            if not source_document or source_document.lower() in ["", "none", "null", "не найдено", "unknown"]:
+            if not source_document or source_document.lower() in ["", "none", "null", "не найдено", "unknown", "весь пакет"]:
                 source_document = "Весь пакет документов"
             
             # Пытаемся сопоставить source_document с реальными файлами
             if valid_filenames and source_document != "Весь пакет документов":
                 doc_str = source_document.lower()
-                matched = False
+                matched_filename = None
+                
                 # 1. Точное совпадение
                 for vf, vf_no_ext in zip(valid_filenames, valid_filenames_no_ext):
                     if vf == doc_str or vf_no_ext == doc_str:
-                        source_document = vf
-                        matched = True
+                        matched_filename = vf
                         break
                 
-                # 2. Частичное совпадение (если не нашли точное)
-                if not matched:
+                # 2. Частичное совпадение
+                if not matched_filename:
                     for vf in valid_filenames:
                         if vf in doc_str or doc_str in vf:
-                            source_document = vf
-                            matched = True
+                            matched_filename = vf
                             break
+                
+                if matched_filename:
+                    source_document = matched_filename
+                else:
+                    # Если не совпало, но ссылка похожа на файл, оставляем как есть (не отбрасываем!)
+                    pass
             
+            # Мягкая привязка source_reference
             if not source_reference or source_reference.lower() in ["", "none", "null", "не найдено"]:
-                source_reference = "По тексту документов"
+                # Пытаемся найти фрагмент finding в тексте документа
+                if source_document != "Весь пакет документов" and source_document in file_texts:
+                    doc_text = file_texts[source_document]
+                    # Ищем первые 20 символов находки
+                    search_snippet = finding[:20].strip()
+                    if len(search_snippet) > 10 and search_snippet in doc_text:
+                        source_reference = f"По тексту (фрагмент: '{search_snippet}...')"
+                    else:
+                        source_reference = "По тексту документа"
+                else:
+                    source_reference = "По тексту документов"
 
             if risk_level not in ["High", "Medium", "Low"]:
                 risk_level = "Medium"
             
             valid_row = {
                 "block": block,
-                "finding": finding[:3000],
+                "finding": finding[:5000], # Увеличили лимит, чтобы не обрезать полезное
                 "risk_level": risk_level,
                 "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа.",
                 "source_document": source_document[:250],
@@ -545,7 +545,9 @@ class LegalAnalysisService:
         logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
         return valid_rows
 
-    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], detailed_report: Dict[str, Any] = None, final_report_markdown: str = "") -> List[Dict[str, Any]]:
+
+
+    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], final_report_sections: Dict[str, Any] = None, final_report_markdown: str = "") -> List[Dict[str, Any]]:
         """
         Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в слотах.
         """
@@ -571,15 +573,15 @@ class LegalAnalysisService:
         existing_text = " ".join([r.get("finding", "").lower() for r in existing_rows])
         
         # Также проверяем подробный отчет
-        if detailed_report:
-            if isinstance(detailed_report, dict):
-                for val in detailed_report.values():
+        if final_report_sections:
+            if isinstance(final_report_sections, dict):
+                for val in final_report_sections.values():
                     if isinstance(val, list):
                         existing_text += " " + " ".join([str(v).lower() for v in val])
                     else:
                         existing_text += " " + str(val).lower()
-            elif isinstance(detailed_report, list):
-                existing_text += " " + " ".join([str(v).lower() for v in detailed_report])
+            elif isinstance(final_report_sections, list):
+                existing_text += " " + " ".join([str(v).lower() for v in final_report_sections])
         
         # И markdown отчет
         if final_report_markdown:
@@ -599,7 +601,7 @@ class LegalAnalysisService:
                     found_by_collector = True
             
             if not found_by_ai and not found_by_collector:
-                added_rows.append({
+                new_row = {
                     "block": block,
                     "finding": f"Информация про {label} в документации не обнаружена.",
                     "risk_level": "Low",
@@ -608,8 +610,12 @@ class LegalAnalysisService:
                     "source_reference": "Не найдено",
                     "legal_basis": "",
                     "doc_group": "full"
-                })
+                }
+                added_rows.append(new_row)
+                logger.info(f"Added missing critical topic row: {label}")
                 
+        if added_rows:
+            logger.info(f"Total critical topic rows added: {len(added_rows)}")
         return added_rows
 
     def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
@@ -618,12 +624,7 @@ class LegalAnalysisService:
         """
         logger.info(f"--- STARTING FULL PACKAGE ANALYSIS FOR TENDER: {tender_id} ---")
         
-        def update_stage(stage: str, progress: int, status: str = "processing"):
-            if callback:
-                callback(stage, progress, status)
-            logger.info(f"Stage: {stage}, Progress: {progress}%")
-
-        update_stage("Классификация документов", 10)
+        self._log_progress("Классификация документов", 10, callback=callback)
         
         filenames = [f.get('filename', 'unknown') for f in files]
         
@@ -638,7 +639,7 @@ class LegalAnalysisService:
         
         file_statuses = [{"filename": f.get("filename", "unknown"), "status": "processed"} for f in files]
         
-        update_stage("Анализ документации", 30)
+        self._log_progress("Анализ документации", 30, callback=callback)
 
         # 1. Вспомогательное извлечение улик (теперь идет первым для определения ролей)
         logger.info("--- [AUXILIARY SLOT EXTRACTION START] ---")
@@ -675,9 +676,9 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
         
         rows = res.get('rows', [])
-        detailed_report = res.get('detailed_report', {})
+        final_report_sections = res.get('final_report_sections', {})
         final_report_markdown = res.get('final_report_markdown', "")
-        logger.info(f"AI response: {len(rows)} raw rows received, {len(detailed_report)} detailed report sections, markdown length: {len(final_report_markdown)}")
+        logger.info(f"AI response: {len(rows)} raw rows received, {len(final_report_sections)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
         # Мягкая валидация строк
         rows = self._validate_and_filter_rows(rows, "full", files)
@@ -701,8 +702,8 @@ class LegalAnalysisService:
         
         rows = contradiction_rows + rows
         
-        # Валидация detailed_report и формирование final_report_markdown если его нет
-        valid_detailed_report = []
+        # Валидация final_report_sections и формирование final_report_markdown если его нет
+        valid_final_report_sections = []
         section_titles = {
             "risks_execution": "1) Риски участия и исполнения договора",
             "rejection_risks": "2) Риски недопуска заявки и потери баллов",
@@ -715,25 +716,36 @@ class LegalAnalysisService:
             "supplier_recommendations": "9) Рекомендации Поставщику"
         }
         
-        # Если ИИ не вернул markdown, соберем его из detailed_report
+        # Если ИИ не вернул markdown, соберем его из final_report_sections
         if not final_report_markdown:
-            logger.info("Markdown report missing in AI response, assembling from detailed_report")
+            logger.info("Markdown report missing in AI response, assembling from final_report_sections")
             markdown_parts = ["# Подробный юридический отчет по тендеру\n"]
             
             for key, title in section_titles.items():
-                content_items = detailed_report.get(key, []) if isinstance(detailed_report, dict) else []
-                if not isinstance(content_items, list):
-                    content_items = [content_items]
+                content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
                 
-                # Добавляем противоречия в compliance_check
-                if key == "compliance_check" and contradiction_notes:
-                    content_items = contradiction_notes + content_items
+                if key == "documents_list" and isinstance(content_items, dict):
+                    # Специальная обработка для раздела 7 (Перечень документов)
+                    in_app = content_items.get("in_application", [])
+                    on_del = content_items.get("on_delivery", [])
+                    
+                    content_str = "**В составе заявки**:\n"
+                    content_str += "\n".join([f"- {i}" for i in in_app]) if in_app else "Информация не обнаружена."
+                    content_str += "\n\n**При поставке**:\n"
+                    content_str += "\n".join([f"- {i}" for i in on_del]) if on_del else "Информация не обнаружена."
+                else:
+                    if not isinstance(content_items, list):
+                        content_items = [content_items]
+                    
+                    # Добавляем противоречия в compliance_check
+                    if key == "compliance_check" and contradiction_notes:
+                        content_items = contradiction_notes + content_items
+                    
+                    content_str = "\n\n".join([str(item) for item in content_items if item])
+                    if not content_str.strip():
+                        content_str = "Информация в предоставленной документации не обнаружена."
                 
-                content_str = "\n\n".join([str(item) for item in content_items if item])
-                if not content_str.strip():
-                    content_str = "Информация в предоставленной документации не обнаружена."
-                
-                valid_detailed_report.append({
+                valid_final_report_sections.append({
                     "section_title": title,
                     "content": content_str.strip()
                 })
@@ -742,20 +754,29 @@ class LegalAnalysisService:
             
             final_report_markdown = "\n".join(markdown_parts)
         else:
-            # Если markdown есть, все равно подготовим valid_detailed_report для совместимости
+            # Если markdown есть, все равно подготовим valid_final_report_sections для совместимости
             for key, title in section_titles.items():
-                content_items = detailed_report.get(key, []) if isinstance(detailed_report, dict) else []
-                if not isinstance(content_items, list):
-                    content_items = [content_items]
+                content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
                 
-                if key == "compliance_check" and contradiction_notes:
-                    content_items = contradiction_notes + content_items
+                if key == "documents_list" and isinstance(content_items, dict):
+                    in_app = content_items.get("in_application", [])
+                    on_del = content_items.get("on_delivery", [])
+                    content_str = "**В составе заявки**:\n"
+                    content_str += "\n".join([f"- {i}" for i in in_app]) if in_app else "Информация не обнаружена."
+                    content_str += "\n\n**При поставке**:\n"
+                    content_str += "\n".join([f"- {i}" for i in on_del]) if on_del else "Информация не обнаружена."
+                else:
+                    if not isinstance(content_items, list):
+                        content_items = [content_items]
+                    
+                    if key == "compliance_check" and contradiction_notes:
+                        content_items = contradiction_notes + content_items
+                    
+                    content_str = "\n\n".join([str(item) for item in content_items if item])
+                    if not content_str.strip():
+                        content_str = "Информация в предоставленной документации не обнаружена."
                 
-                content_str = "\n\n".join([str(item) for item in content_items if item])
-                if not content_str.strip():
-                    content_str = "Информация в предоставленной документации не обнаружена."
-                
-                valid_detailed_report.append({
+                valid_final_report_sections.append({
                     "section_title": title,
                     "content": content_str.strip()
                 })
@@ -770,7 +791,7 @@ class LegalAnalysisService:
                         # parts[2] - контент раздела 3 до следующего раздела
                         new_content = "\n" + "\n\n".join(contradiction_notes) + "\n\n"
                         # Простая проверка на дубликаты
-                        if not any(normalize(c[:30]) in normalize(parts[2]) for c in contradiction_notes):
+                        if not any(self._normalize_text(c[:30]) in self._normalize_text(parts[2]) for c in contradiction_notes):
                             parts[2] = new_content + parts[2]
                             final_report_markdown = "".join(parts)
                 else:
@@ -778,19 +799,17 @@ class LegalAnalysisService:
                     final_report_markdown = "# Выявленные противоречия\n" + "\n\n".join(contradiction_notes) + "\n\n" + final_report_markdown
 
         # Добавляем недостающие критические темы
-        added_rows = self._add_missing_critical_topics(evidence_package, rows, detailed_report, final_report_markdown)
+        added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         
         all_notes = res.get('summary_notes', [])
         
-        update_stage("Формирование отчета", 95)
+        self._log_progress("Формирование отчета", 95, callback=callback)
         
         # Пост-обработка
+        logger.info("Starting post-processing (deduplication, sorting, formatting)...")
         # 1. Дедупликация с нормализацией
-        def normalize(s):
-            return re.sub(r'[^\w\s]', '', str(s).lower().strip())
-
         unique_rows = []
         seen_keys = set()
         duplicates_count = 0
@@ -800,7 +819,7 @@ class LegalAnalysisService:
                 logger.warning(f"Row rejection during deduplication: missing mandatory fields. Row: {json.dumps(r, ensure_ascii=False)}")
                 continue
                 
-            key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}"
+            key = f"{self._normalize_text(r['block'])}_{self._normalize_text(r['finding'])}_{self._normalize_text(r['source_document'])}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 unique_rows.append(r)
@@ -808,6 +827,7 @@ class LegalAnalysisService:
                 duplicates_count += 1
         
         logger.info(f"Deduplication summary: before={len(rows)}, after={len(unique_rows)}, removed={duplicates_count}")
+        logger.info("Post-processing: deduplication completed successfully.")
 
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
@@ -829,11 +849,12 @@ class LegalAnalysisService:
         
         final_notes = final_notes[:5]
 
-        update_stage("Готово", 100, "success")
+        logger.info("Post-processing completed successfully.")
+        self._log_progress("Готово", 100, "success", callback=callback)
         
         result = {
             "rows": final_rows,
-            "detailed_report": valid_detailed_report,
+            "final_report_sections": valid_final_report_sections,
             "final_report_markdown": final_report_markdown,
             "summary_notes": final_notes,
             "has_contract": has_contract,

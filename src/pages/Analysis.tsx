@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { MOCK_CATALOG } from './ProductCatalog';
 import { findProductEquivalent, startBatchAnalysisJob, getJobStatus, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
 import { AnalysisResult, Tender, LegalAnalysisResult } from '../types';
-import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare } from 'lucide-react';
+import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare, Printer, ShieldAlert, Layout, ChevronDown, Table } from 'lucide-react';
 
 const Analysis = () => {
   const navigate = useNavigate();
@@ -665,83 +667,172 @@ const Analysis = () => {
                                 <div className="px-5 py-3 bg-white border-b border-slate-100 flex flex-wrap items-center gap-4">
                                 </div>
 
-                                 {result.status === 'success' && result.rows.length === 0 ? (
+                                 {/* 1. Main Legal Report (Markdown) - PRIMARY OUTPUT */}
+                                 {result.status === 'success' && result.final_report_markdown && (
+                                     <div className="px-6 py-10 bg-white border-b border-slate-100">
+                                         <div className="flex items-center justify-between mb-8">
+                                             <div className="flex items-center gap-3">
+                                                 <div className="p-2 bg-indigo-600 rounded-xl text-white shadow-lg shadow-indigo-200">
+                                                     <FileText size={20} />
+                                                 </div>
+                                                 <h4 className="text-2xl font-black text-slate-900 tracking-tight">Юридический отчет по тендеру</h4>
+                                             </div>
+                                             <div className="flex gap-2">
+                                                 <button onClick={exportToPDF} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
+                                                     <Printer size={16} /> Печать / PDF
+                                                 </button>
+                                             </div>
+                                         </div>
+                                         <div className="markdown-body prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-table:border prose-table:border-slate-200 prose-th:bg-slate-50 prose-th:px-4 prose-th:py-2 prose-td:px-4 prose-td:py-2">
+                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                 {result.final_report_markdown}
+                                             </ReactMarkdown>
+                                         </div>
+                                     </div>
+                                 )}
+
+                                 {/* 2. Secondary Data Layers */}
+                                 <div className="bg-slate-50/50 p-6 space-y-6">
+                                     <div className="flex items-center gap-3 px-2">
+                                         <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Дополнительные слои данных</h5>
+                                         <div className="h-px flex-1 bg-slate-200"></div>
+                                     </div>
+
+                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                                         {/* Risk Summary Table */}
+                                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                             <div className="px-4 py-3 bg-slate-50/50 border-b border-slate-100 flex justify-between items-center">
+                                                 <h6 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                                                     <ShieldAlert size={14} className="text-amber-500" />
+                                                     Краткая таблица рисков
+                                                 </h6>
+                                             </div>
+                                             <div className="overflow-x-auto">
+                                                 <table className="w-full text-left text-[11px] border-collapse">
+                                                     <thead className="bg-slate-50/30 text-slate-500 uppercase font-black tracking-widest border-b border-slate-100">
+                                                         <tr>
+                                                             <th className="px-4 py-2">Блок</th>
+                                                             <th className="px-4 py-2">Риск</th>
+                                                             <th className="px-4 py-2">Ур.</th>
+                                                         </tr>
+                                                     </thead>
+                                                     <tbody className="divide-y divide-slate-50">
+                                                         {result.rows.slice(0, 8).map((row, idx) => (
+                                                             <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                                                 <td className="px-4 py-2 font-bold text-slate-600 truncate max-w-[100px]">{row.block}</td>
+                                                                 <td className="px-4 py-2 text-slate-900 line-clamp-1">{row.finding}</td>
+                                                                 <td className="px-4 py-2">
+                                                                     <div className={`w-2 h-2 rounded-full ${
+                                                                         row.risk_level === 'High' ? 'bg-red-500' : 
+                                                                         row.risk_level === 'Medium' ? 'bg-amber-500' : 
+                                                                         'bg-emerald-500'
+                                                                     }`}></div>
+                                                                 </td>
+                                                             </tr>
+                                                         ))}
+                                                     </tbody>
+                                                 </table>
+                                             </div>
+                                         </div>
+
+                                         {/* Service Sections */}
+                                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                             <div className="px-4 py-3 bg-slate-50/50 border-b border-slate-100">
+                                                 <h6 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                                                     <Layout size={14} className="text-indigo-500" />
+                                                     Служебные секции
+                                                 </h6>
+                                             </div>
+                                             <div className="p-3 space-y-2 max-h-[250px] overflow-y-auto custom-scrollbar">
+                                                 {result.final_report_sections?.map((section, idx) => (
+                                                     <details key={idx} className="group border border-slate-100 rounded-lg overflow-hidden">
+                                                         <summary className="px-3 py-2 text-[11px] font-bold text-slate-600 bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors flex justify-between items-center group-open:bg-indigo-50 group-open:text-indigo-700">
+                                                             {section.section_title}
+                                                             <ChevronDown size={12} className="transition-transform group-open:rotate-180" />
+                                                         </summary>
+                                                         <div className="p-3 text-[11px] text-slate-500 whitespace-pre-wrap bg-white leading-relaxed">
+                                                             {section.content}
+                                                         </div>
+                                                     </details>
+                                                 ))}
+                                             </div>
+                                         </div>
+                                     </div>
+
+                                     {/* Full Technical Table (Collapsible) */}
+                                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+                                         <details className="group">
+                                             <summary className="px-5 py-4 cursor-pointer hover:bg-slate-50 transition-colors flex justify-between items-center">
+                                                 <div className="flex items-center gap-3">
+                                                     <Table size={18} className="text-slate-400" />
+                                                     <span className="text-sm font-black text-slate-700 uppercase tracking-wider">Полная техническая таблица (JSON-слой)</span>
+                                                     <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-black rounded-full">
+                                                         {result.rows.length} записей
+                                                     </span>
+                                                 </div>
+                                                 <ChevronDown size={18} className="text-slate-400 transition-transform group-open:rotate-180" />
+                                             </summary>
+                                             <div className="border-t border-slate-100">
+                                                 <div className="overflow-x-auto">
+                                                     <table className="w-full text-left text-xs border-collapse">
+                                                         <thead className="bg-slate-50 text-slate-500 uppercase font-black tracking-widest border-b border-slate-200">
+                                                             <tr>
+                                                                 <th className="px-5 py-3">Блок</th>
+                                                                 <th className="px-5 py-3">Находка</th>
+                                                                 <th className="px-5 py-3">Риск</th>
+                                                                 <th className="px-5 py-3">Действие</th>
+                                                                 <th className="px-5 py-3">Источник</th>
+                                                             </tr>
+                                                         </thead>
+                                                         <tbody className="divide-y divide-slate-100">
+                                                             {getFilteredRows(result.rows).map((row, idx) => (
+                                                                 <tr key={idx} className="transition-colors hover:bg-slate-50/30">
+                                                                     <td className="px-5 py-3 align-top font-bold text-slate-900">{row.block}</td>
+                                                                     <td className="px-5 py-3 align-top text-slate-700 leading-relaxed">{row.finding}</td>
+                                                                     <td className="px-5 py-3 align-top">
+                                                                         <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${
+                                                                             row.risk_level === 'High' ? 'bg-red-100 text-red-600' : 
+                                                                             row.risk_level === 'Medium' ? 'bg-amber-100 text-amber-600' : 
+                                                                             'bg-emerald-100 text-emerald-600'
+                                                                         }`}>
+                                                                             {row.risk_level}
+                                                                         </span>
+                                                                     </td>
+                                                                     <td className="px-5 py-3 align-top text-slate-600 leading-relaxed">{row.supplier_action}</td>
+                                                                     <td className="px-5 py-3 align-top text-slate-500 text-[10px]">
+                                                                         <div className="font-bold">{row.source_document}</div>
+                                                                         <div>{row.source_reference}</div>
+                                                                     </td>
+                                                                 </tr>
+                                                             ))}
+                                                         </tbody>
+                                                     </table>
+                                                 </div>
+                                             </div>
+                                         </details>
+                                     </div>
+                                 </div>
+
+                                 {result.status === 'success' && result.rows.length === 0 && !result.final_report_markdown && (
                                     <div className="p-10 text-center text-slate-400 bg-white">
                                         <Shield size={48} className="mx-auto mb-4 opacity-20" />
                                         <p className="text-sm font-medium">Документация выглядит стандартной. Критических условий не найдено.</p>
                                     </div>
-                                ) : result.status === 'success' && result.rows.length > 0 ? (
-                                    <div className="overflow-x-auto bg-white">
-                                        <table className="w-full text-left text-sm border-collapse">
-                                            <thead className="bg-slate-50 text-slate-500 text-[10px] uppercase font-black tracking-widest border-b border-slate-200">
-                                                <tr>
-                                                    <th className="px-5 py-4 font-black">Блок</th>
-                                                    <th className="px-5 py-4 font-black">Что найдено</th>
-                                                    <th className="px-5 py-4 font-black">Риск</th>
-                                                    <th className="px-5 py-4 font-black">Что делать поставщику</th>
-                                                    <th className="px-5 py-4 font-black">Источник</th>
-                                                    <th className="px-5 py-4 font-black">Основание</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody className="divide-y divide-slate-100">
-                                                {getFilteredRows(result.rows).map((row, idx) => (
-                                                    <tr key={idx} className="transition-colors hover:bg-slate-50/50">
-                                                        <td className="px-5 py-4 align-top font-black text-slate-900">{row.block}</td>
-                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.finding}</td>
-                                                        <td className="px-5 py-4 align-top">
-                                                            <span className={`text-[10px] font-black px-2 py-1 rounded uppercase ${
-                                                                row.risk_level === 'High' ? 'bg-red-100 text-red-600' : 
-                                                                row.risk_level === 'Medium' ? 'bg-amber-100 text-amber-600' : 
-                                                                'bg-emerald-100 text-emerald-600'
-                                                            }`}>
-                                                                {row.risk_level}
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.supplier_action}</td>
-                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">
-                                                            <div className="font-bold">{row.source_document}</div>
-                                                            <div className="text-slate-500">{row.source_reference}</div>
-                                                        </td>
-                                                        <td className="px-5 py-4 align-top text-slate-700 text-xs leading-relaxed font-medium">{row.legal_basis}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                ) : null}
-                                
-                                {result.status === 'success' && result.detailed_report && result.detailed_report.length > 0 && (
-                                    <div className="px-5 py-6 bg-slate-50 border-t border-slate-200">
-                                        <h4 className="text-lg font-black text-slate-800 mb-4 flex items-center gap-2">
-                                            <FileText className="text-blue-600" />
-                                            Детальный юридический отчет
-                                        </h4>
-                                        <div className="space-y-6">
-                                            {result.detailed_report.map((section, idx) => (
-                                                <div key={idx} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm">
-                                                    <h5 className="text-md font-bold text-slate-900 mb-3 border-b border-slate-100 pb-2">{section.section_title}</h5>
-                                                    <div className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">
-                                                        {section.content}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
+                                 )}
 
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-6">
-                                        <button onClick={() => exportToExcelFiltered(result.id)} className="text-xs text-emerald-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
-                                            <FileDown size={16} /> Скачать Excel (с фильтрами)
+                                        <button onClick={() => exportToExcelFiltered(result.id)} className="text-[10px] text-emerald-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
+                                            <FileDown size={14} /> Excel (фильтры)
                                         </button>
-                                        <button onClick={() => exportToExcel([result])} className="text-xs text-emerald-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
-                                            <FileDown size={16} /> Скачать Excel
+                                        <button onClick={() => exportToExcel([result])} className="text-[10px] text-emerald-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
+                                            <FileDown size={14} /> Полный Excel
                                         </button>
-                                        <button onClick={() => exportToCSV(result, tender.eis_number)} className="text-xs text-blue-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
-                                            <FileDown size={16} /> Скачать CSV
+                                        <button onClick={() => exportToCSV(result, tender.eis_number)} className="text-[10px] text-blue-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
+                                            <FileDown size={14} /> CSV
                                         </button>
-                                        <button onClick={exportToPDF} className="text-xs text-slate-600 font-black hover:underline flex items-center gap-2 uppercase tracking-wider">
-                                            <FileDown size={16} /> Печать / PDF
+                                        <button onClick={exportToPDF} className="text-[10px] text-slate-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
+                                            <Printer size={14} /> Печать / PDF
                                         </button>
                                     </div>
                                 )}

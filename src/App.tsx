@@ -1,7 +1,7 @@
 import React from 'react';
 import { MemoryRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
-import Header from './components/Header';
+import Header from './Header';
 import Dashboard from './pages/Dashboard';
 import ProductCatalog from './pages/ProductCatalog';
 import TenderCRM from './pages/TenderCRM';

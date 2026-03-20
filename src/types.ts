@@ -84,7 +84,8 @@ export interface LegalAnalysisResult {
   status: 'success' | 'error' | 'partial';
   summary_notes: string[];
   rows: LegalAnalysisRow[];
-  detailed_report?: LegalAnalysisDetailedReportSection[];
+  final_report_sections?: LegalAnalysisDetailedReportSection[];
+  final_report_markdown?: string;
   has_contract: boolean;
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
