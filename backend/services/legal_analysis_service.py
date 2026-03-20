@@ -63,39 +63,38 @@ class LegalAnalysisService:
         self.evidence_collector = EvidenceCollector()
         
         self.valid_blocks = [
-            "Риски участия и исполнения", 
-            "Риски отклонения заявки", 
-            "Проверка на соответствие и противоречия", 
-            "Поставка и приемка", 
+            "Риски участия и исполнения договора", 
+            "Риски недопуска заявки и потери баллов", 
+            "Проверка соответствия документации и закона", 
+            "Условия поставки и приемки", 
             "Условия оплаты", 
             "Ответственность сторон", 
-            "Документы для заявки", 
-            "Документы при поставке", 
-            "Реестры и ограничения",
-            "Рекомендации поставщику"
+            "Перечень документов", 
+            "Требования по реестрам и ограничениям",
+            "Рекомендации Поставщику"
         ]
         self.block_normalization = {
-            "риски участия": "Риски участия и исполнения",
-            "риски исполнения": "Риски участия и исполнения",
-            "юридические риски": "Риски участия и исполнения",
-            "финансовые риски": "Риски участия и исполнения",
-            "операционные риски": "Риски участия и исполнения",
-            "административные риски": "Риски участия и исполнения",
-            "репутационные риски": "Риски участия и исполнения",
-            "отклонение": "Риски отклонения заявки",
-            "недопуск": "Риски отклонения заявки",
-            "потеря баллов": "Риски отклонения заявки",
-            "критерии оценки": "Риски отклонения заявки",
-            "оценка": "Риски отклонения заявки",
-            "несоответствие": "Проверка на соответствие и противоречия",
-            "противоречия": "Проверка на соответствие и противоречия",
-            "ошибки документации": "Проверка на соответствие и противоречия",
-            "рисковые формулировки": "Проверка на соответствие и противоречия",
-            "поставка": "Поставка и приемка",
-            "приемка": "Поставка и приемка",
-            "условия поставки": "Поставка и приемка",
-            "разгрузка": "Поставка и приемка",
-            "доставка": "Поставка и приемка",
+            "риски участия": "Риски участия и исполнения договора",
+            "риски исполнения": "Риски участия и исполнения договора",
+            "юридические риски": "Риски участия и исполнения договора",
+            "финансовые риски": "Риски участия и исполнения договора",
+            "операционные риски": "Риски участия и исполнения договора",
+            "административные риски": "Риски участия и исполнения договора",
+            "репутационные риски": "Риски участия и исполнения договора",
+            "отклонение": "Риски недопуска заявки и потери баллов",
+            "недопуск": "Риски недопуска заявки и потери баллов",
+            "потеря баллов": "Риски недопуска заявки и потери баллов",
+            "критерии оценки": "Риски недопуска заявки и потери баллов",
+            "оценка": "Риски недопуска заявки и потери баллов",
+            "несоответствие": "Проверка соответствия документации и закона",
+            "противоречия": "Проверка соответствия документации и закона",
+            "ошибки документации": "Проверка соответствия документации и закона",
+            "рисковые формулировки": "Проверка соответствия документации и закона",
+            "поставка": "Условия поставки и приемки",
+            "приемка": "Условия поставки и приемки",
+            "условия поставки": "Условия поставки и приемки",
+            "разгрузка": "Условия поставки и приемки",
+            "доставка": "Условия поставки и приемки",
             "расчеты": "Условия оплаты",
             "условия оплаты": "Условия оплаты",
             "аванс": "Условия оплаты",
@@ -107,19 +106,21 @@ class LegalAnalysisService:
             "односторонний отказ": "Ответственность сторон",
             "расторжение": "Ответственность сторон",
             "санкции": "Ответственность сторон",
-            "состав заявки": "Документы для заявки",
-            "требования к заявке": "Документы для заявки",
-            "сопроводительные документы": "Документы при поставке",
-            "приемочные документы": "Документы при поставке",
-            "нацрежим": "Реестры и ограничения",
-            "национальный режим": "Реестры и ограничения",
-            "реестр": "Реестры и ограничения",
-            "ограничения": "Реестры и ограничения",
-            "преференции": "Реестры и ограничения",
-            "условие допуска": "Реестры и ограничения",
-            "запрет": "Реестры и ограничения",
-            "рекомендации": "Рекомендации поставщику",
-            "что сделать поставщику": "Рекомендации поставщику"
+            "состав заявки": "Перечень документов",
+            "требования к заявке": "Перечень документов",
+            "сопроводительные документы": "Перечень документов",
+            "приемочные документы": "Перечень документов",
+            "документы для заявки": "Перечень документов",
+            "документы при поставке": "Перечень документов",
+            "нацрежим": "Требования по реестрам и ограничениям",
+            "национальный режим": "Требования по реестрам и ограничениям",
+            "реестр": "Требования по реестрам и ограничениям",
+            "ограничения": "Требования по реестрам и ограничениям",
+            "преференции": "Требования по реестрам и ограничениям",
+            "условие допуска": "Требования по реестрам и ограничениям",
+            "запрет": "Требования по реестрам и ограничениям",
+            "рекомендации": "Рекомендации Поставщику",
+            "что сделать поставщику": "Рекомендации Поставщику"
         }
         logger.info(f"LegalAnalysisService initialized. Debug mode: {self.debug_mode}")
 
@@ -341,7 +342,8 @@ class LegalAnalysisService:
                 if isinstance(data, dict) and 'rows' in data:
                     return {
                         "rows": data.get("rows", []),
-                        "detailed_report": data.get("detailed_report", []),
+                        "detailed_report": data.get("detailed_report", {}),
+                        "final_report_markdown": data.get("final_report_markdown", ""),
                         "summary_notes": data.get("summary_notes", [])
                     }
                 
@@ -404,20 +406,37 @@ class LegalAnalysisService:
         
         return "\n".join(deduped_lines).strip()
 
-    def _prepare_full_context(self, files: List[Dict[str, str]], file_classifications: List[Dict[str, Any]] = None) -> str:
+    def _prepare_full_context(self, files: List[Dict[str, str]], evidence_package: Dict[str, Any] = None) -> str:
         """
         Подготавливает полный очищенный контекст из всех документов.
         Извлекает текст, очищает его и размечает явными границами.
         """
         full_context = []
         
-        # Маппинг ролей документов для разметки
-        roles_map = {fc.get('filename'): fc.get('category') for fc in file_classifications} if file_classifications else {}
+        # Маппинг ролей документов из EvidenceCollector
+        roles_map = {}
+        if evidence_package and "documents" in evidence_package:
+            for doc in evidence_package["documents"]:
+                roles_map[doc.get('filename')] = doc.get('role')
+        
+        # Русские названия для ролей
+        role_labels = {
+            "contract": "Проект контракта",
+            "procurement": "Извещение / Информационная карта",
+            "tz": "Техническое задание / Описание объекта закупки",
+            "application_rules": "Требования к заявке / Инструкция",
+            "nmck": "Обоснование НМЦК",
+            "mixed": "Смешанный документ (закупка + контракт)",
+            "unknown": "Не определен"
+        }
         
         for f in files:
             filename = f.get('filename', 'unknown')
             text = f.get('text', '')
-            role = roles_map.get(filename, "не определен")
+            raw_role = roles_map.get(filename, "unknown")
+            role_label = role_labels.get(raw_role, "Не определен")
+            
+            logger.info(f"Document role: {filename} -> {role_label} ({raw_role})")
             
             if not text or len(text.strip()) < 10:
                 logger.warning(f"Document {filename} has no meaningful text, skipping from context")
@@ -426,14 +445,10 @@ class LegalAnalysisService:
             # Очистка текста
             cleaned_text = self._clean_text(text)
             
-            logger.info(f"--- CLEANED TEXT FOR {filename} (len: {len(cleaned_text)}) ---")
-            logger.info(cleaned_text[:5000] + ("..." if len(cleaned_text) > 5000 else ""))
-            logger.info(f"--- END CLEANED TEXT FOR {filename} ---")
-            
-            # Разметка документа с явными границами
+            # Разметка документа с явными границами (согласно требованиям)
             doc_block = (
                 f"=== ДОКУМЕНТ: {filename} ===\n"
-                f"=== ТИП ДОКУМЕНТА: {role} ===\n"
+                f"=== ТИП ДОКУМЕНТА: {role_label} ===\n"
                 f"{cleaned_text}\n"
                 f"=== КОНЕЦ ДОКУМЕНТА ==="
             )
@@ -463,11 +478,14 @@ class LegalAnalysisService:
             source_reference = str(row.get("source_reference", "")).strip()
             legal_basis = str(row.get("legal_basis", "")).strip()
             
-            # Если нет описания - пытаемся спасти или отбрасываем
-            if not finding or len(finding) < 5:
-                logger.warning(f"Row rejection: missing or too short 'finding'. Row: {row}")
-                rejected_count += 1
-                continue
+            # Смягченная проверка: если нет finding, но есть supplier_action, используем его
+            if not finding or len(finding) < 3:
+                if supplier_action and len(supplier_action) > 10:
+                    finding = f"Рекомендация: {supplier_action}"
+                else:
+                    logger.warning(f"Row rejection: missing or too short 'finding' and no substantial 'supplier_action'. Row: {json.dumps(row, ensure_ascii=False)}")
+                    rejected_count += 1
+                    continue
             
             # Нормализация блока
             normalized_block = block.lower()
@@ -480,24 +498,36 @@ class LegalAnalysisService:
             
             if not found_normalized and block not in self.valid_blocks:
                 # Если блок совсем странный, но есть finding, относим к общей категории
-                block = "Риски участия и исполнения"
+                block = "Риски участия и исполнения договора"
                 
-            if not source_document or source_document.lower() in ["", "none", "null", "не найдено"]:
+            # Нормализация источника
+            if not source_document or source_document.lower() in ["", "none", "null", "не найдено", "unknown"]:
                 source_document = "Весь пакет документов"
+            
+            # Пытаемся сопоставить source_document с реальными файлами
+            if valid_filenames and source_document != "Весь пакет документов":
+                doc_str = source_document.lower()
+                matched = False
+                # 1. Точное совпадение
+                for vf, vf_no_ext in zip(valid_filenames, valid_filenames_no_ext):
+                    if vf == doc_str or vf_no_ext == doc_str:
+                        source_document = vf
+                        matched = True
+                        break
+                
+                # 2. Частичное совпадение (если не нашли точное)
+                if not matched:
+                    for vf in valid_filenames:
+                        if vf in doc_str or doc_str in vf:
+                            source_document = vf
+                            matched = True
+                            break
             
             if not source_reference or source_reference.lower() in ["", "none", "null", "не найдено"]:
                 source_reference = "По тексту документов"
 
             if risk_level not in ["High", "Medium", "Low"]:
                 risk_level = "Medium"
-            
-            # Пытаемся сопоставить source_document с реальными файлами для красоты
-            if valid_filenames:
-                doc_str = source_document.lower()
-                for vf, vf_no_ext in zip(valid_filenames, valid_filenames_no_ext):
-                    if vf == doc_str or vf_no_ext == doc_str:
-                        source_document = vf # Точное совпадение
-                        break
             
             valid_row = {
                 "block": block,
@@ -515,7 +545,7 @@ class LegalAnalysisService:
         logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
         return valid_rows
 
-    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], detailed_report: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], detailed_report: Dict[str, Any] = None, final_report_markdown: str = "") -> List[Dict[str, Any]]:
         """
         Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в слотах.
         """
@@ -523,16 +553,18 @@ class LegalAnalysisService:
         
         # Маппинг слотов на блоки и названия для отчета
         critical_slots = {
-            "unloading": ("Поставка и приемка", "условие о разгрузке"),
-            "acceptance_deadline": ("Поставка и приемка", "сроки приемки"),
-            "refusal_grounds": ("Поставка и приемка", "основания отказа в приемке"),
+            "unloading": ("Условия поставки и приемки", "условие о разгрузке"),
+            "delivery_deadline": ("Условия поставки и приемки", "срок поставки"),
+            "acceptance_deadline": ("Условия поставки и приемки", "сроки приемки"),
+            "refusal_grounds": ("Условия поставки и приемки", "основания отказа в приемке"),
             "payment_deadline": ("Условия оплаты", "срок оплаты"),
             "advance_payment": ("Условия оплаты", "условие об авансе"),
+            "penalties": ("Ответственность сторон", "штрафы, пени и неустойки"),
             "edo_eis": ("Условия оплаты", "условие об ЭДО"),
             "treasury_support": ("Условия оплаты", "условие о казначейском сопровождении"),
-            "delivery_documents": ("Документы при поставке", "документы при поставке"),
-            "application_composition": ("Документы для заявки", "полный перечень документов в составе заявки"),
-            "national_regime_registries": ("Реестры и ограничения", "требования о включении в реестры и применении национального режима")
+            "delivery_documents": ("Перечень документов", "документы при поставке"),
+            "application_composition": ("Перечень документов", "полный перечень документов в составе заявки"),
+            "national_regime_registries": ("Требования по реестрам и ограничениям", "требования о включении в реестры и применении национального режима")
         }
         
         # Собираем все найденные темы из существующих строк для проверки
@@ -544,99 +576,97 @@ class LegalAnalysisService:
                 for val in detailed_report.values():
                     if isinstance(val, list):
                         existing_text += " " + " ".join([str(v).lower() for v in val])
+                    else:
+                        existing_text += " " + str(val).lower()
             elif isinstance(detailed_report, list):
                 existing_text += " " + " ".join([str(v).lower() for v in detailed_report])
+        
+        # И markdown отчет
+        if final_report_markdown:
+            existing_text += " " + final_report_markdown.lower()
             
         for slot_id, (block, label) in critical_slots.items():
             # Проверяем, упоминал ли ИИ эту тему (более мягкий поиск)
-            topic_keywords = [kw for kw in label.split() if len(kw) > 3]
-            # Если хотя бы 2 ключевых слова из названия темы есть в тексте - считаем что тема затронута
-            match_count = sum(1 for kw in topic_keywords if kw in existing_text)
-            mentioned_by_ai = match_count >= min(2, len(topic_keywords))
+            words = label.split()
+            # Ищем хотя бы одно значимое слово (длиной > 4) в тексте
+            found_by_ai = any(word in existing_text for word in words if len(word) > 4)
             
-            # Проверяем, нашел ли бэкенд слот
-            found_in_slots = bool(evidence_package.get("slots", {}).get(slot_id))
+            # Проверяем, нашел ли EvidenceCollector что-то в этом слоте
+            found_by_collector = False
+            if evidence_package and "slots" in evidence_package:
+                slot_data = evidence_package["slots"].get(slot_id, [])
+                if slot_data:
+                    found_by_collector = True
             
-            # Добавляем только если ни ИИ, ни бэкенд не нашли тему
-            if not mentioned_by_ai and not found_in_slots:
-                new_row = {
+            if not found_by_ai and not found_by_collector:
+                added_rows.append({
                     "block": block,
-                    "finding": f"В просмотренных документах не найдено {label}.",
-                    "risk_level": "Medium",
-                    "supplier_action": "Проверить наличие данного условия в документации самостоятельно или направить запрос на разъяснение.",
-                    "source_document": "Не найдено",
-                    "source_reference": "Критичное условие не выявлено",
+                    "finding": f"Информация про {label} в документации не обнаружена.",
+                    "risk_level": "Low",
+                    "supplier_action": f"Уточнить {label} через запрос на разъяснение, если это критично для исполнения.",
+                    "source_document": "Весь пакет документов",
+                    "source_reference": "Не найдено",
                     "legal_basis": "",
                     "doc_group": "full"
-                }
-                added_rows.append(new_row)
-                logger.info(f"Auto-added secondary critical topic: {label} (not found by AI or Slots)")
-        
+                })
+                
         return added_rows
 
     def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
-        Основной метод анализа всего пакета тендерной документации.
+        Основной метод анализа полного пакета документов.
         """
-        def update_stage(stage, progress, status="process"):
+        logger.info(f"--- STARTING FULL PACKAGE ANALYSIS FOR TENDER: {tender_id} ---")
+        
+        def update_stage(stage: str, progress: int, status: str = "processing"):
             if callback:
                 callback(stage, progress, status)
+            logger.info(f"Stage: {stage}, Progress: {progress}%")
 
-        if not files:
-            logger.error(f"Analysis failed for tender {tender_id}: no files provided")
-            return {
-                "rows": [],
-                "summary_notes": ["Ошибка: нет файлов для анализа."],
-                "status": "error",
-                "stage": "Ошибка",
-                "progress": 100
-            }
+        update_stage("Классификация документов", 10)
         
         filenames = [f.get('filename', 'unknown') for f in files]
-        logger.info(f"--- STARTING ANALYSIS FOR TENDER: {tender_id} ---")
-        logger.info(f"Prompt Type: full")
-        logger.info(f"Document Count: {len(files)}")
-        logger.info(f"Filenames: {filenames}")
         
-        update_stage("Классификация", 10)
+        # 0. Классификация
+        classification_res = self.classify_documents(files)
+        has_contract = classification_res.get("has_contract", False)
+        classification_notes = classification_res.get("classification_notes", [])
+        file_classifications = classification_res.get("file_classifications", [])
         
-        # Техническая классификация для логов и UI
-        classified = self.classify_documents(files)
-        has_contract = classified["has_contract"]
-        classification_notes = classified["classification_notes"]
-        file_classifications = classified["file_classifications"]
-        
-        # Логируем роли документов
-        logger.info("Document roles:")
         for fc in file_classifications:
-            logger.info(f"  - {fc.get('filename', 'unknown')}: {fc.get('category', 'unknown')} (contract_score: {fc.get('contract_score', 0)}, procurement_score: {fc.get('procurement_score', 0)}, reason: {fc.get('classification_reason', '')})")
+            logger.info(f"File classification: {fc.get('filename', 'unknown')}: {fc.get('category', 'unknown')} (contract_score: {fc.get('contract_score', 0)}, procurement_score: {fc.get('procurement_score', 0)}, reason: {fc.get('classification_reason', '')})")
         
         file_statuses = [{"filename": f.get("filename", "unknown"), "status": "processed"} for f in files]
         
         update_stage("Анализ документации", 30)
 
-        # 1. Подготовка полного контекста (Full Context Preparation)
-        logger.info(f"Preparing full context from {len(files)} files...")
-        full_context = self._prepare_full_context(files, file_classifications)
-        logger.info(f"Full context size: {len(full_context)} characters")
-        
-        logger.info("--- ASSEMBLED FULL CLEANED CONTEXT ---")
-        logger.info(full_context[:10000] + ("..." if len(full_context) > 10000 else ""))
-        logger.info("--- END ASSEMBLED FULL CLEANED CONTEXT ---")
-        
-        # 2. Вспомогательное извлечение улик (Auxiliary Evidence Extraction)
-        # Используется для логов, противоречий и автодобавления критических тем
-        logger.info("Running auxiliary evidence extraction...")
+        # 1. Вспомогательное извлечение улик (теперь идет первым для определения ролей)
+        logger.info("--- [AUXILIARY SLOT EXTRACTION START] ---")
         evidence_package = self.evidence_collector.collect_evidence(files)
         
+        formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
+        logger.info(formatted_evidence)
+        logger.info("--- [AUXILIARY SLOT EXTRACTION END] ---")
+        
         found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if items]
-        logger.info(f"Auxiliary found slots: {found_slots}")
+        logger.info(f"Summary of found slots: {found_slots}")
         
         contradictions = evidence_package.get("contradictions", [])
         if contradictions:
             logger.info(f"Found {len(contradictions)} contradictions (auxiliary)")
+            for c in contradictions:
+                logger.info(f"Contradiction: {c.get('slot_name')} - {c.get('source_1')} vs {c.get('source_2')}")
+
+        # 2. Подготовка полного контекста (основной вход для модели)
+        logger.info(f"Preparing full context from {len(files)} files...")
+        full_context = self._prepare_full_context(files, evidence_package)
+        logger.info(f"Full context size: {len(full_context)} characters")
         
-        # 3. Интерпретация полного контекста с помощью ИИ (LLM Interpretation)
+        logger.info("--- [ASSEMBLED FULL CLEANED CONTEXT START] ---")
+        logger.info(full_context)
+        logger.info("--- [ASSEMBLED FULL CLEANED CONTEXT END] ---")
+        
+        # 3. Интерпретация полного контекста с помощью ИИ
         assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, full_context, "full")
         if not assembled_prompt:
             logger.error(f"Prompt assembly failed for tender {tender_id}")
@@ -645,19 +675,20 @@ class LegalAnalysisService:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
         
         rows = res.get('rows', [])
-        detailed_report = res.get('detailed_report', [])
-        logger.info(f"AI response: {len(rows)} raw rows received, {len(detailed_report)} detailed report sections")
+        detailed_report = res.get('detailed_report', {})
+        final_report_markdown = res.get('final_report_markdown', "")
+        logger.info(f"AI response: {len(rows)} raw rows received, {len(detailed_report)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
         # Мягкая валидация строк
         rows = self._validate_and_filter_rows(rows, "full", files)
         
-        # Add contradictions directly to rows to guarantee they are not smoothed out
+        # Добавляем противоречия напрямую в строки
         contradiction_rows = []
         contradiction_notes = []
         for c in contradictions:
             finding = f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'."
             contradiction_rows.append({
-                "block": "Проверка на соответствие и противоречия",
+                "block": "Проверка соответствия документации и закона",
                 "finding": finding,
                 "risk_level": c.get('severity', 'High'),
                 "supplier_action": "Направить запрос на разъяснение для устранения противоречия до подачи заявки.",
@@ -670,23 +701,27 @@ class LegalAnalysisService:
         
         rows = contradiction_rows + rows
         
-        # Валидация detailed_report
+        # Валидация detailed_report и формирование final_report_markdown если его нет
         valid_detailed_report = []
-        if isinstance(detailed_report, dict):
-            section_titles = {
-                "risks_execution": "Риски участия и исполнения",
-                "rejection_risks": "Риски недопуска заявки и потери баллов",
-                "compliance_check": "Проверка на соответствие и противоречия",
-                "delivery_acceptance": "Поставка и приемка",
-                "payment_terms": "Условия оплаты",
-                "liability": "Ответственность сторон",
-                "application_documents": "Документы для заявки",
-                "delivery_documents": "Документы при поставке",
-                "registries_restrictions": "Реестры и ограничения",
-                "supplier_recommendations": "Рекомендации поставщику"
-            }
+        section_titles = {
+            "risks_execution": "1) Риски участия и исполнения договора",
+            "rejection_risks": "2) Риски недопуска заявки и потери баллов",
+            "compliance_check": "3) Проверка соответствия документации и закона",
+            "delivery_acceptance": "4) Условия поставки и приемки",
+            "payment_terms": "5) Условия оплаты",
+            "liability": "6) Ответственность сторон",
+            "documents_list": "7) Перечень документов",
+            "registries_restrictions": "8) Требования по реестрам и ограничениям",
+            "supplier_recommendations": "9) Рекомендации Поставщику"
+        }
+        
+        # Если ИИ не вернул markdown, соберем его из detailed_report
+        if not final_report_markdown:
+            logger.info("Markdown report missing in AI response, assembling from detailed_report")
+            markdown_parts = ["# Подробный юридический отчет по тендеру\n"]
+            
             for key, title in section_titles.items():
-                content_items = detailed_report.get(key, [])
+                content_items = detailed_report.get(key, []) if isinstance(detailed_report, dict) else []
                 if not isinstance(content_items, list):
                     content_items = [content_items]
                 
@@ -694,23 +729,59 @@ class LegalAnalysisService:
                 if key == "compliance_check" and contradiction_notes:
                     content_items = contradiction_notes + content_items
                 
-                if content_items:
-                    content_str = "\n\n".join([str(item) for item in content_items if item])
-                    if content_str.strip():
-                        valid_detailed_report.append({
-                            "section_title": title,
-                            "content": content_str.strip()
-                        })
-        elif isinstance(detailed_report, list):
-            for section in detailed_report:
-                if isinstance(section, dict) and 'section_title' in section and 'content' in section:
-                    valid_detailed_report.append(section)
-        
-        added_rows = self._add_missing_critical_topics(evidence_package, rows, detailed_report)
+                content_str = "\n\n".join([str(item) for item in content_items if item])
+                if not content_str.strip():
+                    content_str = "Информация в предоставленной документации не обнаружена."
+                
+                valid_detailed_report.append({
+                    "section_title": title,
+                    "content": content_str.strip()
+                })
+                
+                markdown_parts.append(f"## {title}\n{content_str.strip()}\n")
+            
+            final_report_markdown = "\n".join(markdown_parts)
+        else:
+            # Если markdown есть, все равно подготовим valid_detailed_report для совместимости
+            for key, title in section_titles.items():
+                content_items = detailed_report.get(key, []) if isinstance(detailed_report, dict) else []
+                if not isinstance(content_items, list):
+                    content_items = [content_items]
+                
+                if key == "compliance_check" and contradiction_notes:
+                    content_items = contradiction_notes + content_items
+                
+                content_str = "\n\n".join([str(item) for item in content_items if item])
+                if not content_str.strip():
+                    content_str = "Информация в предоставленной документации не обнаружена."
+                
+                valid_detailed_report.append({
+                    "section_title": title,
+                    "content": content_str.strip()
+                })
+            
+            # Внедряем противоречия в готовый markdown, если их там нет
+            if contradiction_notes:
+                section_3_pattern = r"(Раздел 3:.*?\n)"
+                if re.search(section_3_pattern, final_report_markdown, re.IGNORECASE):
+                    parts = re.split(section_3_pattern, final_report_markdown, flags=re.IGNORECASE)
+                    if len(parts) >= 3:
+                        # parts[1] - заголовок раздела 3
+                        # parts[2] - контент раздела 3 до следующего раздела
+                        new_content = "\n" + "\n\n".join(contradiction_notes) + "\n\n"
+                        # Простая проверка на дубликаты
+                        if not any(normalize(c[:30]) in normalize(parts[2]) for c in contradiction_notes):
+                            parts[2] = new_content + parts[2]
+                            final_report_markdown = "".join(parts)
+                else:
+                    # Если раздела 3 нет, просто добавим в начало
+                    final_report_markdown = "# Выявленные противоречия\n" + "\n\n".join(contradiction_notes) + "\n\n" + final_report_markdown
+
+        # Добавляем недостающие критические темы
+        added_rows = self._add_missing_critical_topics(evidence_package, rows, detailed_report, final_report_markdown)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         
-        all_rows = rows
         all_notes = res.get('summary_notes', [])
         
         update_stage("Формирование отчета", 95)
@@ -724,10 +795,9 @@ class LegalAnalysisService:
         seen_keys = set()
         duplicates_count = 0
         
-        for r in all_rows:
-            # Защитная проверка
+        for r in rows:
             if not all(k in r for k in ['block', 'finding', 'source_document']):
-                logger.warning(f"Row rejection (post-processing): missing mandatory keys. Row: {r}")
+                logger.warning(f"Row rejection during deduplication: missing mandatory fields. Row: {json.dumps(r, ensure_ascii=False)}")
                 continue
                 
             key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}"
@@ -737,7 +807,7 @@ class LegalAnalysisService:
             else:
                 duplicates_count += 1
         
-        logger.info(f"Deduplication summary: before={len(all_rows)}, after={len(unique_rows)}, removed={duplicates_count}")
+        logger.info(f"Deduplication summary: before={len(rows)}, after={len(unique_rows)}, removed={duplicates_count}")
 
         # 2. Сортировка
         risk_order = {"High": 0, "Medium": 1, "Low": 2}
@@ -748,7 +818,7 @@ class LegalAnalysisService:
         ))
 
         # 3. Лимит и фильтрация заметок
-        final_rows = unique_rows[:50] # Увеличим лимит
+        final_rows = unique_rows[:100]
         final_notes = []
         seen_notes = set()
         for note in all_notes:
@@ -764,6 +834,7 @@ class LegalAnalysisService:
         result = {
             "rows": final_rows,
             "detailed_report": valid_detailed_report,
+            "final_report_markdown": final_report_markdown,
             "summary_notes": final_notes,
             "has_contract": has_contract,
             "classification_notes": classification_notes,
@@ -778,9 +849,13 @@ class LegalAnalysisService:
         logger.info(f"--- ANALYSIS COMPLETED FOR TENDER: {tender_id} ---")
         logger.info(f"Final result summary: rows={len(final_rows)}, notes={len(final_notes)}, has_contract={has_contract}")
         
-        logger.info("--- FINAL JSON RESULT ---")
+        logger.info("--- [FINAL USER REPORT (MARKDOWN)] ---")
+        logger.info(final_report_markdown)
+        logger.info("--- [END OF FINAL USER REPORT] ---")
+        
+        logger.info("--- [FINAL JSON RESULT] ---")
         logger.info(json.dumps(result, ensure_ascii=False, indent=2))
-        logger.info("--- END OF FINAL JSON ---")
+        logger.info("--- [END OF FINAL JSON] ---")
             
         return result
 
