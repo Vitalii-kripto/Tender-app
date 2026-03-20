@@ -476,7 +476,7 @@ class EvidenceCollector:
             # Группируем по источникам
             by_source = {}
             for item in items:
-                src = item["source"]
+                src = item.get("source_document", "unknown")
                 if src not in by_source:
                     by_source[src] = []
                 by_source[src].append(item)
