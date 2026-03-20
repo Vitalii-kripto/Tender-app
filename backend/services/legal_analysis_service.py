@@ -63,10 +63,16 @@ class LegalAnalysisService:
         self.evidence_collector = EvidenceCollector()
         
         self.valid_blocks = [
-            "Риски участия и исполнения", "Недопуск/оценка", "Проверка соответствия", 
-            "Поставка и приемка", "Оплата", "Ответственность", 
-            "Документы заявки", "Документы при поставке", 
-            "Реестры/ограничения", "Рекомендации поставщику"
+            "Риски участия и исполнения", 
+            "Риски отклонения заявки", 
+            "Проверка на соответствие и противоречия", 
+            "Поставка и приемка", 
+            "Условия оплаты", 
+            "Ответственность сторон", 
+            "Документы для заявки", 
+            "Документы при поставке", 
+            "Реестры и ограничения",
+            "Рекомендации поставщику"
         ]
         self.block_normalization = {
             "риски участия": "Риски участия и исполнения",
@@ -76,42 +82,42 @@ class LegalAnalysisService:
             "операционные риски": "Риски участия и исполнения",
             "административные риски": "Риски участия и исполнения",
             "репутационные риски": "Риски участия и исполнения",
-            "отклонение": "Недопуск/оценка",
-            "недопуск": "Недопуск/оценка",
-            "потеря баллов": "Недопуск/оценка",
-            "критерии оценки": "Недопуск/оценка",
-            "оценка": "Недопуск/оценка",
-            "несоответствие": "Проверка соответствия",
-            "противоречия": "Проверка соответствия",
-            "ошибки документации": "Проверка соответствия",
-            "рисковые формулировки": "Проверка соответствия",
+            "отклонение": "Риски отклонения заявки",
+            "недопуск": "Риски отклонения заявки",
+            "потеря баллов": "Риски отклонения заявки",
+            "критерии оценки": "Риски отклонения заявки",
+            "оценка": "Риски отклонения заявки",
+            "несоответствие": "Проверка на соответствие и противоречия",
+            "противоречия": "Проверка на соответствие и противоречия",
+            "ошибки документации": "Проверка на соответствие и противоречия",
+            "рисковые формулировки": "Проверка на соответствие и противоречия",
             "поставка": "Поставка и приемка",
             "приемка": "Поставка и приемка",
             "условия поставки": "Поставка и приемка",
             "разгрузка": "Поставка и приемка",
             "доставка": "Поставка и приемка",
-            "расчеты": "Оплата",
-            "условия оплаты": "Оплата",
-            "аванс": "Оплата",
-            "эдо": "Оплата",
-            "казначейское сопровождение": "Оплата",
-            "штрафы": "Ответственность",
-            "пени": "Ответственность",
-            "неустойка": "Ответственность",
-            "односторонний отказ": "Ответственность",
-            "расторжение": "Ответственность",
-            "санкции": "Ответственность",
-            "состав заявки": "Документы заявки",
-            "требования к заявке": "Документы заявки",
+            "расчеты": "Условия оплаты",
+            "условия оплаты": "Условия оплаты",
+            "аванс": "Условия оплаты",
+            "эдо": "Условия оплаты",
+            "казначейское сопровождение": "Условия оплаты",
+            "штрафы": "Ответственность сторон",
+            "пени": "Ответственность сторон",
+            "неустойка": "Ответственность сторон",
+            "односторонний отказ": "Ответственность сторон",
+            "расторжение": "Ответственность сторон",
+            "санкции": "Ответственность сторон",
+            "состав заявки": "Документы для заявки",
+            "требования к заявке": "Документы для заявки",
             "сопроводительные документы": "Документы при поставке",
             "приемочные документы": "Документы при поставке",
-            "нацрежим": "Реестры/ограничения",
-            "национальный режим": "Реестры/ограничения",
-            "реестр": "Реестры/ограничения",
-            "ограничения": "Реестры/ограничения",
-            "преференции": "Реестры/ограничения",
-            "условие допуска": "Реестры/ограничения",
-            "запрет": "Реестры/ограничения",
+            "нацрежим": "Реестры и ограничения",
+            "национальный режим": "Реестры и ограничения",
+            "реестр": "Реестры и ограничения",
+            "ограничения": "Реестры и ограничения",
+            "преференции": "Реестры и ограничения",
+            "условие допуска": "Реестры и ограничения",
+            "запрет": "Реестры и ограничения",
             "рекомендации": "Рекомендации поставщику",
             "что сделать поставщику": "Рекомендации поставщику"
         }
@@ -363,21 +369,84 @@ class LegalAnalysisService:
                     
         return {"rows": [], "detailed_report": [], "summary_notes": ["Не удалось получить валидный ответ от ИИ."], "status": "partial"}
 
-    def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, evidence_package: Dict[str, Any] = None) -> List[Dict[str, Any]]:
+    def _clean_text(self, text: str) -> str:
+        """
+        Выполняет глубокую очистку текста от технического мусора, сохраняя юридическую значимость.
+        """
+        if not text:
+            return ""
+        
+        # 1. Удаление явно битых служебных символов (контрольные символы кроме \n \t)
+        text = "".join(ch for ch in text if ch == '\n' or ch == '\t' or (ord(ch) >= 32 and ord(ch) != 127))
+        
+        # 2. Удаление артефактов OCR (длинные последовательности точек, подчеркиваний, тире)
+        text = re.sub(r'\.{5,}', '...', text)
+        text = re.sub(r'_{5,}', '___', text)
+        text = re.sub(r'-{5,}', '---', text)
+        
+        # 3. Удаление повторяющихся пробелов и табуляций (сохраняем структуру строк)
+        text = re.sub(r'[ \t]+', ' ', text)
+        
+        # 4. Удаление избыточных пустых строк (более двух подряд)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        # 5. Удаление дублей подряд идущих одинаковых строк (часто при ошибках OCR)
+        lines = text.split('\n')
+        deduped_lines = []
+        for line in lines:
+            trimmed = line.strip()
+            if not trimmed:
+                if not deduped_lines or deduped_lines[-1] != "":
+                    deduped_lines.append("")
+                continue
+            if not deduped_lines or trimmed != deduped_lines[-1]:
+                deduped_lines.append(line)
+        
+        return "\n".join(deduped_lines).strip()
+
+    def _prepare_full_context(self, files: List[Dict[str, str]], file_classifications: List[Dict[str, Any]] = None) -> str:
+        """
+        Подготавливает полный очищенный контекст из всех документов.
+        Извлекает текст, очищает его и размечает явными границами.
+        """
+        full_context = []
+        
+        # Маппинг ролей документов для разметки
+        roles_map = {fc.get('filename'): fc.get('category') for fc in file_classifications} if file_classifications else {}
+        
+        for f in files:
+            filename = f.get('filename', 'unknown')
+            text = f.get('text', '')
+            role = roles_map.get(filename, "не определен")
+            
+            if not text or len(text.strip()) < 10:
+                logger.warning(f"Document {filename} has no meaningful text, skipping from context")
+                continue
+                
+            # Очистка текста
+            cleaned_text = self._clean_text(text)
+            
+            logger.info(f"--- CLEANED TEXT FOR {filename} (len: {len(cleaned_text)}) ---")
+            logger.info(cleaned_text[:5000] + ("..." if len(cleaned_text) > 5000 else ""))
+            logger.info(f"--- END CLEANED TEXT FOR {filename} ---")
+            
+            # Разметка документа с явными границами
+            doc_block = (
+                f"=== ДОКУМЕНТ: {filename} ===\n"
+                f"=== ТИП ДОКУМЕНТА: {role} ===\n"
+                f"{cleaned_text}\n"
+                f"=== КОНЕЦ ДОКУМЕНТА ==="
+            )
+            full_context.append(doc_block)
+            
+        return "\n\n".join(full_context)
+
+    def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, files: List[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         valid_rows = []
         rejected_count = 0
         
-        valid_docs = []
-        valid_docs_no_ext = []
-        valid_refs_text = ""
-        
-        if evidence_package:
-            valid_docs = [d.lower() for d in evidence_package.get("all_sources", [])]
-            valid_docs_no_ext = [os.path.splitext(d)[0] for d in valid_docs]
-            
-            for items in evidence_package.get("slots", {}).values():
-                for item in items:
-                    valid_refs_text += " " + str(item.get("source_reference", "")).lower()
+        valid_filenames = [f.get('filename', '').lower() for f in files] if files else []
+        valid_filenames_no_ext = [os.path.splitext(f)[0].lower() for f in valid_filenames]
         
         for row in rows:
             if not isinstance(row, dict):
@@ -385,7 +454,7 @@ class LegalAnalysisService:
                 rejected_count += 1
                 continue
             
-            # Обязательные поля
+            # Обязательные поля (минимальный набор)
             block = str(row.get("block", "")).strip()
             finding = str(row.get("finding", "")).strip()
             risk_level = str(row.get("risk_level", "Medium")).strip()
@@ -394,75 +463,49 @@ class LegalAnalysisService:
             source_reference = str(row.get("source_reference", "")).strip()
             legal_basis = str(row.get("legal_basis", "")).strip()
             
-            # Валидация
-            rejection_reason = None
-            if not block:
-                rejection_reason = "missing 'block'"
-            elif not finding:
-                rejection_reason = "missing 'finding'"
-            elif not source_document:
-                rejection_reason = "missing 'source_document'"
-            elif not source_reference:
-                rejection_reason = "missing 'source_reference'"
-            
-            if rejection_reason:
-                logger.warning(f"Row rejection: {rejection_reason}. Row: {row}")
+            # Если нет описания - пытаемся спасти или отбрасываем
+            if not finding or len(finding) < 5:
+                logger.warning(f"Row rejection: missing or too short 'finding'. Row: {row}")
                 rejected_count += 1
                 continue
-                
-            # Строгая проверка evidence (Post-validation)
-            if evidence_package and source_document.lower() != "не найдено":
-                doc_str = source_document.lower()
-                
-                # Проверка документа
-                doc_is_valid = False
-                for vd, vd_no_ext in zip(valid_docs, valid_docs_no_ext):
-                    if vd in doc_str or vd_no_ext in doc_str:
-                        doc_is_valid = True
-                        break
-                
-                if not doc_is_valid:
-                    logger.warning(f"Row rejection: hallucinated source_document '{source_document}'. Row: {row}")
-                    rejected_count += 1
-                    continue
-                    
-                # Проверка ссылки (отбрасывание, если галлюцинация)
-                ref_str = source_reference.lower()
-                ref_numbers = re.findall(r'\d+[\d.]*', ref_str)
-                if ref_numbers:
-                    ref_is_valid = False
-                    for num in ref_numbers:
-                        if re.search(rf'\b{re.escape(num)}\b', valid_refs_text):
-                            ref_is_valid = True
-                            break
-                    if not ref_is_valid:
-                        logger.warning(f"Row rejection: hallucinated source_reference '{source_reference}'. Row: {row}")
-                        rejected_count += 1
-                        continue
             
-            # Нормализация
+            # Нормализация блока
             normalized_block = block.lower()
+            found_normalized = False
             for key, value in self.block_normalization.items():
                 if key in normalized_block:
                     block = value
+                    found_normalized = True
                     break
             
-            if block not in self.valid_blocks:
-                logger.warning(f"Row rejection: unknown block '{block}'. Row: {row}")
-                rejected_count += 1
-                continue
+            if not found_normalized and block not in self.valid_blocks:
+                # Если блок совсем странный, но есть finding, относим к общей категории
+                block = "Риски участия и исполнения"
+                
+            if not source_document or source_document.lower() in ["", "none", "null", "не найдено"]:
+                source_document = "Весь пакет документов"
             
+            if not source_reference or source_reference.lower() in ["", "none", "null", "не найдено"]:
+                source_reference = "По тексту документов"
+
             if risk_level not in ["High", "Medium", "Low"]:
-                logger.warning(f"Unknown risk_level: {risk_level}, defaulting to Medium")
                 risk_level = "Medium"
+            
+            # Пытаемся сопоставить source_document с реальными файлами для красоты
+            if valid_filenames:
+                doc_str = source_document.lower()
+                for vf, vf_no_ext in zip(valid_filenames, valid_filenames_no_ext):
+                    if vf == doc_str or vf_no_ext == doc_str:
+                        source_document = vf # Точное совпадение
+                        break
             
             valid_row = {
                 "block": block,
-                "finding": finding[:1000] if finding else "Нет описания",
+                "finding": finding[:3000],
                 "risk_level": risk_level,
-                "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа и учесть его при подготовке заявки или исполнении договора.",
-                "source_document": source_document[:200],
-                "source_reference": source_reference[:200],
+                "supplier_action": supplier_action if supplier_action else "Проверить условие по первоисточнику документа.",
+                "source_document": source_document[:250],
+                "source_reference": source_reference[:250],
                 "legal_basis": legal_basis[:1000] if legal_basis else "",
                 "doc_group": group_name
             }
@@ -472,9 +515,9 @@ class LegalAnalysisService:
         logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
         return valid_rows
 
-    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], detailed_report: Dict[str, Any] = None) -> List[Dict[str, Any]]:
         """
-        Добавляет строки "не найдено" для критически важных тем на основе извлеченных слотов.
+        Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в слотах.
         """
         added_rows = []
         
@@ -483,30 +526,51 @@ class LegalAnalysisService:
             "unloading": ("Поставка и приемка", "условие о разгрузке"),
             "acceptance_deadline": ("Поставка и приемка", "сроки приемки"),
             "refusal_grounds": ("Поставка и приемка", "основания отказа в приемке"),
-            "payment_deadline": ("Оплата", "срок оплаты"),
-            "advance_payment": ("Оплата", "условие об авансе"),
-            "edo_eis": ("Оплата", "условие об ЭДО"),
-            "treasury_support": ("Оплата", "условие о казначейском сопровождении"),
+            "payment_deadline": ("Условия оплаты", "срок оплаты"),
+            "advance_payment": ("Условия оплаты", "условие об авансе"),
+            "edo_eis": ("Условия оплаты", "условие об ЭДО"),
+            "treasury_support": ("Условия оплаты", "условие о казначейском сопровождении"),
             "delivery_documents": ("Документы при поставке", "документы при поставке"),
-            "application_composition": ("Документы заявки", "полный перечень документов в составе заявки"),
-            "national_regime_registries": ("Реестры/ограничения", "требования о включении в реестры и применении национального режима")
+            "application_composition": ("Документы для заявки", "полный перечень документов в составе заявки"),
+            "national_regime_registries": ("Реестры и ограничения", "требования о включении в реестры и применении национального режима")
         }
+        
+        # Собираем все найденные темы из существующих строк для проверки
+        existing_text = " ".join([r.get("finding", "").lower() for r in existing_rows])
+        
+        # Также проверяем подробный отчет
+        if detailed_report:
+            if isinstance(detailed_report, dict):
+                for val in detailed_report.values():
+                    if isinstance(val, list):
+                        existing_text += " " + " ".join([str(v).lower() for v in val])
+            elif isinstance(detailed_report, list):
+                existing_text += " " + " ".join([str(v).lower() for v in detailed_report])
             
         for slot_id, (block, label) in critical_slots.items():
-            # Если слот не найден ни в одном документе
-            if not evidence_package.get("slots", {}).get(slot_id):
+            # Проверяем, упоминал ли ИИ эту тему (более мягкий поиск)
+            topic_keywords = [kw for kw in label.split() if len(kw) > 3]
+            # Если хотя бы 2 ключевых слова из названия темы есть в тексте - считаем что тема затронута
+            match_count = sum(1 for kw in topic_keywords if kw in existing_text)
+            mentioned_by_ai = match_count >= min(2, len(topic_keywords))
+            
+            # Проверяем, нашел ли бэкенд слот
+            found_in_slots = bool(evidence_package.get("slots", {}).get(slot_id))
+            
+            # Добавляем только если ни ИИ, ни бэкенд не нашли тему
+            if not mentioned_by_ai and not found_in_slots:
                 new_row = {
                     "block": block,
                     "finding": f"В просмотренных документах не найдено {label}.",
                     "risk_level": "Medium",
-                    "supplier_action": "Проверить условие по первоисточнику документа и учесть его при подготовке заявки или исполнении договора.",
+                    "supplier_action": "Проверить наличие данного условия в документации самостоятельно или направить запрос на разъяснение.",
                     "source_document": "Не найдено",
-                    "source_reference": "Критичное условие не выявлено в просмотренных документах",
+                    "source_reference": "Критичное условие не выявлено",
                     "legal_basis": "",
                     "doc_group": "full"
                 }
                 added_rows.append(new_row)
-                logger.info(f"Auto-added critical topic: {label} in block {block} (reason: slot '{slot_id}' not found in evidence package)")
+                logger.info(f"Auto-added secondary critical topic: {label} (not found by AI or Slots)")
         
         return added_rows
 
@@ -551,33 +615,29 @@ class LegalAnalysisService:
         
         update_stage("Анализ документации", 30)
 
-        # 1. Извлекаем структурированные улики (Evidence Extraction)
-        logger.info(f"Extracting evidence from {len(files)} files...")
+        # 1. Подготовка полного контекста (Full Context Preparation)
+        logger.info(f"Preparing full context from {len(files)} files...")
+        full_context = self._prepare_full_context(files, file_classifications)
+        logger.info(f"Full context size: {len(full_context)} characters")
+        
+        logger.info("--- ASSEMBLED FULL CLEANED CONTEXT ---")
+        logger.info(full_context[:10000] + ("..." if len(full_context) > 10000 else ""))
+        logger.info("--- END ASSEMBLED FULL CLEANED CONTEXT ---")
+        
+        # 2. Вспомогательное извлечение улик (Auxiliary Evidence Extraction)
+        # Используется для логов, противоречий и автодобавления критических тем
+        logger.info("Running auxiliary evidence extraction...")
         evidence_package = self.evidence_collector.collect_evidence(files)
         
         found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if items]
-        not_found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if not items]
-        logger.info(f"Found slots: {found_slots}")
-        logger.info(f"Not found slots: {not_found_slots}")
+        logger.info(f"Auxiliary found slots: {found_slots}")
         
         contradictions = evidence_package.get("contradictions", [])
         if contradictions:
-            logger.info(f"Found {len(contradictions)} contradictions:")
-            for c in contradictions:
-                logger.info(f"  - {c.get('slot_name', 'unknown')}: {c.get('value_1', '')} ({c.get('source_1', '')}) vs {c.get('value_2', '')} ({c.get('source_2', '')})")
-        else:
-            logger.info("No contradictions found.")
+            logger.info(f"Found {len(contradictions)} contradictions (auxiliary)")
         
-        formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
-        
-        logger.info(f"Evidence package size: {len(formatted_evidence)} characters")
-        
-        logger.info("--- [FORMATTED EVIDENCE PACKAGE] ---")
-        logger.info(formatted_evidence)
-        logger.info("--- [END OF EVIDENCE PACKAGE] ---")
-
-        # 2. Интерпретация улик с помощью ИИ (LLM Interpretation)
-        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, formatted_evidence, "full")
+        # 3. Интерпретация полного контекста с помощью ИИ (LLM Interpretation)
+        assembled_prompt = self._assemble_prompt(PROMPT_FULL_PACKAGE, full_context, "full")
         if not assembled_prompt:
             logger.error(f"Prompt assembly failed for tender {tender_id}")
             res = {"rows": [], "summary_notes": ["Ошибка формирования текста промпта для ИИ-анализа."]}
@@ -588,14 +648,17 @@ class LegalAnalysisService:
         detailed_report = res.get('detailed_report', [])
         logger.info(f"AI response: {len(rows)} raw rows received, {len(detailed_report)} detailed report sections")
         
-        rows = self._validate_and_filter_rows(rows, "full", evidence_package)
+        # Мягкая валидация строк
+        rows = self._validate_and_filter_rows(rows, "full", files)
         
         # Add contradictions directly to rows to guarantee they are not smoothed out
         contradiction_rows = []
+        contradiction_notes = []
         for c in contradictions:
+            finding = f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'."
             contradiction_rows.append({
-                "block": "Проверка соответствия",
-                "finding": f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'.",
+                "block": "Проверка на соответствие и противоречия",
+                "finding": finding,
                 "risk_level": c.get('severity', 'High'),
                 "supplier_action": "Направить запрос на разъяснение для устранения противоречия до подачи заявки.",
                 "source_document": f"{c.get('source_1', '')} / {c.get('source_2', '')}",
@@ -603,6 +666,7 @@ class LegalAnalysisService:
                 "legal_basis": "ч. 4 ст. 105 Закона № 44-ФЗ",
                 "doc_group": "full"
             })
+            contradiction_notes.append(finding)
         
         rows = contradiction_rows + rows
         
@@ -611,24 +675,27 @@ class LegalAnalysisService:
         if isinstance(detailed_report, dict):
             section_titles = {
                 "risks_execution": "Риски участия и исполнения",
-                "rejection_risks": "Риски недопуска/потери баллов",
-                "compliance_check": "Проверка соответствия",
+                "rejection_risks": "Риски недопуска заявки и потери баллов",
+                "compliance_check": "Проверка на соответствие и противоречия",
                 "delivery_acceptance": "Поставка и приемка",
-                "payment_terms": "Оплата",
-                "liability": "Ответственность",
-                "application_documents": "Документы заявки",
+                "payment_terms": "Условия оплаты",
+                "liability": "Ответственность сторон",
+                "application_documents": "Документы для заявки",
                 "delivery_documents": "Документы при поставке",
-                "registries_restrictions": "Реестры/ограничения",
+                "registries_restrictions": "Реестры и ограничения",
                 "supplier_recommendations": "Рекомендации поставщику"
             }
             for key, title in section_titles.items():
                 content_items = detailed_report.get(key, [])
+                if not isinstance(content_items, list):
+                    content_items = [content_items]
+                
+                # Добавляем противоречия в compliance_check
+                if key == "compliance_check" and contradiction_notes:
+                    content_items = contradiction_notes + content_items
+                
                 if content_items:
-                    if isinstance(content_items, list):
-                        content_str = "\n\n".join([str(item) for item in content_items if item])
-                    else:
-                        content_str = str(content_items)
-                    
+                    content_str = "\n\n".join([str(item) for item in content_items if item])
                     if content_str.strip():
                         valid_detailed_report.append({
                             "section_title": title,
@@ -639,7 +706,7 @@ class LegalAnalysisService:
                 if isinstance(section, dict) and 'section_title' in section and 'content' in section:
                     valid_detailed_report.append(section)
         
-        added_rows = self._add_missing_critical_topics(evidence_package)
+        added_rows = self._add_missing_critical_topics(evidence_package, rows, detailed_report)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         
@@ -659,18 +726,16 @@ class LegalAnalysisService:
         
         for r in all_rows:
             # Защитная проверка
-            if not all(k in r for k in ['block', 'finding', 'source_document', 'source_reference']):
+            if not all(k in r for k in ['block', 'finding', 'source_document']):
                 logger.warning(f"Row rejection (post-processing): missing mandatory keys. Row: {r}")
                 continue
                 
-            key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}_{normalize(r['source_reference'])}"
+            key = f"{normalize(r['block'])}_{normalize(r['finding'])}_{normalize(r['source_document'])}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 unique_rows.append(r)
             else:
                 duplicates_count += 1
-                if self.debug_mode:
-                    logger.info(f"Duplicate removed: {r['block']} - {r['finding'][:50]}...")
         
         logger.info(f"Deduplication summary: before={len(all_rows)}, after={len(unique_rows)}, removed={duplicates_count}")
 
@@ -683,7 +748,7 @@ class LegalAnalysisService:
         ))
 
         # 3. Лимит и фильтрация заметок
-        final_rows = unique_rows[:30] # Увеличим лимит
+        final_rows = unique_rows[:50] # Увеличим лимит
         final_notes = []
         seen_notes = set()
         for note in all_notes:
