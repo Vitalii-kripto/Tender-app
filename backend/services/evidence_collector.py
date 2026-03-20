@@ -1,4 +1,5 @@
 import re
+import os
 import logging
 from typing import List, Dict, Any
 
@@ -165,6 +166,50 @@ class EvidenceCollector:
         
         return "не определено"
 
+    def _extract_slot_value(self, slot_id: str, text: str, match: re.Match) -> str:
+        """
+        Извлекает конкретное значение факта, а не просто заголовок.
+        """
+        start = match.end()
+        # Берем следующие 500 символов после найденного паттерна
+        context = text[start:start+500].strip()
+        
+        # Очистка от лишних пробелов и переносов
+        context = re.sub(r'\s+', ' ', context)
+        
+        if slot_id in ["delivery_deadline", "payment_deadline", "acceptance_deadline"]:
+            # Ищем даты или количество дней
+            val_match = re.search(r'(\d{2}\.\d{2}\.\d{4}|\d+\s*(?:\([^)]+\)\s*)?(?:рабочи[хм]|календарны[хм]|банковски[хм])?\s*дн[ейя])', context, re.IGNORECASE)
+            if val_match:
+                # Попробуем захватить условие (например, "с момента подписания")
+                condition_match = re.search(r'((?:с даты|с момента|после|от даты|со дня).*?)(?:\.|\;|$)', context[val_match.end():], re.IGNORECASE)
+                condition = f" {condition_match.group(1).strip()}" if condition_match else ""
+                return f"{match.group(0).strip()} {val_match.group(0).strip()}{condition}"
+                
+        elif slot_id == "delivery_place":
+            # Ищем адрес (начинается с г., ул., обл., край, республика, индекс)
+            val_match = re.search(r'((?:г\.|город|ул\.|обл\.|край|республика|Российская Федерация|РФ|\d{6}).{5,150}?)(?:\.|\;|$)', context, re.IGNORECASE)
+            if val_match:
+                return val_match.group(1).strip()
+                
+        elif slot_id == "unloading":
+            # Ищем кто выполняет
+            val_match = re.search(r'(силами.*?поставщика|силами.*?заказчика|за счет.*?поставщика|за счет.*?заказчика|поставщик.*?своими силами|разгрузка.*?поставщиком)', context, re.IGNORECASE)
+            if val_match:
+                return val_match.group(1).strip()
+                
+        elif slot_id in ["delivery_documents", "application_composition"]:
+            # Берем первые 300 символов как перечень
+            return context[:300] + "..." if len(context) > 300 else context
+            
+        # По умолчанию берем первые 100 символов после паттерна
+        default_val = context[:100]
+        # Если контекст пустой, возвращаем сам паттерн
+        if not default_val:
+            return match.group(0).strip()
+            
+        return f"{match.group(0).strip()}: {default_val}..."
+
     def _extract_nmcc_facts(self, text: str) -> Dict[str, Any]:
         """
         Извлекает нормализованные факты по НМЦК.
@@ -215,14 +260,35 @@ class EvidenceCollector:
         """
         Извлекает факты (слоты) из документов детерминированно.
         """
+        # Дедупликация файлов (.doc и .docx)
+        unique_files = {}
+        for f in files:
+            filename = f.get('filename', 'unknown')
+            base_name, ext = os.path.splitext(filename)
+            ext = ext.lower()
+            
+            # Если уже есть файл с таким же базовым именем
+            if base_name in unique_files:
+                existing_ext = os.path.splitext(unique_files[base_name]['filename'])[1].lower()
+                # Предпочитаем .docx перед .doc
+                if ext == '.docx' and existing_ext == '.doc':
+                    logger.info(f"Deduplication: replacing {unique_files[base_name]['filename']} with {filename}")
+                    unique_files[base_name] = f
+                else:
+                    logger.info(f"Deduplication: skipping {filename} in favor of {unique_files[base_name]['filename']}")
+            else:
+                unique_files[base_name] = f
+                
+        deduped_files = list(unique_files.values())
+
         evidence_package = {
             "documents": [],
             "slots": {slot_id: [] for slot_id in self.slots.keys()},
             "contradictions": [],
-            "all_sources": [f.get('filename', 'unknown') for f in files]
+            "all_sources": [f.get('filename', 'unknown') for f in deduped_files]
         }
 
-        for f in files:
+        for f in deduped_files:
             filename = f.get('filename', 'unknown')
             text = f.get('text', '')
             if not text:
@@ -264,7 +330,7 @@ class EvidenceCollector:
                         chunk = text[start:end].strip()
                         
                         # Извлекаем точное значение (matched text)
-                        value = m.group(0).strip()
+                        value = self._extract_slot_value(slot_id, text, m)
                         
                         # Пытаемся найти ссылку на пункт (улучшено)
                         ref_match = re.search(r"(?:п\.|пункт|раздел|статья|приложение)\s*(\d+[\d.]*)", text[max(0, m.start()-150):m.start()])
@@ -280,6 +346,7 @@ class EvidenceCollector:
                             "offset": m.start()
                         })
                         doc_info["slots_found"] += 1
+                        logger.info(f"Extracted slot '{slot_id}' from '{filename}': {value[:100]}")
 
             if doc_info["slots_found"] == 0:
                 doc_info["status"] = "слоты не найдены"
@@ -331,7 +398,7 @@ class EvidenceCollector:
                 val2 = by_source[src2][0].get("value", "н/д")
                 
                 # Сравниваем значения, чтобы убедиться, что они действительно разные
-                if val1.lower() != val2.lower():
+                if val1.lower() != val2.lower() and val1.lower() not in val2.lower() and val2.lower() not in val1.lower():
                     package["contradictions"].append({
                         "slot_name": desc,
                         "value_1": val1,

@@ -425,14 +425,19 @@ class LegalAnalysisService:
                     rejected_count += 1
                     continue
                     
-                # Проверка ссылки (коррекция, если галлюцинация)
+                # Проверка ссылки (отбрасывание, если галлюцинация)
                 ref_str = source_reference.lower()
                 ref_numbers = re.findall(r'\d+[\d.]*', ref_str)
                 if ref_numbers:
-                    ref_is_valid = any(num in valid_refs_text for num in ref_numbers)
+                    ref_is_valid = False
+                    for num in ref_numbers:
+                        if re.search(rf'\b{re.escape(num)}\b', valid_refs_text):
+                            ref_is_valid = True
+                            break
                     if not ref_is_valid:
-                        logger.info(f"Row correction: hallucinated source_reference '{source_reference}'. Correcting to generic.")
-                        source_reference = "Найдено в тексте (точный пункт не определен)"
+                        logger.warning(f"Row rejection: hallucinated source_reference '{source_reference}'. Row: {row}")
+                        rejected_count += 1
+                        continue
             
             # Нормализация
             normalized_block = block.lower()
@@ -549,6 +554,14 @@ class LegalAnalysisService:
         logger.info(f"Found slots: {found_slots}")
         logger.info(f"Not found slots: {not_found_slots}")
         
+        contradictions = evidence_package.get("contradictions", [])
+        if contradictions:
+            logger.info(f"Found {len(contradictions)} contradictions:")
+            for c in contradictions:
+                logger.info(f"  - {c['slot_name']}: {c['value_1']} ({c['source_1']}) vs {c['value_2']} ({c['source_2']})")
+        else:
+            logger.info("No contradictions found.")
+        
         formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
         
         logger.info(f"Evidence package size: {len(formatted_evidence)} characters")
@@ -634,6 +647,7 @@ class LegalAnalysisService:
             "classification_notes": classification_notes,
             "file_statuses": file_statuses,
             "file_classifications": file_classifications,
+            "contradictions": contradictions,
             "status": "success" if final_rows else "partial",
             "stage": "Готово",
             "progress": 100
