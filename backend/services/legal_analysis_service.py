@@ -482,11 +482,8 @@ class LegalAnalysisService:
                 if not found_normalized:
                     block = "Риски участия и исполнения договора"
             
-            # Игнорируем противоречия, сгенерированные ИИ, чтобы избежать ложных срабатываний.
-            # Мы добавим надежные противоречия из evidence_collector позже.
-            if block == "Проверка соответствия документации и закона":
-                rejected_rows.append({"row": row, "reason": "LLM-generated contradiction (preventing false positives)"})
-                continue
+            # МЫ БОЛЬШЕ НЕ ОТКЛОНЯЕМ СТРОКИ ИИ ПО БЛОКУ "Проверка соответствия документации и закона",
+            # так как пользователь просит доверять выводам модели.
             
             # Нормализация источника
             if not source_document or source_document.lower() in ["", "none", "null", "не найдено", "unknown", "весь пакет"]:
@@ -557,9 +554,9 @@ class LegalAnalysisService:
 
 
 
-    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], final_report_sections: Dict[str, Any] = None, final_report_markdown: str = "") -> List[Dict[str, Any]]:
+    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], final_report_sections: Dict[str, Any] = None, final_report_markdown: str = "", full_context: str = "") -> List[Dict[str, Any]]:
         """
-        Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в слотах.
+        Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в полном контексте.
         """
         added_rows = []
         
@@ -579,38 +576,38 @@ class LegalAnalysisService:
             "national_regime_registries": ("Требования по реестрам и ограничениям", "требования о включении в реестры и применении национального режима")
         }
         
-        # Собираем все найденные темы из существующих строк для проверки
-        existing_text = " ".join([r.get("finding", "").lower() for r in existing_rows])
+        # Собираем весь доступный текст для проверки наличия темы
+        search_text = " ".join([r.get("finding", "").lower() for r in existing_rows])
         
         # Также проверяем подробный отчет
         if final_report_sections:
             if isinstance(final_report_sections, dict):
                 for val in final_report_sections.values():
                     if isinstance(val, list):
-                        existing_text += " " + " ".join([str(v).lower() for v in val])
+                        search_text += " " + " ".join([str(v).lower() for v in val])
                     else:
-                        existing_text += " " + str(val).lower()
+                        search_text += " " + str(val).lower()
             elif isinstance(final_report_sections, list):
-                existing_text += " " + " ".join([str(v).lower() for v in final_report_sections])
+                search_text += " " + " ".join([str(v).lower() for v in final_report_sections])
         
         # И markdown отчет
         if final_report_markdown:
-            existing_text += " " + final_report_markdown.lower()
+            search_text += " " + final_report_markdown.lower()
+            
+        # И ПОЛНЫЙ КОНТЕКСТ (чтобы не добавлять "не найдено", если инфа есть в документах, но ИИ ее проигнорировал)
+        if full_context:
+            search_text += " " + full_context.lower()
             
         for slot_id, (block, label) in critical_slots.items():
-            # Проверяем, упоминал ли ИИ эту тему (более мягкий поиск)
+            # Проверяем, упоминается ли тема в собранном тексте
             words = label.split()
             # Ищем хотя бы одно значимое слово (длиной > 4) в тексте
-            found_by_ai = any(word in existing_text for word in words if len(word) > 4)
+            found_in_text = any(word in search_text for word in words if len(word) > 4)
             
-            # Проверяем, нашел ли EvidenceCollector что-то в этом слоте
-            found_by_collector = False
-            if evidence_package and "slots" in evidence_package:
-                slot_data = evidence_package["slots"].get(slot_id, [])
-                if slot_data:
-                    found_by_collector = True
+            # Мы больше не доверяем evidence_collector для отмены "не найдено", 
+            # так как он может найти "мусор". Доверяем только текстам.
             
-            if not found_by_ai and not found_by_collector:
+            if not found_in_text:
                 new_row = {
                     "block": block,
                     "finding": f"Информация про {label} в документации не обнаружена.",
@@ -709,24 +706,16 @@ class LegalAnalysisService:
         # Мягкая валидация строк
         rows = self._validate_and_filter_rows(rows, "full", files)
         
-        # Добавляем противоречия напрямую в строки
-        contradiction_rows = []
-        contradiction_notes = []
-        for c in contradictions:
-            finding = f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'."
-            contradiction_rows.append({
-                "block": "Проверка соответствия документации и закона",
-                "finding": finding,
-                "risk_level": c.get('severity', 'High'),
-                "supplier_action": "Направить запрос на разъяснение для устранения противоречия до подачи заявки.",
-                "source_document": f"{c.get('source_1', '')} / {c.get('source_2', '')}",
-                "source_reference": "Сравнение документов",
-                "legal_basis": "ч. 4 ст. 105 Закона № 44-ФЗ",
-                "doc_group": "full"
-            })
-            contradiction_notes.append(finding)
+        # ВАЖНО: Мы больше не добавляем противоречия из evidence_collector в финальный список строк,
+        # так как они часто бывают ложными или "мусорными". 
+        # Оставляем их только в логах для диагностики.
+        contradiction_notes = [
+            f"ПРОТИВОРЕЧИЕ ({c.get('slot_name', 'unknown')}): В документе '{c.get('source_1', '')}' указано '{c.get('value_1', '')}', а в документе '{c.get('source_2', '')}' — '{c.get('value_2', '')}'."
+            for c in contradictions
+        ]
         
-        rows = contradiction_rows + rows
+        # Добавляем строки "не найдено" только если информации действительно нет ни в ответе ИИ, ни в исходном контексте
+        # Мы перенесли этот вызов ниже, чтобы он учитывал собранный markdown
         
         # Валидация final_report_sections и формирование final_report_markdown если его нет
         valid_final_report_sections = []
@@ -742,13 +731,17 @@ class LegalAnalysisService:
             "supplier_recommendations": "9) Рекомендации Поставщику"
         }
         
-        # Если ИИ не вернул markdown, соберем его из final_report_sections
+        # Если ИИ не вернул markdown, соберем его из того что есть (sections или rows)
         if not final_report_markdown:
-            logger.info("Markdown report missing in AI response, assembling from final_report_sections")
+            logger.info("Markdown report missing in AI response, assembling from available data")
             markdown_parts = ["# Подробный юридический отчет по тендеру\n"]
             
             for key, title in section_titles.items():
                 content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
+                
+                # Если в секциях пусто, попробуем вытащить из rows (приоритет 3)
+                if not content_items and rows:
+                    content_items = [r.get("finding") for r in rows if r.get("block") == title.split(") ")[1]]
                 
                 if key == "documents_list" and isinstance(content_items, dict):
                     # Специальная обработка для раздела 7 (Перечень документов)
@@ -763,11 +756,8 @@ class LegalAnalysisService:
                     if not isinstance(content_items, list):
                         content_items = [content_items]
                     
-                    if key == "compliance_check":
-                        if contradiction_notes:
-                            content_items = contradiction_notes
-                        else:
-                            content_items = ["Противоречий не обнаружено."]
+                    # Мы больше не подмешиваем технические противоречия из слотов. 
+                    # Доверяем только тому, что нашел ИИ.
                     
                     content_str = "\n\n".join([str(item) for item in content_items if item])
                     if not content_str.strip():
@@ -782,7 +772,32 @@ class LegalAnalysisService:
             
             final_report_markdown = "\n".join(markdown_parts)
         else:
-            # Если markdown есть, все равно подготовим valid_final_report_sections для совместимости
+            # Если markdown есть, используем его КАК ЕСТЬ. Не урезаем и не модифицируем существующее.
+            logger.info("Using final_report_markdown from AI response as primary result")
+            
+            # Но мы ОБЯЗАНЫ гарантировать наличие всех 9 разделов (требование пользователя)
+            missing_sections_to_append = []
+            for key, title in section_titles.items():
+                # Ищем заголовок раздела в markdown (без учета регистра и номера)
+                clean_title = title.split(") ")[1].lower()
+                if clean_title not in final_report_markdown.lower():
+                    logger.warning(f"Section '{title}' missing in AI markdown, will append at the end")
+                    content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
+                    
+                    if not content_items and rows:
+                        content_items = [r.get("finding") for r in rows if r.get("block") == clean_title]
+                    
+                    content_str = "\n\n".join([str(item) for item in content_items if item]) if isinstance(content_items, list) else str(content_items)
+                    if not content_str.strip() or content_str == "[]":
+                        content_str = "Информация в предоставленной документации не обнаружена."
+                    
+                    missing_sections_to_append.append(f"## {title}\n{content_str.strip()}\n")
+            
+            if missing_sections_to_append:
+                final_report_markdown += "\n\n---\n" + "\n".join(missing_sections_to_append)
+            
+            # Для совместимости (например, для Excel) все равно подготовим секции, 
+            # но берем их из AI ответа без модификаций.
             for key, title in section_titles.items():
                 content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
                 
@@ -797,12 +812,6 @@ class LegalAnalysisService:
                     if not isinstance(content_items, list):
                         content_items = [content_items]
                     
-                    if key == "compliance_check":
-                        if contradiction_notes:
-                            content_items = contradiction_notes
-                        else:
-                            content_items = ["Противоречий не обнаружено."]
-                    
                     content_str = "\n\n".join([str(item) for item in content_items if item])
                     if not content_str.strip():
                         content_str = "Информация в предоставленной документации не обнаружена."
@@ -811,18 +820,10 @@ class LegalAnalysisService:
                     "section_title": title,
                     "content": content_str.strip()
                 })
-            
-            # Внедряем надежные противоречия в готовый markdown, заменяя существующий текст Раздела 3
-            section_3_pattern = r"(Раздел 3:.*?\n)(.*?)(?=\nРаздел 4:|\Z)"
-            if re.search(section_3_pattern, final_report_markdown, re.IGNORECASE | re.DOTALL):
-                new_content = "\n" + ("\n\n".join(contradiction_notes) if contradiction_notes else "Противоречий не обнаружено.") + "\n\n"
-                final_report_markdown = re.sub(section_3_pattern, r"\g<1>" + new_content, final_report_markdown, flags=re.IGNORECASE | re.DOTALL)
-            elif contradiction_notes:
-                # Если раздела 3 нет, просто добавим в начало
-                final_report_markdown = "# Выявленные противоречия\n" + "\n\n".join(contradiction_notes) + "\n\n" + final_report_markdown
 
-        # Добавляем недостающие критические темы
-        added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown)
+        # Добавляем недостающие критические темы только в rows (сводку), 
+        # но не трогаем основной markdown отчет, чтобы не портить его структуру "техническими" вставками.
+        added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown, full_context)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
         

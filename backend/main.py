@@ -646,52 +646,89 @@ async def api_export_risks_excel(data: dict = Body(...)):
             # Parse final_md into sections as a fallback
             md_sections_dict = {}
             if final_md:
-                # Robust split by section headers like "### 1) ", "## 1.", "Раздел 1:"
-                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+)?\d+[\)\.]\s*(.*)', final_md)
+                # Robust split by section headers like "### 1) ", "## 1.", "Раздел 1:", "1) Риски..."
+                # We look for lines that start with a number and a closing parenthesis or dot, or start with "Раздел"
+                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+)?(\d+[\)\.]\s*.*)', final_md)
                 if len(md_parts) > 1:
+                    # The first part is usually the title or intro before any numbered section
                     for i in range(1, len(md_parts), 2):
                         title = md_parts[i].strip()
                         content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
-                        md_sections_dict[title] = content
+                        # Clean title from markdown artifacts
+                        clean_title = re.sub(r'^#+\s*', '', title).strip()
+                        md_sections_dict[clean_title] = content
+                else:
+                    # Fallback if no numbered sections found: split by any ### or ## headers
+                    md_parts = re.split(r'(?m)^#+\s+(.*)', final_md)
+                    if len(md_parts) > 1:
+                        for i in range(1, len(md_parts), 2):
+                            title = md_parts[i].strip()
+                            content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
+                            md_sections_dict[title] = content
             
             compliance_content = ""
             app_docs_content = ""
             del_docs_content = ""
             
-            def get_content(keywords, dicts):
+            def get_content(keywords, dicts, fallback_rows=None, block_name=None):
+                # Priority 1: Check provided dictionaries (sections_dict, md_sections_dict)
                 for d in dicts:
+                    if not d: continue
                     for k, v in d.items():
                         k_lower = k.lower()
-                        if any(kw in k_lower or k.startswith(kw) for kw in keywords):
-                            # Skip if it's just a placeholder
+                        # Match by keyword or if the key starts with the keyword (e.g. "3)" matches "3) Проверка...")
+                        if any(kw.lower() in k_lower for kw in keywords):
                             v_clean = v.strip().lower()
+                            # Skip placeholders
                             if v_clean in ["информация не обнаружена.", "информация не обнаружена", "информация в предоставленной документации не обнаружена.", "информация в предоставленной документации не обнаружена"]:
                                 continue
-                            if v:
-                                return v
+                            if v.strip():
+                                return v.strip()
+                
+                # Priority 2: Last resort fallback to rows if block_name matches
+                if fallback_rows and block_name:
+                    row_findings = [r.get('finding', '') for r in fallback_rows if r.get('block') == block_name]
+                    if row_findings:
+                        return "\n".join(row_findings)
+                
                 return ""
             
-            compliance_content = get_content(["проверка соответствия", "compliance_check", "3)"], [sections_dict, md_sections_dict])
-            docs_content = get_content(["перечень документов", "documents_list", "7)"], [sections_dict, md_sections_dict])
+            # Extract content for specialized sheets
+            compliance_content = get_content(["проверка соответствия", "compliance_check", "3)"], [md_sections_dict, sections_dict], rows, "Проверка соответствия документации и закона")
+            docs_content = get_content(["перечень документов", "documents_list", "7)"], [md_sections_dict, sections_dict], rows, "Перечень документов")
             
             if docs_content:
-                parts = re.split(r'(?i)(?:\*\*|#|\d\.)?\s*При поставке.*?:?', docs_content)
-                if len(parts) > 1:
-                    app_docs_content = re.sub(r'(?i)(?:\*\*|#|\d\.)?\s*В составе заявки.*?:?', '', parts[0]).strip()
-                    del_docs_content = parts[1].strip()
+                # Robust split for documents list
+                # Look for "В составе заявки" and "При поставке" markers
+                app_marker = re.search(r'(?i)(?:В составе заявки|Для участия|В заявке)', docs_content)
+                del_marker = re.search(r'(?i)(?:При поставке|Для исполнения|При приемке)', docs_content)
+                
+                if app_marker and del_marker:
+                    if app_marker.start() < del_marker.start():
+                        app_docs_content = docs_content[app_marker.start():del_marker.start()].strip()
+                        del_docs_content = docs_content[del_marker.start():].strip()
+                    else:
+                        del_docs_content = docs_content[del_marker.start():app_marker.start()].strip()
+                        app_docs_content = docs_content[app_marker.start():].strip()
                 else:
-                    app_docs_content = docs_content.strip()
+                    # If markers not found, try splitting by common patterns
+                    parts = re.split(r'(?i)(?:\*\*|#|\d\.)?\s*При поставке.*?:?', docs_content)
+                    if len(parts) > 1:
+                        app_docs_content = re.sub(r'(?i)(?:\*\*|#|\d\.)?\s*В составе заявки.*?:?', '', parts[0]).strip()
+                        del_docs_content = parts[1].strip()
+                    else:
+                        app_docs_content = docs_content.strip()
             
+            # Add contradictions to compliance if not already there
             if contradictions:
                 contradictions_text = "\n\n".join(contradictions) if isinstance(contradictions, list) else str(contradictions)
-                if compliance_content and "противоречий не обнаружено" not in compliance_content.lower():
-                    # Avoid duplicating if already there
-                    if contradictions[0][:30] not in compliance_content:
-                        compliance_content = contradictions_text + "\n\n" + compliance_content
+                if compliance_content:
+                    if "противореч" not in compliance_content.lower() and "ошибк" not in compliance_content.lower():
+                        compliance_content = "ВЫЯВЛЕННЫЕ ПРОТИВОРЕЧИЯ:\n" + contradictions_text + "\n\nДЕТАЛИ СООТВЕТСТВИЯ:\n" + compliance_content
                 else:
                     compliance_content = contradictions_text
             
-            FALLBACK_TEXT = "Данные по этому разделу отсутствуют в результате анализа"
+            FALLBACK_TEXT = "Информация в предоставленной документации не обнаружена"
             
             if not compliance_content:
                 compliance_content = FALLBACK_TEXT
@@ -715,24 +752,42 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
             
             # --- Build Подробный отчет ---
-            merged_sections = {}
-            if sections_dict:
-                for sec_title, sec_content in sections_dict.items():
-                    v_clean = sec_content.strip().lower()
-                    if v_clean in ["информация не обнаружена.", "информация не обнаружена", "информация в предоставленной документации не обнаружена.", "информация в предоставленной документации не обнаружена"]:
-                        # Try to find a better version in md_sections_dict
-                        better_content = get_content([sec_title.lower()], [md_sections_dict])
-                        merged_sections[sec_title] = better_content if better_content else sec_content
-                    else:
-                        merged_sections[sec_title] = sec_content
-            elif md_sections_dict:
-                merged_sections = md_sections_dict
+            # We want to show all 9 sections here
+            section_names = [
+                "1) Риски участия и исполнения договора",
+                "2) Риски недопуска заявки и потери баллов",
+                "3) Проверка соответствия документации и закона",
+                "4) Условия поставки и приемки",
+                "5) Условия оплаты",
+                "6) Ответственность сторон",
+                "7) Перечень документов",
+                "8) Требования по реестрам и ограничениям",
+                "9) Рекомендации Поставщику"
+            ]
+            
+            found_any_section = False
+            for s_name in section_names:
+                # Try to find content for this section name
+                s_content = get_content([s_name.split(") ")[1], s_name[:3]], [md_sections_dict, sections_dict], rows, s_name.split(") ")[1])
+                if s_content:
+                    ws_report.append([tid, s_name, s_content])
+                    found_any_section = True
+                else:
+                    ws_report.append([tid, s_name, FALLBACK_TEXT])
+            
+            if not found_any_section:
+                # If we didn't find specific sections, just dump whatever we have in merged_sections
+                merged_sections = {}
+                if md_sections_dict:
+                    merged_sections = md_sections_dict
+                elif sections_dict:
+                    merged_sections = sections_dict
                 
-            if merged_sections:
-                for sec_title, sec_content in merged_sections.items():
-                    ws_report.append([tid, sec_title, sec_content])
-            else:
-                ws_report.append([tid, "Отчет", FALLBACK_TEXT])
+                if merged_sections:
+                    for sec_title, sec_content in merged_sections.items():
+                        ws_report.append([tid, sec_title, sec_content])
+                else:
+                    ws_report.append([tid, "Отчет", FALLBACK_TEXT])
             
             # --- Build Полный текст отчета ---
             if final_md:
