@@ -560,55 +560,306 @@ async def api_export_risks_excel(data: dict = Body(...)):
 
     try:
         wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "Risk Analysis"
-
-        # Headers
-        headers = ["ID Тендера", "Блок", "Что найдено", "Риск", "Что делать поставщику", "Источник", "Основание"]
-        ws.append(headers)
-
-        # Styling headers
+        
+        # 1. Сводка
+        ws_summary = wb.active
+        ws_summary.title = "Сводка"
+        ws_summary.append(["ID Тендера", "Наименование / Описание", "Кол-во файлов", "Проект контракта", "Кол-во рисков (rows)", "Наличие противоречий", "Краткие выводы (summary_notes)"])
+        
+        # 2. Краткие риски
+        ws_risks = wb.create_sheet(title="Краткие риски")
+        ws_risks.append(["ID Тендера", "Блок", "Что найдено", "Риск", "Что делать поставщику", "Источник", "Основание"])
+        
+        # 3. Подробный отчет
+        ws_report = wb.create_sheet(title="Подробный отчет")
+        
+        # 4. Документы заявки
+        ws_app_docs = wb.create_sheet(title="Документы заявки")
+        ws_app_docs.append(["ID Тендера", "Документы в составе заявки"])
+        
+        # 5. Документы при поставке
+        ws_del_docs = wb.create_sheet(title="Документы при поставке")
+        ws_del_docs.append(["ID Тендера", "Документы при поставке"])
+        
+        # 6. Противоречия и соответствие
+        ws_comp = wb.create_sheet(title="Противоречия и соответствие")
+        ws_comp.append(["ID Тендера", "Противоречия, ошибки и соответствие"])
+        
+        # 7. Источники и служебная информация
+        ws_meta = wb.create_sheet(title="Источники и служебная инфо")
+        ws_meta.append(["ID Тендера", "Источник", "Ссылка", "Основание", "Статусы файлов", "Заметки классификации", "Служебные выводы"])
+        
+        # Style headers
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        # Data
-        for tender in results:
-            tid = tender.get('id', 'N/A')
-            rows = tender.get('rows', [])
-            if not rows:
-                ws.append([tid, "Анализ не выявил специфических рисков или произошла ошибка.", "-", "-", "-", "-", "-"])
+        for ws in wb.worksheets:
+            if ws.title == "Подробный отчет":
                 continue
-
-            for row in rows:
-                ws.append([
-                    tid,
-                    row.get('block', ''),
-                    row.get('finding', ''),
-                    row.get('risk_level', ''),
-                    row.get('supplier_action', ''),
-                    f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
-                    row.get('legal_basis', '')
-                ])
-
-        # Column widths and wrapping
-        column_widths = [15, 20, 40, 15, 40, 30, 30]
-        for i, width in enumerate(column_widths):
-            col_letter = openpyxl.utils.get_column_letter(i + 1)
-            ws.column_dimensions[col_letter].width = width
+            for cell in ws[1]:
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+                
+        for tender in results:
+            tid = str(tender.get('id', 'N/A'))
+            desc = tender.get('description', 'Нет описания')
+            has_contract = "Да" if tender.get('has_contract') else "Нет"
             
-        for row in ws.iter_rows(min_row=2):
-            for cell in row:
-                cell.alignment = Alignment(wrap_text=True, vertical="top")
-                # Add borders
-                thin_border = Border(left=Side(style='thin'), 
-                                  right=Side(style='thin'), 
-                                  top=Side(style='thin'), 
-                                  bottom=Side(style='thin'))
-                cell.border = thin_border
+            file_statuses = tender.get('file_statuses', [])
+            file_count = len(file_statuses)
+            
+            rows = tender.get('rows', [])
+            risk_count = len(rows)
+            
+            notes_full = "\n".join(tender.get('summary_notes', []))
+            notes_short = notes_full if len(notes_full) <= 300 else notes_full[:297] + "..."
+            desc_short = desc if len(desc) <= 150 else desc[:147] + "..."
+            
+            sections = tender.get('final_report_sections', [])
+            detailed_report = tender.get('detailed_report', {})
+            contradictions = tender.get('contradictions', [])
+            
+            # Parse sections into a dict for easier access
+            sections_dict = {}
+            if isinstance(sections, list) and len(sections) > 0 and isinstance(sections[0], dict):
+                for sec in sections:
+                    sections_dict[sec.get('section_title', '')] = sec.get('content', '')
+            elif isinstance(sections, dict) and sections:
+                for k, v in sections.items():
+                    sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
+            elif isinstance(detailed_report, dict) and detailed_report:
+                for k, v in detailed_report.items():
+                    sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
+            
+            compliance_content = ""
+            app_docs_content = ""
+            del_docs_content = ""
+            
+            for k, v in sections_dict.items():
+                if "Проверка соответствия" in k or k.startswith("3)") or k == "compliance_check":
+                    compliance_content = v
+                elif "Перечень документов" in k or k.startswith("7)") or k == "documents_list":
+                    if "**При поставке**:" in v:
+                        parts = v.split("**При поставке**:")
+                        app_docs_content = parts[0].replace("**В составе заявки**:", "").strip()
+                        del_docs_content = parts[1].strip()
+                    else:
+                        app_docs_content = v
+            
+            if contradictions:
+                contradictions_text = "\n".join(contradictions) if isinstance(contradictions, list) else str(contradictions)
+                if compliance_content:
+                    compliance_content += "\n\nДополнительные противоречия:\n" + contradictions_text
+                else:
+                    compliance_content = contradictions_text
+            
+            FALLBACK_TEXT = "Данные по этому разделу отсутствуют в результате анализа"
+            
+            if not compliance_content:
+                compliance_content = FALLBACK_TEXT
+            if not app_docs_content:
+                app_docs_content = FALLBACK_TEXT
+            if not del_docs_content:
+                del_docs_content = FALLBACK_TEXT
+            
+            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) else "Нет"
+            
+            # --- Visual separation for all sheets except Сводка ---
+            for ws in [ws_risks, ws_app_docs, ws_del_docs, ws_comp, ws_meta]:
+                ws.append([f"ТЕНДЕР: {tid}"])
+                ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
+                ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column)
+                
+                ws.append([f"Описание: {desc}"])
+                ws[ws.max_row][0].font = Font(italic=True)
+                ws[ws.max_row][0].fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column)
+            
+            # --- Build Подробный отчет ---
+            ws_report.append([f"ТЕНДЕР: {tid} - {desc}"])
+            ws_report[ws_report.max_row][0].font = Font(bold=True, size=14, color="FFFFFF")
+            ws_report[ws_report.max_row][0].fill = PatternFill(start_color="2F75B5", end_color="2F75B5", fill_type="solid")
+            ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
+            ws_report.append([])
+            
+            SECTIONS_CONFIG = [
+                {"title": "1) Риски участия и исполнения договора", "columns": ["Вид риска", "Описание риска", "Основание", "Меры защиты"]},
+                {"title": "2) Риски недопуска заявки и потери баллов", "columns": ["Риск", "Описание", "Основание"]},
+                {"title": "3) Проверка соответствия документации и закона", "columns": ["Параметр", "Вывод", "Основание"]},
+                {"title": "4) Условия поставки и приемки", "columns": ["Условие", "Описание", "Основание"]},
+                {"title": "5) Условия оплаты", "columns": ["Условие", "Описание", "Основание"]},
+                {"title": "6) Ответственность сторон", "columns": ["Сторона", "Описание ответственности", "Основание"]},
+                {"title": "7) Перечень документов", "columns": []},
+                {"title": "8) Требования по реестрам и ограничениям", "columns": ["Требование", "Описание", "Основание"]},
+                {"title": "9) Рекомендации Поставщику", "columns": ["№", "Рекомендация", "Основание"]}
+            ]
+            
+            for sec_config in SECTIONS_CONFIG:
+                sec_title = sec_config["title"]
+                cols = sec_config["columns"]
+                
+                content = ""
+                for k, v in sections_dict.items():
+                    if sec_title.lower() in k.lower() or k.lower() in sec_title.lower() or (sec_title[:2] in k):
+                        content = v
+                        break
+                
+                if not content:
+                    content = FALLBACK_TEXT
+                    
+                ws_report.append([sec_title])
+                ws_report[ws_report.max_row][0].font = Font(bold=True, size=13, color="FFFFFF")
+                ws_report[ws_report.max_row][0].fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
+                
+                if sec_title.startswith("7)"):
+                    ws_report.append(["В составе заявки", "При поставке"])
+                    for cell in ws_report[ws_report.max_row]:
+                        cell.font = Font(bold=True)
+                        cell.fill = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+                    ws_report.append([app_docs_content, del_docs_content])
+                else:
+                    ws_report.append(cols)
+                    for cell in ws_report[ws_report.max_row]:
+                        cell.font = Font(bold=True)
+                        cell.fill = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
+                        
+                    parsed_rows = []
+                    lines = content.split('\n')
+                    for line in lines:
+                        line = line.strip()
+                        if not line:
+                            continue
+                            
+                        is_list_item = False
+                        if line.startswith('- ') or line.startswith('* '):
+                            line = line[2:]
+                            is_list_item = True
+                        elif re.match(r'^\d+\.\s', line):
+                            line = re.sub(r'^\d+\.\s', '', line)
+                            is_list_item = True
+                            
+                        prefix = "-"
+                        desc_text = line
+                        match = re.match(r'^\*\*(.*?)\*\*\s*[:\-]?\s*(.*)', line)
+                        if match:
+                            prefix = match.group(1).strip()
+                            desc_text = match.group(2).strip()
+                            is_list_item = True
+                            
+                        if is_list_item or len(parsed_rows) == 0:
+                            new_row = ["-"] * len(cols)
+                            if len(cols) > 0:
+                                if prefix != "-":
+                                    new_row[0] = prefix
+                                    if len(cols) > 1:
+                                        new_row[1] = desc_text
+                                else:
+                                    if len(cols) > 1:
+                                        new_row[1] = desc_text
+                                    else:
+                                        new_row[0] = desc_text
+                            parsed_rows.append(new_row)
+                        else:
+                            if len(cols) > 1:
+                                parsed_rows[-1][1] += "\n" + line
+                            elif len(cols) > 0:
+                                parsed_rows[-1][0] += "\n" + line
+                                
+                    if not parsed_rows:
+                        parsed_rows.append(["-"] * len(cols))
+                        
+                    if cols and cols[0] == "№":
+                        for i, r in enumerate(parsed_rows):
+                            r[0] = str(i + 1)
+                            
+                    for r in parsed_rows:
+                        ws_report.append(r)
+                        
+                ws_report.append([]) # Empty row
+            
+            final_md = tender.get('final_report_markdown', '')
+            if final_md:
+                ws_report.append(["Полный текст отчета (Markdown)"])
+                ws_report[ws_report.max_row][0].font = Font(bold=True, size=13, color="FFFFFF")
+                ws_report[ws_report.max_row][0].fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
+                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
+                ws_report.append([final_md])
+                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
+                ws_report.append([])
+            
+            ws_summary.append([tid, desc_short, file_count, has_contract, risk_count, has_contradictions, notes_short])
+            
+            ws_app_docs.append([tid, app_docs_content])
+            ws_del_docs.append([tid, del_docs_content])
+            ws_comp.append([tid, compliance_content])
+            
+            if rows:
+                for row in rows:
+                    ws_risks.append([
+                        tid,
+                        row.get('block', ''),
+                        row.get('finding', ''),
+                        row.get('risk_level', ''),
+                        row.get('supplier_action', ''),
+                        f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
+                        row.get('legal_basis', '')
+                    ])
+                    
+                    ws_meta.append([
+                        tid,
+                        row.get('source_document', ''),
+                        row.get('source_reference', ''),
+                        row.get('legal_basis', ''),
+                        "\n".join([f"{f.get('filename')}: {f.get('status')}" for f in file_statuses]),
+                        "\n".join(tender.get('classification_notes', [])),
+                        notes_full
+                    ])
+            else:
+                ws_risks.append([tid, "Нет данных", "-", "-", "-", "-", "-"])
+                ws_meta.append([
+                    tid, "-", "-", "-",
+                    "\n".join([f"{f.get('filename')}: {f.get('status')}" for f in file_statuses]),
+                    "\n".join(tender.get('classification_notes', [])),
+                    notes_full
+                ])
+                
+            # Empty row before next tender
+            for ws in [ws_risks, ws_app_docs, ws_del_docs, ws_comp, ws_meta]:
+                ws.append([])
+
+        # Add filters
+        ws_risks.auto_filter.ref = ws_risks.dimensions
+        ws_app_docs.auto_filter.ref = ws_app_docs.dimensions
+        ws_del_docs.auto_filter.ref = ws_del_docs.dimensions
+        ws_comp.auto_filter.ref = ws_comp.dimensions
+
+        # Set column widths and wrap text
+        for ws in wb.worksheets:
+            for col in ws.columns:
+                column = col[0].column_letter
+                if ws.title == "Сводка":
+                    widths = {'A': 15, 'B': 30, 'C': 15, 'D': 20, 'E': 20, 'F': 25, 'G': 50}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                elif ws.title == "Краткие риски":
+                    widths = {'A': 15, 'B': 20, 'C': 40, 'D': 15, 'E': 40, 'F': 30, 'G': 30}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                elif ws.title == "Подробный отчет":
+                    widths = {'A': 30, 'B': 50, 'C': 30, 'D': 30}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                elif ws.title in ["Документы заявки", "Документы при поставке", "Противоречия и соответствие"]:
+                    widths = {'A': 15, 'B': 80}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                elif ws.title == "Источники и служебная инфо":
+                    widths = {'A': 15, 'B': 30, 'C': 30, 'D': 30, 'E': 40, 'F': 40, 'G': 40}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                
+            for row in ws.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(wrap_text=True, vertical="top")
+                    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
+                    cell.border = thin_border
 
         # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:

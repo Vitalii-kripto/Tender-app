@@ -227,10 +227,19 @@ const Analysis = () => {
 
   const exportToExcel = async (results: LegalAnalysisResult[]) => {
     try {
+        // Attach tender title and description to results
+        const resultsWithMeta = results.map(result => {
+            const tender = crmTenders.find(t => t.id === result.id);
+            return {
+                ...result,
+                description: tender ? `${tender.title}\n${tender.description}` : 'Нет описания'
+            };
+        });
+
         const response = await fetch('/api/ai/export-risks-excel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results })
+            body: JSON.stringify({ results: resultsWithMeta })
         });
         if (!response.ok) throw new Error('Export failed');
         
@@ -530,6 +539,16 @@ const Analysis = () => {
           {/* 2. Batch Results State */}
           {!loading && activeTab === 'batch' && Object.keys(batchResults).length > 0 && (
              <div className="space-y-8">
+                <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+                    <h2 className="text-lg font-bold text-slate-800">Результаты анализа ({Object.keys(batchResults).length})</h2>
+                    <button 
+                        onClick={() => exportToExcel(Object.values(batchResults))}
+                        className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-sm font-bold transition-colors shadow-sm"
+                    >
+                        <FileDown size={16} />
+                        Экспорт всех в Excel
+                    </button>
+                </div>
                 {Object.values(batchResults).map(result => {
                     const tender = crmTenders.find(t => t.id === result.id);
                     if (!tender) return null;
