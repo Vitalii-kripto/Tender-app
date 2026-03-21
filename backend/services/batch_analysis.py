@@ -124,6 +124,8 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 "status": analysis_result.get('status', 'success'),
                 "summary_notes": final_summary,
                 "rows": analysis_result.get('rows', []),
+                "final_report_sections": analysis_result.get('final_report_sections', []),
+                "final_report_markdown": analysis_result.get('final_report_markdown', ''),
                 "has_contract": analysis_result.get('has_contract', False),
                 "classification_notes": analysis_result.get('classification_notes', []),
                 "file_classifications": analysis_result.get('file_classifications', []),

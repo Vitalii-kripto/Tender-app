@@ -753,6 +753,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
             
             # --- Build Подробный отчет ---
             # We want to show all 9 sections here
+            merged_sections = {} # Initialize here to avoid UnboundLocalError
             section_names = [
                 "1) Риски участия и исполнения договора",
                 "2) Риски недопуска заявки и потери баллов",
@@ -777,7 +778,6 @@ async def api_export_risks_excel(data: dict = Body(...)):
             
             if not found_any_section:
                 # If we didn't find specific sections, just dump whatever we have in merged_sections
-                merged_sections = {}
                 if md_sections_dict:
                     merged_sections = md_sections_dict
                 elif sections_dict:
@@ -788,6 +788,11 @@ async def api_export_risks_excel(data: dict = Body(...)):
                         ws_report.append([tid, sec_title, sec_content])
                 else:
                     ws_report.append([tid, "Отчет", FALLBACK_TEXT])
+            else:
+                # If we found sections via section_names, we might want to keep track of them for logging
+                # although ws_report already has them. For logging purposes, we can populate merged_sections
+                # if it's empty, but it's better to just log what we found.
+                pass
             
             # --- Build Полный текст отчета ---
             if final_md:
@@ -832,7 +837,9 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 ])
                 
             logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
-            logger.info(f"Exported {len(merged_sections)} sections to 'Подробный отчет'")
+            # Safe logging for merged_sections
+            sections_count = len(merged_sections) if merged_sections else (len(section_names) if found_any_section else 0)
+            logger.info(f"Exported {sections_count} sections to 'Подробный отчет'")
             logger.info(f"Exported {len(rows)} rows to 'Краткие риски'")
             logger.info(f"Exported app_docs_content length: {len(app_docs_content)}")
             logger.info(f"Exported del_docs_content length: {len(del_docs_content)}")
