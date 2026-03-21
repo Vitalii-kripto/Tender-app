@@ -361,6 +361,7 @@ class EvidenceCollector:
         """
         Ищет потенциальные противоречия между данными из разных файлов.
         """
+        # 5. Ввести whitelist слотов, по которым contradictions разрешены
         slots_to_compare = [
             "delivery_deadline", "payment_deadline", "delivery_place", 
             "acceptance_deadline", "delivery_documents", "application_composition", 
@@ -368,6 +369,57 @@ class EvidenceCollector:
             "security_requirements"
         ]
         
+        def has_digits(val: str) -> bool:
+            return any(char.isdigit() for char in val)
+            
+        def is_meaningful(val: str) -> bool:
+            if not val or val.lower() in ["н/д", "нет", "отсутствует", "не указано", "не установлено", "none", "null"]:
+                return False
+            # Значение должно быть осмысленным и читаемым (хотя бы 10 символов, если это просто текст)
+            # Если есть цифры (проценты, суммы, сроки), то может быть короче (например, "10%", "5 дней")
+            if len(val.strip()) < 10 and not has_digits(val):
+                return False
+            return True
+            
+        def semantic_match(slot: str, val1: str, val2: str) -> bool:
+            # 3. оба значения осмысленны и читаемы
+            if not is_meaningful(val1) or not is_meaningful(val2):
+                return False
+                
+            # 6. обязательно проверять semantic match: сравниваемые значения должны быть одного типа
+            if slot in ["delivery_deadline", "payment_deadline", "acceptance_deadline"]:
+                # Срок со сроком (должны содержать цифры или специфичные слова)
+                if has_digits(val1) != has_digits(val2):
+                    return False
+            elif slot in ["security_requirements"]:
+                # Обеспечение (проценты, суммы)
+                if has_digits(val1) != has_digits(val2):
+                    return False
+            elif slot in ["delivery_documents", "application_composition", "rejection_grounds", "evaluation_criteria"]:
+                # Перечень с перечнем (сравниваем длины, чтобы избежать сравнения списка со случайным коротким фрагментом)
+                len_ratio = len(val1) / max(len(val2), 1)
+                if len_ratio < 0.1 or len_ratio > 10:
+                    return False
+                    
+            # 3. оба фрагмента относятся к одному и тому же предмету сравнения
+            # Проверяем пересечение значимых слов (длиной >= 4)
+            words1 = set(re.findall(r'\b\w{4,}\b', val1.lower()))
+            words2 = set(re.findall(r'\b\w{4,}\b', val2.lower()))
+            
+            # Для некоторых слотов (например, обеспечение) значения могут быть короткими (например, "10%")
+            if slot in ["security_requirements", "delivery_deadline", "payment_deadline", "acceptance_deadline"]:
+                return True
+                
+            if not words1 or not words2:
+                return False
+                
+            # Если нет общих слов, скорее всего это текст разной природы (например, обеспечение vs сроки)
+            intersection = words1.intersection(words2)
+            if len(intersection) == 0:
+                return False
+                
+            return True
+
         for slot_id in slots_to_compare:
             if slot_id not in package["slots"]:
                 continue
@@ -397,8 +449,18 @@ class EvidenceCollector:
                         val1 = by_source[src1][0].get("slot_value", "н/д")
                         val2 = by_source[src2][0].get("slot_value", "н/д")
                         
+                        # 7. Если semantic match не подтвержден, contradiction не создается
+                        if not semantic_match(slot_id, val1, val2):
+                            continue
+                        
                         # Сравниваем значения, чтобы убедиться, что они действительно разные
-                        if val1.lower() != val2.lower() and val1.lower() not in val2.lower() and val2.lower() not in val1.lower():
+                        # Убираем пробелы и пунктуацию для более точного сравнения
+                        clean_val1 = re.sub(r'[^\w\s]', '', val1.lower()).strip()
+                        clean_val2 = re.sub(r'[^\w\s]', '', val2.lower()).strip()
+                        
+                        # 3. различие между значениями реально юридически значимо
+                        # Простая эвристика: если одно значение полностью входит в другое, это не противоречие, а уточнение
+                        if clean_val1 != clean_val2 and clean_val1 not in clean_val2 and clean_val2 not in clean_val1:
                             package["contradictions"].append({
                                 "slot_name": desc,
                                 "value_1": val1,

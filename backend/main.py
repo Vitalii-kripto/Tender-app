@@ -574,6 +574,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         
         # 3. Подробный отчет
         ws_report = wb.create_sheet(title="Подробный отчет")
+        ws_report.append(["ID Тендера", "Раздел", "Содержание"])
         
         # 4. Документы заявки
         ws_app_docs = wb.create_sheet(title="Документы заявки")
@@ -587,7 +588,11 @@ async def api_export_risks_excel(data: dict = Body(...)):
         ws_comp = wb.create_sheet(title="Противоречия и соответствие")
         ws_comp.append(["ID Тендера", "Противоречия, ошибки и соответствие"])
         
-        # 7. Источники и служебная информация
+        # 7. Полный текст отчета
+        ws_full_report = wb.create_sheet(title="Полный текст отчета")
+        ws_full_report.append(["ID Тендера", "Полный текст отчета (Markdown)"])
+        
+        # 8. Источники и служебная информация
         ws_meta = wb.create_sheet(title="Источники и служебная инфо")
         ws_meta.append(["ID Тендера", "Источник", "Ссылка", "Основание", "Статусы файлов", "Заметки классификации", "Служебные выводы"])
         
@@ -595,8 +600,6 @@ async def api_export_risks_excel(data: dict = Body(...)):
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
         for ws in wb.worksheets:
-            if ws.title == "Подробный отчет":
-                continue
             for cell in ws[1]:
                 cell.font = header_font
                 cell.fill = header_fill
@@ -620,6 +623,13 @@ async def api_export_risks_excel(data: dict = Body(...)):
             sections = tender.get('final_report_sections', [])
             detailed_report = tender.get('detailed_report', {})
             contradictions = tender.get('contradictions', [])
+            final_md = tender.get('final_report_markdown', '')
+            
+            logger.info(f"--- [EXCEL EXPORT PREPARATION FOR TENDER: {tid}] ---")
+            logger.info(f"Rows count: {risk_count}")
+            logger.info(f"Sections count: {len(sections) if isinstance(sections, list) else len(sections) if isinstance(sections, dict) else 0}")
+            logger.info(f"Markdown length: {len(final_md)}")
+            logger.info(f"Contradictions count: {len(contradictions)}")
             
             # Parse sections into a dict for easier access
             sections_dict = {}
@@ -633,25 +643,51 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 for k, v in detailed_report.items():
                     sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
             
+            # Parse final_md into sections as a fallback
+            md_sections_dict = {}
+            if final_md:
+                # Robust split by section headers like "### 1) ", "## 1.", "Раздел 1:"
+                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+)?\d+[\)\.]\s*(.*)', final_md)
+                if len(md_parts) > 1:
+                    for i in range(1, len(md_parts), 2):
+                        title = md_parts[i].strip()
+                        content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
+                        md_sections_dict[title] = content
+            
             compliance_content = ""
             app_docs_content = ""
             del_docs_content = ""
             
-            for k, v in sections_dict.items():
-                if "Проверка соответствия" in k or k.startswith("3)") or k == "compliance_check":
-                    compliance_content = v
-                elif "Перечень документов" in k or k.startswith("7)") or k == "documents_list":
-                    if "**При поставке**:" in v:
-                        parts = v.split("**При поставке**:")
-                        app_docs_content = parts[0].replace("**В составе заявки**:", "").strip()
-                        del_docs_content = parts[1].strip()
-                    else:
-                        app_docs_content = v
+            def get_content(keywords, dicts):
+                for d in dicts:
+                    for k, v in d.items():
+                        k_lower = k.lower()
+                        if any(kw in k_lower or k.startswith(kw) for kw in keywords):
+                            # Skip if it's just a placeholder
+                            v_clean = v.strip().lower()
+                            if v_clean in ["информация не обнаружена.", "информация не обнаружена", "информация в предоставленной документации не обнаружена.", "информация в предоставленной документации не обнаружена"]:
+                                continue
+                            if v:
+                                return v
+                return ""
+            
+            compliance_content = get_content(["проверка соответствия", "compliance_check", "3)"], [sections_dict, md_sections_dict])
+            docs_content = get_content(["перечень документов", "documents_list", "7)"], [sections_dict, md_sections_dict])
+            
+            if docs_content:
+                parts = re.split(r'(?i)(?:\*\*|#|\d\.)?\s*При поставке.*?:?', docs_content)
+                if len(parts) > 1:
+                    app_docs_content = re.sub(r'(?i)(?:\*\*|#|\d\.)?\s*В составе заявки.*?:?', '', parts[0]).strip()
+                    del_docs_content = parts[1].strip()
+                else:
+                    app_docs_content = docs_content.strip()
             
             if contradictions:
-                contradictions_text = "\n".join(contradictions) if isinstance(contradictions, list) else str(contradictions)
-                if compliance_content:
-                    compliance_content += "\n\nДополнительные противоречия:\n" + contradictions_text
+                contradictions_text = "\n\n".join(contradictions) if isinstance(contradictions, list) else str(contradictions)
+                if compliance_content and "противоречий не обнаружено" not in compliance_content.lower():
+                    # Avoid duplicating if already there
+                    if contradictions[0][:30] not in compliance_content:
+                        compliance_content = contradictions_text + "\n\n" + compliance_content
                 else:
                     compliance_content = contradictions_text
             
@@ -664,132 +700,45 @@ async def api_export_risks_excel(data: dict = Body(...)):
             if not del_docs_content:
                 del_docs_content = FALLBACK_TEXT
             
-            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) else "Нет"
+            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) and "не обнаружено" not in compliance_content.lower() else "Нет"
             
             # --- Visual separation for all sheets except Сводка ---
-            for ws in [ws_risks, ws_app_docs, ws_del_docs, ws_comp, ws_meta]:
+            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
                 ws.append([f"ТЕНДЕР: {tid}"])
                 ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
                 ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column)
+                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
                 
                 ws.append([f"Описание: {desc}"])
                 ws[ws.max_row][0].font = Font(italic=True)
                 ws[ws.max_row][0].fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column)
+                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
             
             # --- Build Подробный отчет ---
-            ws_report.append([f"ТЕНДЕР: {tid} - {desc}"])
-            ws_report[ws_report.max_row][0].font = Font(bold=True, size=14, color="FFFFFF")
-            ws_report[ws_report.max_row][0].fill = PatternFill(start_color="2F75B5", end_color="2F75B5", fill_type="solid")
-            ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
-            ws_report.append([])
-            
-            SECTIONS_CONFIG = [
-                {"title": "1) Риски участия и исполнения договора", "columns": ["Вид риска", "Описание риска", "Основание", "Меры защиты"]},
-                {"title": "2) Риски недопуска заявки и потери баллов", "columns": ["Риск", "Описание", "Основание"]},
-                {"title": "3) Проверка соответствия документации и закона", "columns": ["Параметр", "Вывод", "Основание"]},
-                {"title": "4) Условия поставки и приемки", "columns": ["Условие", "Описание", "Основание"]},
-                {"title": "5) Условия оплаты", "columns": ["Условие", "Описание", "Основание"]},
-                {"title": "6) Ответственность сторон", "columns": ["Сторона", "Описание ответственности", "Основание"]},
-                {"title": "7) Перечень документов", "columns": []},
-                {"title": "8) Требования по реестрам и ограничениям", "columns": ["Требование", "Описание", "Основание"]},
-                {"title": "9) Рекомендации Поставщику", "columns": ["№", "Рекомендация", "Основание"]}
-            ]
-            
-            for sec_config in SECTIONS_CONFIG:
-                sec_title = sec_config["title"]
-                cols = sec_config["columns"]
+            merged_sections = {}
+            if sections_dict:
+                for sec_title, sec_content in sections_dict.items():
+                    v_clean = sec_content.strip().lower()
+                    if v_clean in ["информация не обнаружена.", "информация не обнаружена", "информация в предоставленной документации не обнаружена.", "информация в предоставленной документации не обнаружена"]:
+                        # Try to find a better version in md_sections_dict
+                        better_content = get_content([sec_title.lower()], [md_sections_dict])
+                        merged_sections[sec_title] = better_content if better_content else sec_content
+                    else:
+                        merged_sections[sec_title] = sec_content
+            elif md_sections_dict:
+                merged_sections = md_sections_dict
                 
-                content = ""
-                for k, v in sections_dict.items():
-                    if sec_title.lower() in k.lower() or k.lower() in sec_title.lower() or (sec_title[:2] in k):
-                        content = v
-                        break
-                
-                if not content:
-                    content = FALLBACK_TEXT
-                    
-                ws_report.append([sec_title])
-                ws_report[ws_report.max_row][0].font = Font(bold=True, size=13, color="FFFFFF")
-                ws_report[ws_report.max_row][0].fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
-                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
-                
-                if sec_title.startswith("7)"):
-                    ws_report.append(["В составе заявки", "При поставке"])
-                    for cell in ws_report[ws_report.max_row]:
-                        cell.font = Font(bold=True)
-                        cell.fill = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
-                    ws_report.append([app_docs_content, del_docs_content])
-                else:
-                    ws_report.append(cols)
-                    for cell in ws_report[ws_report.max_row]:
-                        cell.font = Font(bold=True)
-                        cell.fill = PatternFill(start_color="BDD7EE", end_color="BDD7EE", fill_type="solid")
-                        
-                    parsed_rows = []
-                    lines = content.split('\n')
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                            
-                        is_list_item = False
-                        if line.startswith('- ') or line.startswith('* '):
-                            line = line[2:]
-                            is_list_item = True
-                        elif re.match(r'^\d+\.\s', line):
-                            line = re.sub(r'^\d+\.\s', '', line)
-                            is_list_item = True
-                            
-                        prefix = "-"
-                        desc_text = line
-                        match = re.match(r'^\*\*(.*?)\*\*\s*[:\-]?\s*(.*)', line)
-                        if match:
-                            prefix = match.group(1).strip()
-                            desc_text = match.group(2).strip()
-                            is_list_item = True
-                            
-                        if is_list_item or len(parsed_rows) == 0:
-                            new_row = ["-"] * len(cols)
-                            if len(cols) > 0:
-                                if prefix != "-":
-                                    new_row[0] = prefix
-                                    if len(cols) > 1:
-                                        new_row[1] = desc_text
-                                else:
-                                    if len(cols) > 1:
-                                        new_row[1] = desc_text
-                                    else:
-                                        new_row[0] = desc_text
-                            parsed_rows.append(new_row)
-                        else:
-                            if len(cols) > 1:
-                                parsed_rows[-1][1] += "\n" + line
-                            elif len(cols) > 0:
-                                parsed_rows[-1][0] += "\n" + line
-                                
-                    if not parsed_rows:
-                        parsed_rows.append(["-"] * len(cols))
-                        
-                    if cols and cols[0] == "№":
-                        for i, r in enumerate(parsed_rows):
-                            r[0] = str(i + 1)
-                            
-                    for r in parsed_rows:
-                        ws_report.append(r)
-                        
-                ws_report.append([]) # Empty row
+            if merged_sections:
+                for sec_title, sec_content in merged_sections.items():
+                    ws_report.append([tid, sec_title, sec_content])
+            else:
+                ws_report.append([tid, "Отчет", FALLBACK_TEXT])
             
-            final_md = tender.get('final_report_markdown', '')
+            # --- Build Полный текст отчета ---
             if final_md:
-                ws_report.append(["Полный текст отчета (Markdown)"])
-                ws_report[ws_report.max_row][0].font = Font(bold=True, size=13, color="FFFFFF")
-                ws_report[ws_report.max_row][0].fill = PatternFill(start_color="305496", end_color="305496", fill_type="solid")
-                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
-                ws_report.append([final_md])
-                ws_report.merge_cells(start_row=ws_report.max_row, start_column=1, end_row=ws_report.max_row, end_column=4)
-                ws_report.append([])
+                ws_full_report.append([tid, final_md])
+            else:
+                ws_full_report.append([tid, FALLBACK_TEXT])
             
             ws_summary.append([tid, desc_short, file_count, has_contract, risk_count, has_contradictions, notes_short])
             
@@ -827,15 +776,24 @@ async def api_export_risks_excel(data: dict = Body(...)):
                     notes_full
                 ])
                 
+            logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
+            logger.info(f"Exported {len(merged_sections)} sections to 'Подробный отчет'")
+            logger.info(f"Exported {len(rows)} rows to 'Краткие риски'")
+            logger.info(f"Exported app_docs_content length: {len(app_docs_content)}")
+            logger.info(f"Exported del_docs_content length: {len(del_docs_content)}")
+            logger.info(f"Exported compliance_content length: {len(compliance_content)}")
+            
             # Empty row before next tender
-            for ws in [ws_risks, ws_app_docs, ws_del_docs, ws_comp, ws_meta]:
+            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
                 ws.append([])
 
         # Add filters
         ws_risks.auto_filter.ref = ws_risks.dimensions
+        ws_report.auto_filter.ref = ws_report.dimensions
         ws_app_docs.auto_filter.ref = ws_app_docs.dimensions
         ws_del_docs.auto_filter.ref = ws_del_docs.dimensions
         ws_comp.auto_filter.ref = ws_comp.dimensions
+        ws_full_report.auto_filter.ref = ws_full_report.dimensions
 
         # Set column widths and wrap text
         for ws in wb.worksheets:
@@ -848,10 +806,13 @@ async def api_export_risks_excel(data: dict = Body(...)):
                     widths = {'A': 15, 'B': 20, 'C': 40, 'D': 15, 'E': 40, 'F': 30, 'G': 30}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 elif ws.title == "Подробный отчет":
-                    widths = {'A': 30, 'B': 50, 'C': 30, 'D': 30}
+                    widths = {'A': 15, 'B': 40, 'C': 100}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 elif ws.title in ["Документы заявки", "Документы при поставке", "Противоречия и соответствие"]:
-                    widths = {'A': 15, 'B': 80}
+                    widths = {'A': 15, 'B': 100}
+                    ws.column_dimensions[column].width = widths.get(column, 20)
+                elif ws.title == "Полный текст отчета":
+                    widths = {'A': 15, 'B': 120}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 elif ws.title == "Источники и служебная инфо":
                     widths = {'A': 15, 'B': 30, 'C': 30, 'D': 30, 'E': 40, 'F': 40, 'G': 40}

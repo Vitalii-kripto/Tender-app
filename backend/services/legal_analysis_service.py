@@ -431,7 +431,7 @@ class LegalAnalysisService:
 
     def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, files: List[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         valid_rows = []
-        rejected_count = 0
+        rejected_rows = []
         
         valid_filenames = [f.get('filename', '').lower() for f in files] if files else []
         valid_filenames_no_ext = [os.path.splitext(f)[0].lower() for f in valid_filenames]
@@ -441,8 +441,7 @@ class LegalAnalysisService:
         
         for row in rows:
             if not isinstance(row, dict):
-                logger.warning(f"Row rejection: not a dictionary. Row: {row}")
-                rejected_count += 1
+                rejected_rows.append({"row": row, "reason": "not a dictionary"})
                 continue
             
             # Обязательные поля (минимальный набор)
@@ -459,8 +458,7 @@ class LegalAnalysisService:
                 if supplier_action and len(supplier_action) > 5:
                     finding = f"Рекомендация: {supplier_action}"
                 else:
-                    logger.warning(f"Row rejection: empty finding and no supplier_action. Row: {json.dumps(row, ensure_ascii=False)}")
-                    rejected_count += 1
+                    rejected_rows.append({"row": row, "reason": "empty finding and no supplier_action"})
                     continue
             
             # Нормализация блока (приведение к каноническим названиям)
@@ -483,6 +481,12 @@ class LegalAnalysisService:
                 
                 if not found_normalized:
                     block = "Риски участия и исполнения договора"
+            
+            # Игнорируем противоречия, сгенерированные ИИ, чтобы избежать ложных срабатываний.
+            # Мы добавим надежные противоречия из evidence_collector позже.
+            if block == "Проверка соответствия документации и закона":
+                rejected_rows.append({"row": row, "reason": "LLM-generated contradiction (preventing false positives)"})
+                continue
             
             # Нормализация источника
             if not source_document or source_document.lower() in ["", "none", "null", "не найдено", "unknown", "весь пакет"]:
@@ -542,7 +546,13 @@ class LegalAnalysisService:
             
             valid_rows.append(valid_row)
             
-        logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={rejected_count}")
+        logger.info(f"Validation summary: total_rows={len(rows)}, valid_rows={len(valid_rows)}, rejected_rows={len(rejected_rows)}")
+        if rejected_rows:
+            logger.info(f"--- [REJECTED ROWS ({len(rejected_rows)})] ---")
+            for r in rejected_rows:
+                logger.info(f"Reason: {r['reason']} | Row: {json.dumps(r['row'], ensure_ascii=False)}")
+            logger.info("--- [END REJECTED ROWS] ---")
+            
         return valid_rows
 
 
@@ -680,6 +690,22 @@ class LegalAnalysisService:
         final_report_markdown = res.get('final_report_markdown', "")
         logger.info(f"AI response: {len(rows)} raw rows received, {len(final_report_sections)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
+        logger.info("--- [RAW ROWS START] ---")
+        logger.info(json.dumps(rows, ensure_ascii=False, indent=2))
+        logger.info("--- [RAW ROWS END] ---")
+        
+        logger.info("--- [FINAL REPORT SECTIONS START] ---")
+        logger.info(json.dumps(final_report_sections, ensure_ascii=False, indent=2))
+        logger.info("--- [FINAL REPORT SECTIONS END] ---")
+        
+        logger.info("--- [FINAL REPORT MARKDOWN START] ---")
+        logger.info(final_report_markdown)
+        logger.info("--- [FINAL REPORT MARKDOWN END] ---")
+        
+        logger.info("--- [CONTRADICTIONS START] ---")
+        logger.info(json.dumps(contradictions, ensure_ascii=False, indent=2))
+        logger.info("--- [CONTRADICTIONS END] ---")
+        
         # Мягкая валидация строк
         rows = self._validate_and_filter_rows(rows, "full", files)
         
@@ -737,9 +763,11 @@ class LegalAnalysisService:
                     if not isinstance(content_items, list):
                         content_items = [content_items]
                     
-                    # Добавляем противоречия в compliance_check
-                    if key == "compliance_check" and contradiction_notes:
-                        content_items = contradiction_notes + content_items
+                    if key == "compliance_check":
+                        if contradiction_notes:
+                            content_items = contradiction_notes
+                        else:
+                            content_items = ["Противоречий не обнаружено."]
                     
                     content_str = "\n\n".join([str(item) for item in content_items if item])
                     if not content_str.strip():
@@ -769,8 +797,11 @@ class LegalAnalysisService:
                     if not isinstance(content_items, list):
                         content_items = [content_items]
                     
-                    if key == "compliance_check" and contradiction_notes:
-                        content_items = contradiction_notes + content_items
+                    if key == "compliance_check":
+                        if contradiction_notes:
+                            content_items = contradiction_notes
+                        else:
+                            content_items = ["Противоречий не обнаружено."]
                     
                     content_str = "\n\n".join([str(item) for item in content_items if item])
                     if not content_str.strip():
@@ -781,22 +812,14 @@ class LegalAnalysisService:
                     "content": content_str.strip()
                 })
             
-            # Внедряем противоречия в готовый markdown, если их там нет
-            if contradiction_notes:
-                section_3_pattern = r"(Раздел 3:.*?\n)"
-                if re.search(section_3_pattern, final_report_markdown, re.IGNORECASE):
-                    parts = re.split(section_3_pattern, final_report_markdown, flags=re.IGNORECASE)
-                    if len(parts) >= 3:
-                        # parts[1] - заголовок раздела 3
-                        # parts[2] - контент раздела 3 до следующего раздела
-                        new_content = "\n" + "\n\n".join(contradiction_notes) + "\n\n"
-                        # Простая проверка на дубликаты
-                        if not any(self._normalize_text(c[:30]) in self._normalize_text(parts[2]) for c in contradiction_notes):
-                            parts[2] = new_content + parts[2]
-                            final_report_markdown = "".join(parts)
-                else:
-                    # Если раздела 3 нет, просто добавим в начало
-                    final_report_markdown = "# Выявленные противоречия\n" + "\n\n".join(contradiction_notes) + "\n\n" + final_report_markdown
+            # Внедряем надежные противоречия в готовый markdown, заменяя существующий текст Раздела 3
+            section_3_pattern = r"(Раздел 3:.*?\n)(.*?)(?=\nРаздел 4:|\Z)"
+            if re.search(section_3_pattern, final_report_markdown, re.IGNORECASE | re.DOTALL):
+                new_content = "\n" + ("\n\n".join(contradiction_notes) if contradiction_notes else "Противоречий не обнаружено.") + "\n\n"
+                final_report_markdown = re.sub(section_3_pattern, r"\g<1>" + new_content, final_report_markdown, flags=re.IGNORECASE | re.DOTALL)
+            elif contradiction_notes:
+                # Если раздела 3 нет, просто добавим в начало
+                final_report_markdown = "# Выявленные противоречия\n" + "\n\n".join(contradiction_notes) + "\n\n" + final_report_markdown
 
         # Добавляем недостающие критические темы
         added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown)
