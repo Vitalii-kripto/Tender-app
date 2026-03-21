@@ -12,6 +12,8 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения в самом начале
 load_dotenv()
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+from openpyxl.cell.cell import MergedCell
 from typing import List, Dict, Any
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
@@ -837,8 +839,8 @@ async def api_export_risks_excel(data: dict = Body(...)):
 
         # Set column widths and wrap text
         for ws in wb.worksheets:
-            for col in ws.columns:
-                column = col[0].column_letter
+            for col_idx in range(1, ws.max_column + 1):
+                column = get_column_letter(col_idx)
                 if ws.title == "Сводка":
                     widths = {'A': 15, 'B': 30, 'C': 15, 'D': 20, 'E': 20, 'F': 25, 'G': 50}
                     ws.column_dimensions[column].width = widths.get(column, 20)
@@ -857,6 +859,8 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 
             for row in ws.iter_rows(min_row=2):
                 for cell in row:
+                    if isinstance(cell, MergedCell):
+                        continue
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
                     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
                     cell.border = thin_border
