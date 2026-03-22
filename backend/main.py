@@ -34,6 +34,56 @@ from .services.legal_analysis_service import LegalAnalysisService
 from .services.batch_analysis import analyze_tenders_batch_job
 from .services.job_service import job_service
 
+def clean_markdown(text):
+    """Удаляет markdown-артефакты из текста"""
+    if not text: return ""
+    # Удаляем жирный/курсив
+    text = re.sub(r'\*\*|\*|__|_', '', text)
+    # Удаляем заголовки
+    text = re.sub(r'#+\s+', '', text)
+    # Удаляем горизонтальные линии
+    text = re.sub(r'^-{3,}\s*$', '', text, flags=re.MULTILINE)
+    # Удаляем лишние пустые строки
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+def parse_markdown_table(text):
+    """Парсит markdown-таблицу в список списков"""
+    if not text or '|' not in text: return []
+    lines = text.strip().split('\n')
+    table_rows = []
+    for line in lines:
+        if '|' in line:
+            # Пропускаем разделители |---|---|
+            if re.match(r'^[\s|:\-\+]+$', line.strip()):
+                continue
+            # Разбиваем по |
+            parts = [p.strip() for p in line.split('|')]
+            # Убираем пустые элементы по краям, если строка начиналась/заканчивалась на |
+            if line.strip().startswith('|'):
+                parts = parts[1:]
+            if line.strip().endswith('|'):
+                parts = parts[:-1]
+            
+            if parts and any(p for p in parts):
+                table_rows.append([clean_markdown(p) for p in parts])
+    return table_rows
+
+def parse_markdown_list(text):
+    """Парсит markdown-список в список строк"""
+    if not text: return []
+    lines = text.strip().split('\n')
+    list_items = []
+    for line in lines:
+        # Ищем маркеры списка: -, *, 1., 1)
+        match = re.match(r'^\s*(?:[\-\*\+]|\d+[\.\)])\s+(.*)', line)
+        if match:
+            list_items.append(clean_markdown(match.group(1)))
+        elif line.strip() and not re.match(r'^[\s|:\-\+]+$', line.strip()) and '|' not in line:
+            # Если это просто строка текста, тоже берем ее как элемент, если она не пустая
+            list_items.append(clean_markdown(line))
+    return list_items
+
 # --- LOGGING SETUP ---
 log_file = "fastapi_app_log.txt"
 
@@ -566,7 +616,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         # 1. Сводка
         ws_summary = wb.active
         ws_summary.title = "Сводка"
-        ws_summary.append(["ID Тендера", "Наименование / Описание", "Кол-во файлов", "Проект контракта", "Кол-во рисков (rows)", "Наличие противоречий", "Краткие выводы (summary_notes)"])
+        ws_summary.append(["ID Тендера", "Кол-во рисков", "Наличие противоречий", "Подробный отчет", "Ключевой вывод"])
         
         # 2. Краткие риски
         ws_risks = wb.create_sheet(title="Краткие риски")
@@ -574,7 +624,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         
         # 3. Подробный отчет
         ws_report = wb.create_sheet(title="Подробный отчет")
-        ws_report.append(["ID Тендера", "Раздел", "Содержание"])
+        ws_report.append(["ID Тендера", "Раздел", "Данные 1", "Данные 2", "Данные 3", "Данные 4", "Данные 5", "Данные 6"])
         
         # 4. Документы заявки
         ws_app_docs = wb.create_sheet(title="Документы заявки")
@@ -586,7 +636,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         
         # 6. Противоречия и соответствие
         ws_comp = wb.create_sheet(title="Противоречия и соответствие")
-        ws_comp.append(["ID Тендера", "Противоречия, ошибки и соответствие"])
+        ws_comp.append(["ID Тендера", "Раздел / Тип", "Описание", "Детали", "Основание"])
         
         # 7. Полный текст отчета
         ws_full_report = wb.create_sheet(title="Полный текст отчета")
@@ -594,16 +644,19 @@ async def api_export_risks_excel(data: dict = Body(...)):
         
         # 8. Источники и служебная информация
         ws_meta = wb.create_sheet(title="Источники и служебная инфо")
-        ws_meta.append(["ID Тендера", "Источник", "Ссылка", "Основание", "Статусы файлов", "Заметки классификации", "Служебные выводы"])
+        ws_meta.append(["ID Тендера", "Тип инфо", "Содержание", "Детали"])
         
         # Style headers
         header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
         for ws in wb.worksheets:
             for cell in ws[1]:
                 cell.font = header_font
                 cell.fill = header_fill
                 cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            # Set default column width
+            for i in range(1, ws.max_column + 1):
+                ws.column_dimensions[get_column_letter(i)].width = 30
                 
         for tender in results:
             tid = str(tender.get('id', 'N/A'))
@@ -643,37 +696,22 @@ async def api_export_risks_excel(data: dict = Body(...)):
             logger.info(f"Markdown length: {len(final_report_markdown)}")
             logger.info(f"Contradictions count: {len(contradictions)}")
             
-            # 1. Parse final_report_markdown into 9 sections
+            # 1. Populate parsed_sections from final_report_sections (Priority 1)
             parsed_sections = {}
             section_sources = {}
-            if final_report_markdown:
-                positions = []
-                for sec_num in range(1, 10):
-                    # Match "Раздел X", "X)", "X." at the start of a line or after # or *
-                    pattern = rf'(?i)(?:^|\n)[\s#\*]*(?:Раздел\s*{sec_num}|{sec_num}\)|{sec_num}\.)[^\n]*'
-                    match = re.search(pattern, final_report_markdown)
-                    if match:
-                        positions.append((sec_num, match.start(), match.end()))
-                
-                positions.sort(key=lambda x: x[1])
-                
-                for i, pos in enumerate(positions):
-                    sec_num = pos[0]
-                    start_idx = pos[2]
-                    end_idx = positions[i+1][1] if i + 1 < len(positions) else len(final_report_markdown)
-                    content = final_report_markdown[start_idx:end_idx].strip()
-                    parsed_sections[sec_num] = content
-                    section_sources[sec_num] = "final_report_markdown"
-            
-            # Fallback to final_report_sections if markdown parsing failed for some sections
+            sub_sections_data = {}
+
             if isinstance(final_report_sections, list):
                 for sec in final_report_sections:
                     title = sec.get('section_title', '')
                     content = sec.get('content', '')
+                    sub_sections = sec.get('sub_sections')
                     for i in range(1, 10):
                         if i not in parsed_sections and (f"Раздел {i}" in title or f"{i})" in title or f"{i}." in title):
                             parsed_sections[i] = content
                             section_sources[i] = "final_report_sections"
+                            if sub_sections:
+                                sub_sections_data[i] = sub_sections
             elif isinstance(final_report_sections, dict):
                 for k, v in final_report_sections.items():
                     content = "\n".join(v) if isinstance(v, list) else str(v)
@@ -681,6 +719,25 @@ async def api_export_risks_excel(data: dict = Body(...)):
                         if i not in parsed_sections and (f"Раздел {i}" in k or f"{i})" in k or f"{i}." in k):
                             parsed_sections[i] = content
                             section_sources[i] = "final_report_sections"
+
+            # 2. Fallback to final_report_markdown parsing (Priority 2)
+            # ONLY if final_report_sections was completely missing or empty
+            if not parsed_sections and final_report_markdown:
+                positions = []
+                for sec_num in range(1, 10):
+                    pattern = rf'(?i)(?:^|\n)[\s#\*]*(?:Раздел\s*{sec_num}|{sec_num}\)|{sec_num}\.)[^\n]*'
+                    match = re.search(pattern, final_report_markdown)
+                    if match:
+                        positions.append((sec_num, match.start(), match.end()))
+                
+                positions.sort(key=lambda x: x[1])
+                for i, pos in enumerate(positions):
+                    sec_num = pos[0]
+                    start_idx = pos[2]
+                    end_idx = positions[i+1][1] if i + 1 < len(positions) else len(final_report_markdown)
+                    content = final_report_markdown[start_idx:end_idx].strip()
+                    parsed_sections[sec_num] = content
+                    section_sources[sec_num] = "final_report_markdown"
 
             FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
             EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
@@ -694,25 +751,18 @@ async def api_export_risks_excel(data: dict = Body(...)):
 
             compliance_content = get_sec(3)
             docs_content = get_sec(7)
+            sub_docs = sub_sections_data.get(7, {})
             
             app_docs_content = ""
             del_docs_content = ""
             
-            if docs_content and docs_content not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
-                # Robust split for documents list
-                app_pattern = r"(?i)(?:В составе заявки|Для участия|В заявке)[\s\*:]*(.*?)(?=(?:\n.*?(?:При поставке|Для исполнения|При приемке))|$)"
-                app_match = re.search(app_pattern, docs_content, re.DOTALL)
-                if app_match:
-                    app_docs_content = app_match.group(1).strip()
-                    
-                del_pattern = r"(?i)(?:При поставке|Для исполнения|При приемке)[\s\*:]*(.*?)(?=(?:\n.*?(?:В составе заявки|Для участия|В заявке))|$)"
-                del_match = re.search(del_pattern, docs_content, re.DOTALL)
-                if del_match:
-                    del_docs_content = del_match.group(1).strip()
-                    
-                if not app_docs_content and not del_docs_content:
-                    app_docs_content = docs_content
-            else:
+            if sub_docs:
+                in_app = sub_docs.get("in_application", [])
+                on_del = sub_docs.get("on_delivery", [])
+                app_docs_content = "\n".join([f"- {i}" for i in in_app]) if in_app else ""
+                del_docs_content = "\n".join([f"- {i}" for i in on_del]) if on_del else ""
+            
+            if not app_docs_content and not del_docs_content:
                 app_docs_content = docs_content
                 del_docs_content = docs_content
             
@@ -751,7 +801,36 @@ async def api_export_risks_excel(data: dict = Body(...)):
             
             for i, s_name in enumerate(section_names, 1):
                 s_content = get_sec(i)
-                ws_report.append([tid, s_name, s_content])
+                
+                # Разбиваем контент на блоки по пустым строкам
+                blocks = re.split(r'\n\s*\n', s_content)
+                first_row_in_sec = True
+                
+                for block in blocks:
+                    block = block.strip()
+                    if not block: continue
+                    
+                    # Проверяем на наличие таблицы
+                    table_data = parse_markdown_table(block)
+                    if table_data:
+                        for row_data in table_data:
+                            ws_report.append([tid, s_name if first_row_in_sec else ""] + row_data)
+                            first_row_in_sec = False
+                        continue
+                    
+                    # Проверяем на наличие списка
+                    list_data = parse_markdown_list(block)
+                    # Считаем списком, если есть маркеры или несколько строк
+                    has_markers = any(re.match(r'^\s*(?:[\-\*\+]|\d+[\.\)])\s+', line) for line in block.split('\n'))
+                    if (list_data and len(list_data) > 1) or has_markers:
+                        for item in list_data:
+                            ws_report.append([tid, s_name if first_row_in_sec else "", item])
+                            first_row_in_sec = False
+                        continue
+                    
+                    # Просто текст
+                    ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(block)])
+                    first_row_in_sec = False
             
             # --- Build Полный текст отчета ---
             if final_report_markdown:
@@ -759,11 +838,51 @@ async def api_export_risks_excel(data: dict = Body(...)):
             else:
                 ws_full_report.append([tid, FALLBACK_TEXT])
             
-            ws_summary.append([tid, desc_short, file_count, has_contract, risk_count, has_contradictions, notes_full])
+            has_report = "Да" if final_report_markdown or parsed_sections else "Нет"
+            ws_summary.append([tid, risk_count, has_contradictions, has_report, notes_full])
             
-            ws_app_docs.append([tid, app_docs_content])
-            ws_del_docs.append([tid, del_docs_content])
-            ws_comp.append([tid, compliance_content])
+            # --- Build Документы заявки ---
+            app_docs_list = parse_markdown_list(app_docs_content)
+            for doc_item in app_docs_list:
+                if doc_item and doc_item not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
+                    ws_app_docs.append([tid, doc_item])
+            if not app_docs_list or all(d in (EMPTY_SECTION_TEXT, FALLBACK_TEXT) for d in app_docs_list):
+                if app_docs_content not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
+                    ws_app_docs.append([tid, clean_markdown(app_docs_content)])
+                else:
+                    ws_app_docs.append([tid, app_docs_content])
+
+            # --- Build Документы при поставке ---
+            del_docs_list = parse_markdown_list(del_docs_content)
+            for doc_item in del_docs_list:
+                if doc_item and doc_item not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
+                    ws_del_docs.append([tid, doc_item])
+            if not del_docs_list or all(d in (EMPTY_SECTION_TEXT, FALLBACK_TEXT) for d in del_docs_list):
+                if del_docs_content not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
+                    ws_del_docs.append([tid, clean_markdown(del_docs_content)])
+                else:
+                    ws_del_docs.append([tid, del_docs_content])
+
+            # --- Build Противоречия и соответствие ---
+            comp_blocks = re.split(r'\n\s*\n', compliance_content)
+            for block in comp_blocks:
+                block = block.strip()
+                if not block: continue
+                
+                comp_table = parse_markdown_table(block)
+                if comp_table:
+                    for row_data in comp_table:
+                        ws_comp.append([tid] + row_data)
+                    continue
+                
+                comp_list = parse_markdown_list(block)
+                has_markers = any(re.match(r'^\s*(?:[\-\*\+]|\d+[\.\)])\s+', line) for line in block.split('\n'))
+                if (comp_list and len(comp_list) > 1) or has_markers:
+                    for item in comp_list:
+                        ws_comp.append([tid, item])
+                    continue
+                
+                ws_comp.append([tid, clean_markdown(block)])
             
             logger.info(f"Excel export for {tid}: {risk_count} rows, {len(parsed_sections)} sections, markdown length: {len(final_report_markdown)}, contradictions: {has_contradictions}")
             logger.info(f"Sections found for Excel: {list(parsed_sections.keys())}")
@@ -773,33 +892,25 @@ async def api_export_risks_excel(data: dict = Body(...)):
                     continue
                 ws_risks.append([
                     tid,
-                    row.get('block', ''),
-                    row.get('finding', ''),
-                    row.get('risk_level', ''),
-                    row.get('supplier_action', ''),
-                    f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
-                    row.get('legal_basis', '')
+                    clean_markdown(row.get('block', '')),
+                    clean_markdown(row.get('finding', '')),
+                    clean_markdown(row.get('risk_level', '')),
+                    clean_markdown(row.get('supplier_action', '')),
+                    clean_markdown(f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip()),
+                    clean_markdown(row.get('legal_basis', ''))
                 ])
+            
+            # --- Build Источники и служебная инфо ---
+            # 1. File statuses
+            file_info = "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)])
+            ws_meta.append([tid, "Статусы файлов", file_info, ""])
+            
+            # 2. Classification notes
+            class_notes = "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else [])
+            if class_notes:
+                ws_meta.append([tid, "Заметки классификации", class_notes, ""])
                 
-                ws_meta.append([
-                    tid,
-                    row.get('source_document', ''),
-                    row.get('source_reference', ''),
-                    row.get('legal_basis', ''),
-                    "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
-                    "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
-                    notes_full
-                ])
-            if not rows:
-                ws_risks.append([tid, "Подробный отчет отсутствует в результате анализа", "-", "-", "-", "-", "-"])
-                ws_meta.append([
-                    tid, "-", "-", "-",
-                    "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
-                    "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
-                    notes_full
-                ])
-                
-            # Extract sources from markdown and add to meta if not already there
+            # 3. Sources from markdown
             md_sources = set()
             if final_report_markdown:
                 bracket_matches = re.findall(r'\[(.*?)\]', final_report_markdown)
@@ -810,18 +921,17 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 for m in source_matches:
                     md_sources.add(m.strip())
             
-            row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
             for src in md_sources:
-                if src and not any(src in r_src or r_src in src for r_src in row_sources if r_src):
-                    ws_meta.append([
-                        tid,
-                        src,
-                        "Из полного отчета",
-                        "-",
-                        "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
-                        "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
-                        notes_full
-                    ])
+                ws_meta.append([tid, "Источник (из отчета)", clean_markdown(src), ""])
+            
+            # 4. Sources from rows (if unique)
+            row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
+            for src in row_sources:
+                if src and src not in md_sources:
+                    ws_meta.append([tid, "Источник (из рисков)", clean_markdown(src), ""])
+
+            if not rows:
+                ws_risks.append([tid, "Подробный отчет отсутствует в результате анализа", "-", "-", "-", "-", "-"])
                 
             logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
             logger.info(f"Lengths -> final_report_markdown: {len(final_report_markdown)}, app_docs: {len(app_docs_content)}, del_docs: {len(del_docs_content)}, compliance: {len(compliance_content)}")
@@ -850,13 +960,14 @@ async def api_export_risks_excel(data: dict = Body(...)):
         ws_del_docs.auto_filter.ref = f"A1:{get_column_letter(ws_del_docs.max_column)}1"
         ws_comp.auto_filter.ref = f"A1:{get_column_letter(ws_comp.max_column)}1"
         ws_full_report.auto_filter.ref = f"A1:{get_column_letter(ws_full_report.max_column)}1"
+        ws_meta.auto_filter.ref = f"A1:{get_column_letter(ws_meta.max_column)}1"
 
         # Set column widths and wrap text
         for ws in wb.worksheets:
             for col_idx in range(1, ws.max_column + 1):
                 column = get_column_letter(col_idx)
                 if ws.title == "Сводка":
-                    widths = {'A': 15, 'B': 30, 'C': 15, 'D': 20, 'E': 20, 'F': 25, 'G': 50}
+                    widths = {'A': 15, 'B': 15, 'C': 20, 'D': 20, 'E': 60}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 elif ws.title == "Краткие риски":
                     widths = {'A': 15, 'B': 20, 'C': 40, 'D': 15, 'E': 40, 'F': 30, 'G': 30}
@@ -871,7 +982,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
                     widths = {'A': 15, 'B': 120}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 elif ws.title == "Источники и служебная инфо":
-                    widths = {'A': 15, 'B': 30, 'C': 30, 'D': 30, 'E': 40, 'F': 40, 'G': 40}
+                    widths = {'A': 15, 'B': 30, 'C': 80, 'D': 40}
                     ws.column_dimensions[column].width = widths.get(column, 20)
                 
             for row in ws.iter_rows(min_row=2):

@@ -708,10 +708,18 @@ class LegalAnalysisService:
                     if not content_str.strip():
                         content_str = "Информация в предоставленной документации не обнаружена."
                 
-                valid_final_report_sections.append({
+                section_data = {
                     "section_title": title,
                     "content": content_str.strip()
-                })
+                }
+                
+                if key == "documents_list" and isinstance(content_items, dict):
+                    section_data["sub_sections"] = {
+                        "in_application": content_items.get("in_application", []),
+                        "on_delivery": content_items.get("on_delivery", [])
+                    }
+                
+                valid_final_report_sections.append(section_data)
                 
                 markdown_parts.append(f"## {title}\n{content_str.strip()}\n")
             
@@ -740,10 +748,18 @@ class LegalAnalysisService:
                     if not content_str.strip():
                         content_str = "Информация в предоставленной документации не обнаружена."
                 
-                valid_final_report_sections.append({
+                section_data = {
                     "section_title": title,
                     "content": content_str.strip()
-                })
+                }
+                
+                if key == "documents_list" and isinstance(content_items, dict):
+                    section_data["sub_sections"] = {
+                        "in_application": content_items.get("in_application", []),
+                        "on_delivery": content_items.get("on_delivery", [])
+                    }
+                
+                valid_final_report_sections.append(section_data)
 
         # Добавляем недостающие критические темы только в rows (сводку), 
         # но не трогаем основной markdown отчет, чтобы не портить его структуру "техническими" вставками.
