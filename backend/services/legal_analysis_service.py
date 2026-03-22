@@ -445,13 +445,13 @@ class LegalAnalysisService:
                 continue
             
             # Обязательные поля (минимальный набор)
-            block = str(row.get("block", "")).strip()
-            finding = str(row.get("finding", "")).strip()
-            risk_level = str(row.get("risk_level", "Medium")).strip()
-            supplier_action = str(row.get("supplier_action", "")).strip()
-            source_document = str(row.get("source_document", "")).strip()
-            source_reference = str(row.get("source_reference", "")).strip()
-            legal_basis = str(row.get("legal_basis", "")).strip()
+            block = str(row.get("block") or "").strip()
+            finding = str(row.get("finding") or "").strip()
+            risk_level = str(row.get("risk_level") or "Medium").strip()
+            supplier_action = str(row.get("supplier_action") or "").strip()
+            source_document = str(row.get("source_document") or "").strip()
+            source_reference = str(row.get("source_reference") or "").strip()
+            legal_basis = str(row.get("legal_basis") or "").strip()
             
             # СУПЕР-МЯГКАЯ ПРОВЕРКА: если есть хоть какой-то смысл, оставляем
             if not finding or len(finding) < 2:
@@ -558,72 +558,11 @@ class LegalAnalysisService:
         """
         Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в полном контексте.
         """
-        added_rows = []
-        
-        # Маппинг слотов на блоки и названия для отчета
-        critical_slots = {
-            "unloading": ("Условия поставки и приемки", "условие о разгрузке"),
-            "delivery_deadline": ("Условия поставки и приемки", "срок поставки"),
-            "acceptance_deadline": ("Условия поставки и приемки", "сроки приемки"),
-            "refusal_grounds": ("Условия поставки и приемки", "основания отказа в приемке"),
-            "payment_deadline": ("Условия оплаты", "срок оплаты"),
-            "advance_payment": ("Условия оплаты", "условие об авансе"),
-            "penalties": ("Ответственность сторон", "штрафы, пени и неустойки"),
-            "edo_eis": ("Условия оплаты", "условие об ЭДО"),
-            "treasury_support": ("Условия оплаты", "условие о казначейском сопровождении"),
-            "delivery_documents": ("Перечень документов", "документы при поставке"),
-            "application_composition": ("Перечень документов", "полный перечень документов в составе заявки"),
-            "national_regime_registries": ("Требования по реестрам и ограничениям", "требования о включении в реестры и применении национального режима")
-        }
-        
-        # Собираем весь доступный текст для проверки наличия темы
-        search_text = " ".join([r.get("finding", "").lower() for r in existing_rows])
-        
-        # Также проверяем подробный отчет
-        if final_report_sections:
-            if isinstance(final_report_sections, dict):
-                for val in final_report_sections.values():
-                    if isinstance(val, list):
-                        search_text += " " + " ".join([str(v).lower() for v in val])
-                    else:
-                        search_text += " " + str(val).lower()
-            elif isinstance(final_report_sections, list):
-                search_text += " " + " ".join([str(v).lower() for v in final_report_sections])
-        
-        # И markdown отчет
-        if final_report_markdown:
-            search_text += " " + final_report_markdown.lower()
-            
-        # И ПОЛНЫЙ КОНТЕКСТ (чтобы не добавлять "не найдено", если инфа есть в документах, но ИИ ее проигнорировал)
-        if full_context:
-            search_text += " " + full_context.lower()
-            
-        for slot_id, (block, label) in critical_slots.items():
-            # Проверяем, упоминается ли тема в собранном тексте
-            words = label.split()
-            # Ищем хотя бы одно значимое слово (длиной > 4) в тексте
-            found_in_text = any(word in search_text for word in words if len(word) > 4)
-            
-            # Мы больше не доверяем evidence_collector для отмены "не найдено", 
-            # так как он может найти "мусор". Доверяем только текстам.
-            
-            if not found_in_text:
-                new_row = {
-                    "block": block,
-                    "finding": f"Информация про {label} в документации не обнаружена.",
-                    "risk_level": "Low",
-                    "supplier_action": f"Уточнить {label} через запрос на разъяснение, если это критично для исполнения.",
-                    "source_document": "Весь пакет документов",
-                    "source_reference": "Не найдено",
-                    "legal_basis": "",
-                    "doc_group": "full"
-                }
-                added_rows.append(new_row)
-                logger.info(f"Added missing critical topic row: {label}")
-                
-        if added_rows:
-            logger.info(f"Total critical topic rows added: {len(added_rows)}")
-        return added_rows
+        # Пользователь: Запретить автодобавление строк `не найдено`, если соответствующая информация уже есть... 
+        # В первую очередь убрать ложные `не найдено` по темам: разгрузка, срок оплаты, срок приемки, документы при поставке, состав заявки, нацрежим / ограничения.
+        # Возвращаем пустой список, чтобы полностью отключить эту логику, так как ИИ сам пишет "Информация не обнаружена" в markdown.
+        logger.info("Skipping _add_missing_critical_topics as per user request to avoid false negatives.")
+        return []
 
     def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
@@ -659,11 +598,17 @@ class LegalAnalysisService:
         found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if items]
         logger.info(f"Summary of found slots: {found_slots}")
         
-        contradictions = evidence_package.get("contradictions", [])
-        if contradictions:
-            logger.info(f"Found {len(contradictions)} contradictions (auxiliary)")
-            for c in contradictions:
+        # Пользователь: Полностью убрать влияние мусорных auxiliary slots на финальный результат.
+        # Slot extraction оставить только как вспомогательный слой для логов и диагностики.
+        aux_contradictions = evidence_package.get("contradictions", [])
+        if aux_contradictions:
+            logger.info(f"Found {len(aux_contradictions)} contradictions (auxiliary - LOG ONLY)")
+            for c in aux_contradictions:
                 logger.info(f"Contradiction: {c.get('slot_name')} - {c.get('source_1')} vs {c.get('source_2')}")
+        
+        # Запретить формирование contradictions по несопоставимым фрагментам.
+        # Оставляем пустой список, чтобы не портить Excel и финальный отчет.
+        contradictions = []
 
         # 2. Подготовка полного контекста (основной вход для модели)
         logger.info(f"Preparing full context from {len(files)} files...")
@@ -682,9 +627,9 @@ class LegalAnalysisService:
         else:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
         
-        rows = res.get('rows', [])
-        final_report_sections = res.get('final_report_sections', {})
-        final_report_markdown = res.get('final_report_markdown', "")
+        rows = res.get('rows') or []
+        final_report_sections = res.get('final_report_sections') or {}
+        final_report_markdown = res.get('final_report_markdown') or ""
         logger.info(f"AI response: {len(rows)} raw rows received, {len(final_report_sections)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
         logger.info("--- [RAW ROWS START] ---")
@@ -775,27 +720,6 @@ class LegalAnalysisService:
             # Если markdown есть, используем его КАК ЕСТЬ. Не урезаем и не модифицируем существующее.
             logger.info("Using final_report_markdown from AI response as primary result")
             
-            # Но мы ОБЯЗАНЫ гарантировать наличие всех 9 разделов (требование пользователя)
-            missing_sections_to_append = []
-            for key, title in section_titles.items():
-                # Ищем заголовок раздела в markdown (без учета регистра и номера)
-                clean_title = title.split(") ")[1].lower()
-                if clean_title not in final_report_markdown.lower():
-                    logger.warning(f"Section '{title}' missing in AI markdown, will append at the end")
-                    content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
-                    
-                    if not content_items and rows:
-                        content_items = [r.get("finding") for r in rows if r.get("block") == clean_title]
-                    
-                    content_str = "\n\n".join([str(item) for item in content_items if item]) if isinstance(content_items, list) else str(content_items)
-                    if not content_str.strip() or content_str == "[]":
-                        content_str = "Информация в предоставленной документации не обнаружена."
-                    
-                    missing_sections_to_append.append(f"## {title}\n{content_str.strip()}\n")
-            
-            if missing_sections_to_append:
-                final_report_markdown += "\n\n---\n" + "\n".join(missing_sections_to_append)
-            
             # Для совместимости (например, для Excel) все равно подготовим секции, 
             # но берем их из AI ответа без модификаций.
             for key, title in section_titles.items():
@@ -839,11 +763,15 @@ class LegalAnalysisService:
         duplicates_count = 0
         
         for r in rows:
+            if not isinstance(r, dict):
+                logger.warning(f"Row rejection during deduplication: row is not a dict. Row: {r}")
+                continue
+                
             if not all(k in r for k in ['block', 'finding', 'source_document']):
                 logger.warning(f"Row rejection during deduplication: missing mandatory fields. Row: {json.dumps(r, ensure_ascii=False)}")
                 continue
                 
-            key = f"{self._normalize_text(r['block'])}_{self._normalize_text(r['finding'])}_{self._normalize_text(r['source_document'])}"
+            key = f"{self._normalize_text(r.get('block', ''))}_{self._normalize_text(r.get('finding', ''))}_{self._normalize_text(r.get('source_document', ''))}"
             if key not in seen_keys:
                 seen_keys.add(key)
                 unique_rows.append(r)
@@ -886,7 +814,7 @@ class LegalAnalysisService:
             "file_statuses": file_statuses,
             "file_classifications": file_classifications,
             "contradictions": contradictions,
-            "status": "success" if final_rows else "partial",
+            "status": "success" if final_report_markdown or final_rows else "partial",
             "stage": "Готово",
             "progress": 100
         }

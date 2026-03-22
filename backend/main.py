@@ -555,7 +555,7 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
 @app.post("/api/ai/export-risks-excel")
 async def api_export_risks_excel(data: dict = Body(...)):
     """Экспорт результатов анализа рисков в Excel .xlsx"""
-    logger.info("Exporting risk analysis to Excel.")
+    logger.info("Excel export started")
     results = data.get('results', [])
     if not results:
         raise HTTPException(status_code=400, detail="No results to export")
@@ -610,45 +610,58 @@ async def api_export_risks_excel(data: dict = Body(...)):
             desc = tender.get('description', 'Нет описания')
             has_contract = "Да" if tender.get('has_contract') else "Нет"
             
-            file_statuses = tender.get('file_statuses', [])
+            file_statuses = tender.get('file_statuses') or []
+            if not isinstance(file_statuses, list): file_statuses = []
             file_count = len(file_statuses)
             
-            rows = tender.get('rows', [])
+            rows = tender.get('rows') or []
+            if not isinstance(rows, list): rows = []
             risk_count = len(rows)
             
-            notes_full = "\n".join(tender.get('summary_notes', []))
+            summary_notes = tender.get('summary_notes') or []
+            if not isinstance(summary_notes, list): summary_notes = [str(summary_notes)]
+            notes_full = "\n".join(summary_notes)
             notes_short = notes_full if len(notes_full) <= 300 else notes_full[:297] + "..."
             desc_short = desc if len(desc) <= 150 else desc[:147] + "..."
             
-            sections = tender.get('final_report_sections', [])
-            detailed_report = tender.get('detailed_report', {})
-            contradictions = tender.get('contradictions', [])
-            final_md = tender.get('final_report_markdown', '')
+            final_report_sections = tender.get('final_report_sections') or []
+            if not isinstance(final_report_sections, (list, dict)): final_report_sections = []
+            
+            detailed_report = tender.get('detailed_report') or {}
+            if not isinstance(detailed_report, dict): detailed_report = {}
+            
+            contradictions = tender.get('contradictions') or []
+            if not isinstance(contradictions, list): contradictions = []
+            
+            final_report_markdown = tender.get('final_report_markdown') or ""
+            if not isinstance(final_report_markdown, str): final_report_markdown = ""
+            
+            merged_sections = []
             
             logger.info(f"--- [EXCEL EXPORT PREPARATION FOR TENDER: {tid}] ---")
             logger.info(f"Rows count: {risk_count}")
-            logger.info(f"Sections count: {len(sections) if isinstance(sections, list) else len(sections) if isinstance(sections, dict) else 0}")
-            logger.info(f"Markdown length: {len(final_md)}")
+            logger.info(f"Sections count: {len(final_report_sections)}")
+            logger.info(f"Markdown length: {len(final_report_markdown)}")
             logger.info(f"Contradictions count: {len(contradictions)}")
             
             # Parse sections into a dict for easier access
             sections_dict = {}
-            if isinstance(sections, list) and len(sections) > 0 and isinstance(sections[0], dict):
-                for sec in sections:
+            if isinstance(final_report_sections, list) and len(final_report_sections) > 0 and isinstance(final_report_sections[0], dict):
+                for sec in final_report_sections:
                     sections_dict[sec.get('section_title', '')] = sec.get('content', '')
-            elif isinstance(sections, dict) and sections:
-                for k, v in sections.items():
+            elif isinstance(final_report_sections, dict) and final_report_sections:
+                for k, v in final_report_sections.items():
                     sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
             elif isinstance(detailed_report, dict) and detailed_report:
                 for k, v in detailed_report.items():
                     sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
             
-            # Parse final_md into sections as a fallback
+            # Parse final_report_markdown into sections as a fallback
             md_sections_dict = {}
-            if final_md:
+            if final_report_markdown:
                 # Robust split by section headers like "### 1) ", "## 1.", "Раздел 1:", "1) Риски..."
                 # We look for lines that start with a number and a closing parenthesis or dot, or start with "Раздел"
-                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+)?(\d+[\)\.]\s*.*)', final_md)
+                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+\d+[:\.]?\s*|\d+[\)\.]\s+)(.*)', final_report_markdown)
                 if len(md_parts) > 1:
                     # The first part is usually the title or intro before any numbered section
                     for i in range(1, len(md_parts), 2):
@@ -656,10 +669,13 @@ async def api_export_risks_excel(data: dict = Body(...)):
                         content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
                         # Clean title from markdown artifacts
                         clean_title = re.sub(r'^#+\s*', '', title).strip()
+                        # Add the section number back for easier matching later if it was stripped
+                        if not re.match(r'^\d+', clean_title):
+                            clean_title = f"{(i//2)+1}) {clean_title}"
                         md_sections_dict[clean_title] = content
                 else:
                     # Fallback if no numbered sections found: split by any ### or ## headers
-                    md_parts = re.split(r'(?m)^#+\s+(.*)', final_md)
+                    md_parts = re.split(r'(?m)^#+\s+(.*)', final_report_markdown)
                     if len(md_parts) > 1:
                         for i in range(1, len(md_parts), 2):
                             title = md_parts[i].strip()
@@ -671,17 +687,14 @@ async def api_export_risks_excel(data: dict = Body(...)):
             del_docs_content = ""
             
             def get_content(keywords, dicts, fallback_rows=None, block_name=None):
-                # Priority 1: Check provided dictionaries (sections_dict, md_sections_dict)
+                # Priority 1: Check provided dictionaries (md_sections_dict, sections_dict)
+                # We prioritize md_sections_dict because it's parsed directly from the final markdown
                 for d in dicts:
                     if not d: continue
                     for k, v in d.items():
                         k_lower = k.lower()
                         # Match by keyword or if the key starts with the keyword (e.g. "3)" matches "3) Проверка...")
                         if any(kw.lower() in k_lower for kw in keywords):
-                            v_clean = v.strip().lower()
-                            # Skip placeholders
-                            if v_clean in ["информация не обнаружена.", "информация не обнаружена", "информация в предоставленной документации не обнаружена.", "информация в предоставленной документации не обнаружена"]:
-                                continue
                             if v.strip():
                                 return v.strip()
                 
@@ -697,47 +710,44 @@ async def api_export_risks_excel(data: dict = Body(...)):
             compliance_content = get_content(["проверка соответствия", "compliance_check", "3)"], [md_sections_dict, sections_dict], rows, "Проверка соответствия документации и закона")
             docs_content = get_content(["перечень документов", "documents_list", "7)"], [md_sections_dict, sections_dict], rows, "Перечень документов")
             
+            app_docs_content = ""
+            del_docs_content = ""
+            
             if docs_content:
                 # Robust split for documents list
-                # Look for "В составе заявки" and "При поставке" markers
-                app_marker = re.search(r'(?i)(?:В составе заявки|Для участия|В заявке)', docs_content)
-                del_marker = re.search(r'(?i)(?:При поставке|Для исполнения|При приемке)', docs_content)
+                # Look for "В составе заявки" and "При поставке" markers, ignoring markdown formatting
+                app_marker = re.search(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:В составе заявки|Для участия|В заявке).*?:?', docs_content)
+                del_marker = re.search(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:При поставке|Для исполнения|При приемке).*?:?', docs_content)
                 
                 if app_marker and del_marker:
                     if app_marker.start() < del_marker.start():
-                        app_docs_content = docs_content[app_marker.start():del_marker.start()].strip()
-                        del_docs_content = docs_content[del_marker.start():].strip()
+                        app_docs_content = docs_content[app_marker.end():del_marker.start()].strip()
+                        del_docs_content = docs_content[del_marker.end():].strip()
                     else:
-                        del_docs_content = docs_content[del_marker.start():app_marker.start()].strip()
-                        app_docs_content = docs_content[app_marker.start():].strip()
+                        del_docs_content = docs_content[del_marker.end():app_marker.start()].strip()
+                        app_docs_content = docs_content[app_marker.end():].strip()
                 else:
                     # If markers not found, try splitting by common patterns
-                    parts = re.split(r'(?i)(?:\*\*|#|\d\.)?\s*При поставке.*?:?', docs_content)
+                    parts = re.split(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:При поставке|Для исполнения|При приемке).*?:?', docs_content)
                     if len(parts) > 1:
-                        app_docs_content = re.sub(r'(?i)(?:\*\*|#|\d\.)?\s*В составе заявки.*?:?', '', parts[0]).strip()
+                        app_docs_content = re.sub(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:В составе заявки|Для участия|В заявке).*?:?', '', parts[0]).strip()
                         del_docs_content = parts[1].strip()
                     else:
                         app_docs_content = docs_content.strip()
             
-            # Add contradictions to compliance if not already there
-            if contradictions:
-                contradictions_text = "\n\n".join(contradictions) if isinstance(contradictions, list) else str(contradictions)
-                if compliance_content:
-                    if "противореч" not in compliance_content.lower() and "ошибк" not in compliance_content.lower():
-                        compliance_content = "ВЫЯВЛЕННЫЕ ПРОТИВОРЕЧИЯ:\n" + contradictions_text + "\n\nДЕТАЛИ СООТВЕТСТВИЯ:\n" + compliance_content
-                else:
-                    compliance_content = contradictions_text
-            
-            FALLBACK_TEXT = "Информация в предоставленной документации не обнаружена"
+            # Add contradictions to compliance if not already there, BUT ONLY if they are from the markdown report
+            # We no longer use the auxiliary 'contradictions' list as it contains false positives
+            FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
+            EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
             
             if not compliance_content:
-                compliance_content = FALLBACK_TEXT
+                compliance_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
             if not app_docs_content:
-                app_docs_content = FALLBACK_TEXT
+                app_docs_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
             if not del_docs_content:
-                del_docs_content = FALLBACK_TEXT
+                del_docs_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
             
-            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) and "не обнаружено" not in compliance_content.lower() else "Нет"
+            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and compliance_content != EMPTY_SECTION_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) and "не обнаружено" not in compliance_content.lower() else "Нет"
             
             # --- Visual separation for all sheets except Сводка ---
             for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
@@ -753,7 +763,6 @@ async def api_export_risks_excel(data: dict = Body(...)):
             
             # --- Build Подробный отчет ---
             # We want to show all 9 sections here
-            merged_sections = {} # Initialize here to avoid UnboundLocalError
             section_names = [
                 "1) Риски участия и исполнения договора",
                 "2) Риски недопуска заявки и потери баллов",
@@ -769,34 +778,30 @@ async def api_export_risks_excel(data: dict = Body(...)):
             found_any_section = False
             for s_name in section_names:
                 # Try to find content for this section name
-                s_content = get_content([s_name.split(") ")[1], s_name[:3]], [md_sections_dict, sections_dict], rows, s_name.split(") ")[1])
+                # We use the number and the name as keywords
+                section_num = s_name.split(")")[0] + ")"
+                section_title = s_name.split(") ")[1]
+                s_content = get_content([section_num, section_title], [md_sections_dict, sections_dict], rows, section_title)
                 if s_content:
                     ws_report.append([tid, s_name, s_content])
                     found_any_section = True
                 else:
-                    ws_report.append([tid, s_name, FALLBACK_TEXT])
+                    ws_report.append([tid, s_name, EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT])
             
             if not found_any_section:
-                # If we didn't find specific sections, just dump whatever we have in merged_sections
+                # If we didn't find specific sections, just dump whatever we have in md_sections_dict or sections_dict
                 if md_sections_dict:
-                    merged_sections = md_sections_dict
+                    for k, v in md_sections_dict.items():
+                        ws_report.append([tid, k, v])
                 elif sections_dict:
-                    merged_sections = sections_dict
-                
-                if merged_sections:
-                    for sec_title, sec_content in merged_sections.items():
-                        ws_report.append([tid, sec_title, sec_content])
+                    for k, v in sections_dict.items():
+                        ws_report.append([tid, k, v])
                 else:
                     ws_report.append([tid, "Отчет", FALLBACK_TEXT])
-            else:
-                # If we found sections via section_names, we might want to keep track of them for logging
-                # although ws_report already has them. For logging purposes, we can populate merged_sections
-                # if it's empty, but it's better to just log what we found.
-                pass
             
             # --- Build Полный текст отчета ---
-            if final_md:
-                ws_full_report.append([tid, final_md])
+            if final_report_markdown:
+                ws_full_report.append([tid, final_report_markdown])
             else:
                 ws_full_report.append([tid, FALLBACK_TEXT])
             
@@ -806,39 +811,40 @@ async def api_export_risks_excel(data: dict = Body(...)):
             ws_del_docs.append([tid, del_docs_content])
             ws_comp.append([tid, compliance_content])
             
-            if rows:
-                for row in rows:
-                    ws_risks.append([
-                        tid,
-                        row.get('block', ''),
-                        row.get('finding', ''),
-                        row.get('risk_level', ''),
-                        row.get('supplier_action', ''),
-                        f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
-                        row.get('legal_basis', '')
-                    ])
-                    
-                    ws_meta.append([
-                        tid,
-                        row.get('source_document', ''),
-                        row.get('source_reference', ''),
-                        row.get('legal_basis', ''),
-                        "\n".join([f"{f.get('filename')}: {f.get('status')}" for f in file_statuses]),
-                        "\n".join(tender.get('classification_notes', [])),
-                        notes_full
-                    ])
-            else:
-                ws_risks.append([tid, "Нет данных", "-", "-", "-", "-", "-"])
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                ws_risks.append([
+                    tid,
+                    row.get('block', ''),
+                    row.get('finding', ''),
+                    row.get('risk_level', ''),
+                    row.get('supplier_action', ''),
+                    f"{row.get('source_document', '')} {row.get('source_reference', '')}".strip(),
+                    row.get('legal_basis', '')
+                ])
+                
+                ws_meta.append([
+                    tid,
+                    row.get('source_document', ''),
+                    row.get('source_reference', ''),
+                    row.get('legal_basis', ''),
+                    "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
+                    "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
+                    notes_full
+                ])
+            if not rows:
+                ws_risks.append([tid, "Подробный отчет отсутствует в результате анализа", "-", "-", "-", "-", "-"])
                 ws_meta.append([
                     tid, "-", "-", "-",
-                    "\n".join([f"{f.get('filename')}: {f.get('status')}" for f in file_statuses]),
-                    "\n".join(tender.get('classification_notes', [])),
+                    "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
+                    "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
                     notes_full
                 ])
                 
             logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
             # Safe logging for merged_sections
-            sections_count = len(merged_sections) if merged_sections else (len(section_names) if found_any_section else 0)
+            sections_count = len(md_sections_dict) if md_sections_dict else (len(sections_dict) if sections_dict else (len(section_names) if found_any_section else 0))
             logger.info(f"Exported {sections_count} sections to 'Подробный отчет'")
             logger.info(f"Exported {len(rows)} rows to 'Краткие риски'")
             logger.info(f"Exported app_docs_content length: {len(app_docs_content)}")
@@ -849,13 +855,16 @@ async def api_export_risks_excel(data: dict = Body(...)):
             for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
                 ws.append([])
 
+        logger.info("Excel export data prepared successfully")
+
         # Add filters
-        ws_risks.auto_filter.ref = ws_risks.dimensions
-        ws_report.auto_filter.ref = ws_report.dimensions
-        ws_app_docs.auto_filter.ref = ws_app_docs.dimensions
-        ws_del_docs.auto_filter.ref = ws_del_docs.dimensions
-        ws_comp.auto_filter.ref = ws_comp.dimensions
-        ws_full_report.auto_filter.ref = ws_full_report.dimensions
+        # Only apply auto_filter to the first row to avoid issues with merged cells
+        ws_risks.auto_filter.ref = f"A1:{get_column_letter(ws_risks.max_column)}1"
+        ws_report.auto_filter.ref = f"A1:{get_column_letter(ws_report.max_column)}1"
+        ws_app_docs.auto_filter.ref = f"A1:{get_column_letter(ws_app_docs.max_column)}1"
+        ws_del_docs.auto_filter.ref = f"A1:{get_column_letter(ws_del_docs.max_column)}1"
+        ws_comp.auto_filter.ref = f"A1:{get_column_letter(ws_comp.max_column)}1"
+        ws_full_report.auto_filter.ref = f"A1:{get_column_letter(ws_full_report.max_column)}1"
 
         # Set column widths and wrap text
         for ws in wb.worksheets:
@@ -882,7 +891,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 
             for row in ws.iter_rows(min_row=2):
                 for cell in row:
-                    if isinstance(cell, MergedCell):
+                    if type(cell).__name__ == 'MergedCell':
                         continue
                     cell.alignment = Alignment(wrap_text=True, vertical="top")
                     thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
@@ -891,6 +900,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         # Save to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
             wb.save(tmp.name)
+            logger.info("Excel export finished successfully")
             return FileResponse(tmp.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="tender_risks_report.xlsx")
 
     except Exception as e:
