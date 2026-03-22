@@ -672,10 +672,10 @@ const Analysis = () => {
                                             <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Сводка юридического анализа</h4>
                                         </div>
                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                                            {result.summary_notes.slice(0, 12).map((note, i) => (
+                                            {result.summary_notes.map((note, i) => (
                                                 <div key={i} className="flex items-start gap-2.5 text-[11px] text-blue-800 leading-relaxed font-medium bg-white/50 p-2 rounded-lg border border-blue-100/50">
                                                     <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0 shadow-sm"></div>
-                                                    {note.length > 200 ? note.substring(0, 200) + '...' : note}
+                                                    {note}
                                                 </div>
                                             ))}
                                         </div>

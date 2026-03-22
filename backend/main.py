@@ -621,7 +621,6 @@ async def api_export_risks_excel(data: dict = Body(...)):
             summary_notes = tender.get('summary_notes') or []
             if not isinstance(summary_notes, list): summary_notes = [str(summary_notes)]
             notes_full = "\n".join(summary_notes)
-            notes_short = notes_full if len(notes_full) <= 300 else notes_full[:297] + "..."
             desc_short = desc if len(desc) <= 150 else desc[:147] + "..."
             
             final_report_sections = tender.get('final_report_sections') or []
@@ -644,110 +643,85 @@ async def api_export_risks_excel(data: dict = Body(...)):
             logger.info(f"Markdown length: {len(final_report_markdown)}")
             logger.info(f"Contradictions count: {len(contradictions)}")
             
-            # Parse sections into a dict for easier access
-            sections_dict = {}
-            if isinstance(final_report_sections, list) and len(final_report_sections) > 0 and isinstance(final_report_sections[0], dict):
-                for sec in final_report_sections:
-                    sections_dict[sec.get('section_title', '')] = sec.get('content', '')
-            elif isinstance(final_report_sections, dict) and final_report_sections:
-                for k, v in final_report_sections.items():
-                    sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
-            elif isinstance(detailed_report, dict) and detailed_report:
-                for k, v in detailed_report.items():
-                    sections_dict[k] = "\n".join(v) if isinstance(v, list) else str(v)
-            
-            # Parse final_report_markdown into sections as a fallback
-            md_sections_dict = {}
+            # 1. Parse final_report_markdown into 9 sections
+            parsed_sections = {}
+            section_sources = {}
             if final_report_markdown:
-                # Robust split by section headers like "### 1) ", "## 1.", "Раздел 1:", "1) Риски..."
-                # We look for lines that start with a number and a closing parenthesis or dot, or start with "Раздел"
-                md_parts = re.split(r'(?m)^(?:#+\s+)?(?:Раздел\s+\d+[:\.]?\s*|\d+[\)\.]\s+)(.*)', final_report_markdown)
-                if len(md_parts) > 1:
-                    # The first part is usually the title or intro before any numbered section
-                    for i in range(1, len(md_parts), 2):
-                        title = md_parts[i].strip()
-                        content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
-                        # Clean title from markdown artifacts
-                        clean_title = re.sub(r'^#+\s*', '', title).strip()
-                        # Add the section number back for easier matching later if it was stripped
-                        if not re.match(r'^\d+', clean_title):
-                            clean_title = f"{(i//2)+1}) {clean_title}"
-                        md_sections_dict[clean_title] = content
-                else:
-                    # Fallback if no numbered sections found: split by any ### or ## headers
-                    md_parts = re.split(r'(?m)^#+\s+(.*)', final_report_markdown)
-                    if len(md_parts) > 1:
-                        for i in range(1, len(md_parts), 2):
-                            title = md_parts[i].strip()
-                            content = md_parts[i+1].strip() if i+1 < len(md_parts) else ""
-                            md_sections_dict[title] = content
-            
-            compliance_content = ""
-            app_docs_content = ""
-            del_docs_content = ""
-            
-            def get_content(keywords, dicts, fallback_rows=None, block_name=None):
-                # Priority 1: Check provided dictionaries (md_sections_dict, sections_dict)
-                # We prioritize md_sections_dict because it's parsed directly from the final markdown
-                for d in dicts:
-                    if not d: continue
-                    for k, v in d.items():
-                        k_lower = k.lower()
-                        # Match by keyword or if the key starts with the keyword (e.g. "3)" matches "3) Проверка...")
-                        if any(kw.lower() in k_lower for kw in keywords):
-                            if v.strip():
-                                return v.strip()
+                positions = []
+                for sec_num in range(1, 10):
+                    # Match "Раздел X", "X)", "X." at the start of a line or after # or *
+                    pattern = rf'(?i)(?:^|\n)[\s#\*]*(?:Раздел\s*{sec_num}|{sec_num}\)|{sec_num}\.)[^\n]*'
+                    match = re.search(pattern, final_report_markdown)
+                    if match:
+                        positions.append((sec_num, match.start(), match.end()))
                 
-                # Priority 2: Last resort fallback to rows if block_name matches
-                if fallback_rows and block_name:
-                    row_findings = [r.get('finding', '') for r in fallback_rows if r.get('block') == block_name]
-                    if row_findings:
-                        return "\n".join(row_findings)
+                positions.sort(key=lambda x: x[1])
                 
-                return ""
+                for i, pos in enumerate(positions):
+                    sec_num = pos[0]
+                    start_idx = pos[2]
+                    end_idx = positions[i+1][1] if i + 1 < len(positions) else len(final_report_markdown)
+                    content = final_report_markdown[start_idx:end_idx].strip()
+                    parsed_sections[sec_num] = content
+                    section_sources[sec_num] = "final_report_markdown"
             
-            # Extract content for specialized sheets
-            compliance_content = get_content(["проверка соответствия", "compliance_check", "3)"], [md_sections_dict, sections_dict], rows, "Проверка соответствия документации и закона")
-            docs_content = get_content(["перечень документов", "documents_list", "7)"], [md_sections_dict, sections_dict], rows, "Перечень документов")
-            
-            app_docs_content = ""
-            del_docs_content = ""
-            
-            if docs_content:
-                # Robust split for documents list
-                # Look for "В составе заявки" and "При поставке" markers, ignoring markdown formatting
-                app_marker = re.search(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:В составе заявки|Для участия|В заявке).*?:?', docs_content)
-                del_marker = re.search(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:При поставке|Для исполнения|При приемке).*?:?', docs_content)
-                
-                if app_marker and del_marker:
-                    if app_marker.start() < del_marker.start():
-                        app_docs_content = docs_content[app_marker.end():del_marker.start()].strip()
-                        del_docs_content = docs_content[del_marker.end():].strip()
-                    else:
-                        del_docs_content = docs_content[del_marker.end():app_marker.start()].strip()
-                        app_docs_content = docs_content[app_marker.end():].strip()
-                else:
-                    # If markers not found, try splitting by common patterns
-                    parts = re.split(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:При поставке|Для исполнения|При приемке).*?:?', docs_content)
-                    if len(parts) > 1:
-                        app_docs_content = re.sub(r'(?i)(?:\*\*|#|\-|\d\.)?\s*(?:В составе заявки|Для участия|В заявке).*?:?', '', parts[0]).strip()
-                        del_docs_content = parts[1].strip()
-                    else:
-                        app_docs_content = docs_content.strip()
-            
-            # Add contradictions to compliance if not already there, BUT ONLY if they are from the markdown report
-            # We no longer use the auxiliary 'contradictions' list as it contains false positives
+            # Fallback to final_report_sections if markdown parsing failed for some sections
+            if isinstance(final_report_sections, list):
+                for sec in final_report_sections:
+                    title = sec.get('section_title', '')
+                    content = sec.get('content', '')
+                    for i in range(1, 10):
+                        if i not in parsed_sections and (f"Раздел {i}" in title or f"{i})" in title or f"{i}." in title):
+                            parsed_sections[i] = content
+                            section_sources[i] = "final_report_sections"
+            elif isinstance(final_report_sections, dict):
+                for k, v in final_report_sections.items():
+                    content = "\n".join(v) if isinstance(v, list) else str(v)
+                    for i in range(1, 10):
+                        if i not in parsed_sections and (f"Раздел {i}" in k or f"{i})" in k or f"{i}." in k):
+                            parsed_sections[i] = content
+                            section_sources[i] = "final_report_sections"
+
             FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
             EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
+
+            def get_sec(num):
+                content = parsed_sections.get(num, "")
+                if not content:
+                    section_sources[num] = "fallback"
+                    return EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
+                return content
+
+            compliance_content = get_sec(3)
+            docs_content = get_sec(7)
             
-            if not compliance_content:
-                compliance_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
+            app_docs_content = ""
+            del_docs_content = ""
+            
+            if docs_content and docs_content not in (EMPTY_SECTION_TEXT, FALLBACK_TEXT):
+                # Robust split for documents list
+                app_pattern = r"(?i)(?:В составе заявки|Для участия|В заявке)[\s\*:]*(.*?)(?=(?:\n.*?(?:При поставке|Для исполнения|При приемке))|$)"
+                app_match = re.search(app_pattern, docs_content, re.DOTALL)
+                if app_match:
+                    app_docs_content = app_match.group(1).strip()
+                    
+                del_pattern = r"(?i)(?:При поставке|Для исполнения|При приемке)[\s\*:]*(.*?)(?=(?:\n.*?(?:В составе заявки|Для участия|В заявке))|$)"
+                del_match = re.search(del_pattern, docs_content, re.DOTALL)
+                if del_match:
+                    del_docs_content = del_match.group(1).strip()
+                    
+                if not app_docs_content and not del_docs_content:
+                    app_docs_content = docs_content
+            else:
+                app_docs_content = docs_content
+                del_docs_content = docs_content
+            
             if not app_docs_content:
                 app_docs_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
             if not del_docs_content:
                 del_docs_content = EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT
-            
-            has_contradictions = "Да" if compliance_content and compliance_content != FALLBACK_TEXT and compliance_content != EMPTY_SECTION_TEXT and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) and "не обнаружено" not in compliance_content.lower() else "Нет"
+
+            has_contradictions = "Да" if compliance_content and compliance_content not in (FALLBACK_TEXT, EMPTY_SECTION_TEXT) and ("противореч" in compliance_content.lower() or "ошибк" in compliance_content.lower()) and "не обнаружено" not in compliance_content.lower() else "Нет"
             
             # --- Visual separation for all sheets except Сводка ---
             for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
@@ -775,29 +749,9 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 "9) Рекомендации Поставщику"
             ]
             
-            found_any_section = False
-            for s_name in section_names:
-                # Try to find content for this section name
-                # We use the number and the name as keywords
-                section_num = s_name.split(")")[0] + ")"
-                section_title = s_name.split(") ")[1]
-                s_content = get_content([section_num, section_title], [md_sections_dict, sections_dict], rows, section_title)
-                if s_content:
-                    ws_report.append([tid, s_name, s_content])
-                    found_any_section = True
-                else:
-                    ws_report.append([tid, s_name, EMPTY_SECTION_TEXT if final_report_markdown else FALLBACK_TEXT])
-            
-            if not found_any_section:
-                # If we didn't find specific sections, just dump whatever we have in md_sections_dict or sections_dict
-                if md_sections_dict:
-                    for k, v in md_sections_dict.items():
-                        ws_report.append([tid, k, v])
-                elif sections_dict:
-                    for k, v in sections_dict.items():
-                        ws_report.append([tid, k, v])
-                else:
-                    ws_report.append([tid, "Отчет", FALLBACK_TEXT])
+            for i, s_name in enumerate(section_names, 1):
+                s_content = get_sec(i)
+                ws_report.append([tid, s_name, s_content])
             
             # --- Build Полный текст отчета ---
             if final_report_markdown:
@@ -805,11 +759,14 @@ async def api_export_risks_excel(data: dict = Body(...)):
             else:
                 ws_full_report.append([tid, FALLBACK_TEXT])
             
-            ws_summary.append([tid, desc_short, file_count, has_contract, risk_count, has_contradictions, notes_short])
+            ws_summary.append([tid, desc_short, file_count, has_contract, risk_count, has_contradictions, notes_full])
             
             ws_app_docs.append([tid, app_docs_content])
             ws_del_docs.append([tid, del_docs_content])
             ws_comp.append([tid, compliance_content])
+            
+            logger.info(f"Excel export for {tid}: {risk_count} rows, {len(parsed_sections)} sections, markdown length: {len(final_report_markdown)}, contradictions: {has_contradictions}")
+            logger.info(f"Sections found for Excel: {list(parsed_sections.keys())}")
             
             for row in rows:
                 if not isinstance(row, dict):
@@ -842,14 +799,42 @@ async def api_export_risks_excel(data: dict = Body(...)):
                     notes_full
                 ])
                 
+            # Extract sources from markdown and add to meta if not already there
+            md_sources = set()
+            if final_report_markdown:
+                bracket_matches = re.findall(r'\[(.*?)\]', final_report_markdown)
+                for m in bracket_matches:
+                    if any(kw in m.lower() for kw in ['договор', 'контракт', 'тз', 'задан', 'п.', 'раздел', 'ст.', 'фз', 'закон', 'документаци', 'приложени', 'часть']):
+                        md_sources.add(m.strip())
+                source_matches = re.findall(r'(?i)источник[и]?\s*[:\-]?\s*([^\n\.\;]+)', final_report_markdown)
+                for m in source_matches:
+                    md_sources.add(m.strip())
+            
+            row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
+            for src in md_sources:
+                if src and not any(src in r_src or r_src in src for r_src in row_sources if r_src):
+                    ws_meta.append([
+                        tid,
+                        src,
+                        "Из полного отчета",
+                        "-",
+                        "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)]),
+                        "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else []),
+                        notes_full
+                    ])
+                
             logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
-            # Safe logging for merged_sections
-            sections_count = len(md_sections_dict) if md_sections_dict else (len(sections_dict) if sections_dict else (len(section_names) if found_any_section else 0))
-            logger.info(f"Exported {sections_count} sections to 'Подробный отчет'")
-            logger.info(f"Exported {len(rows)} rows to 'Краткие риски'")
-            logger.info(f"Exported app_docs_content length: {len(app_docs_content)}")
-            logger.info(f"Exported del_docs_content length: {len(del_docs_content)}")
-            logger.info(f"Exported compliance_content length: {len(compliance_content)}")
+            logger.info(f"Lengths -> final_report_markdown: {len(final_report_markdown)}, app_docs: {len(app_docs_content)}, del_docs: {len(del_docs_content)}, compliance: {len(compliance_content)}")
+            logger.info(f"Counts -> final_report_sections: {len(final_report_sections)}, rows: {risk_count}, contradictions: {len(contradictions)}")
+            
+            logger.info(f"--- [EXCEL SHEET SOURCES FOR TENDER: {tid}] ---")
+            logger.info(f"Sheet 'Краткие риски': rows")
+            logger.info(f"Sheet 'Подробный отчет': { {f'Раздел {k}': v for k, v in section_sources.items()} }")
+            logger.info(f"Sheet 'Документы заявки': {section_sources.get(7, 'fallback')}")
+            logger.info(f"Sheet 'Документы при поставке': {section_sources.get(7, 'fallback')}")
+            logger.info(f"Sheet 'Противоречия и соответствие': {section_sources.get(3, 'fallback')}")
+            logger.info(f"Sheet 'Полный текст отчета': {'final_report_markdown' if final_report_markdown else 'fallback'}")
+            logger.info(f"Sheet 'Источники и служебная инфо': rows + final_report_markdown")
             
             # Empty row before next tender
             for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:

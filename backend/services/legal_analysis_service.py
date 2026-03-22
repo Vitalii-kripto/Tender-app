@@ -750,6 +750,8 @@ class LegalAnalysisService:
         added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown, full_context)
         rows += added_rows
         logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
+        if added_rows:
+            logger.info(f"Automatically added rows details: {json.dumps(added_rows, ensure_ascii=False)}")
         
         all_notes = res.get('summary_notes', [])
         
@@ -799,7 +801,7 @@ class LegalAnalysisService:
                 seen_notes.add(note_clean)
                 final_notes.append(note_clean)
         
-        final_notes = final_notes[:5]
+        final_notes = final_notes[:10]
 
         logger.info("Post-processing completed successfully.")
         self._log_progress("Готово", 100, "success", callback=callback)
