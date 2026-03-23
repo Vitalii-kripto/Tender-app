@@ -23,40 +23,36 @@ PROMPT_FULL_PACKAGE = """
 4. Ссылки на источники: По каждому выводу ОБЯЗАТЕЛЬНО указывай источник: [Название документа], [Пункт / Раздел]. Это касается и markdown, и каждого объекта в JSON.
 
 ОБЯЗАТЕЛЬНЫЕ РАЗДЕЛЫ В final_report_sections (JSON):
-Каждый объект в массивах ОБЯЗАТЕЛЬНО должен содержать поле `source`.
+Каждый объект в массивах ОБЯЗАТЕЛЬНО должен содержать поля `text` и `source`.
 
 {
   "final_report_markdown": "Полный текст отчета в Markdown",
   "rows": [ { "block": "...", "finding": "...", "risk_level": "...", "supplier_action": "...", "source_document": "...", "source_reference": "..." } ],
   "summary_notes": ["3-5 главных вывода"],
   "final_report_sections": {
-    "risks_execution": [{"risk": "...", "level": "...", "recommendation": "...", "source": "..."}],
-    "rejection_risks": [{"reason": "...", "how_to_avoid": "...", "source": "..."}],
-    "compliance_check": [{"issue": "...", "details": "...", "source": "..."}],
-    "delivery_acceptance": [{"parameter": "...", "condition": "...", "source": "..."}],
-    "payment_terms": [{"parameter": "...", "condition": "...", "source": "..."}],
-    "liability": [{"violation": "...", "sanction": "...", "source": "..."}],
+    "risks_execution": [{"text": "Описание риска", "risk_level": "High/Medium/Low", "recommendation": "Что сделать", "source": "Документ, пункт"}],
+    "rejection_risks": [{"text": "Причина отклонения", "how_to_avoid": "Как избежать", "source": "Документ, пункт"}],
+    "compliance_check": [{"text": "Суть противоречия/несоответствия", "details": "Подробности", "source": "Документ, пункт"}],
+    "delivery_acceptance": [{"text": "Условие поставки/приемки", "details": "Срок, место, порядок", "source": "Документ, пункт"}],
+    "payment_terms": [{"text": "Условие оплаты", "details": "Аванс, сроки, ЭДО", "source": "Документ, пункт"}],
+    "liability": [{"text": "Нарушение", "sanction": "Штраф/пеня", "source": "Документ, пункт"}],
     "documents_list": { 
-        "in_application": [{"document": "...", "source": "..."}], 
-        "on_delivery": [{"document": "...", "source": "..."}] 
+        "in_application": [{"text": "Наименование документа", "source": "Документ, пункт"}], 
+        "on_delivery": [{"text": "Наименование документа", "source": "Документ, пункт"}] 
     },
-    "registries_restrictions": [{"requirement": "...", "details": "...", "source": "..."}],
-    "supplier_recommendations": [{"step": "...", "basis": "...", "source": "..."}]
+    "registries_restrictions": [{"text": "Требование/ограничение", "details": "Подробности (нацрежим, СРО и т.д.)", "source": "Документ, пункт"}],
+    "supplier_recommendations": [{"text": "Конкретный шаг", "basis": "Основание", "source": "Документ, пункт"}]
   }
 }
 
 ПОДРОБНЕЕ ПО РАЗДЕЛАМ В final_report_sections:
-- `risks_execution`: Все выявленные риски исполнения (сроки, штрафы, неопределенность).
-- `rejection_risks`: Все формальные и сущностные причины для отклонения заявки.
-- `compliance_check`: Все выявленные противоречия между документами или законом. Если противоречий нет, массив может быть пустым или содержать один объект с текстом "Противоречий не обнаружено".
-- `delivery_acceptance`: Все условия по месту, срокам и порядку приемки товара/работ.
-- `payment_terms`: Все условия по авансу, срокам оплаты (в т.ч. для СМП), порядку расчетов.
-- `liability`: Все виды ответственности (пени, штрафы) для Поставщика и Заказчика.
-- `documents_list`: Полные списки документов. `in_application` — что вложить в заявку. `on_delivery` — что передать при поставке.
-- `registries_restrictions`: Требования по 44-ФЗ/223-ФЗ, нацрежим, СРО, лицензии, выписки.
-- `supplier_recommendations`: Конкретные шаги, что нужно сделать Поставщику прямо сейчас.
+- Каждая запись в массиве ДОЛЖНА быть развернутой, а не коротким тезисом.
+- Поле `text` является основным описанием факта или риска.
+- Поле `source` ОБЯЗАТЕЛЬНО для каждого объекта.
+- `documents_list` строго разделен на `in_application` (в заявку) и `on_delivery` (при поставке).
+- Информация в `final_report_sections` должна быть ИСЧЕРПЫВАЮЩЕЙ. Если в markdown отчете 10 рисков, в `risks_execution` должно быть 10 объектов.
 
-ВАЖНО: Работа считается выполненной, только если `final_report_sections` содержит ИСЧЕРПЫВАЮЩУЮ информацию для заполнения Excel-таблицы без обращения к markdown-тексту.
+ВAЖНО: Работа считается выполненной, только если `final_report_sections` содержит ИСЧЕРПЫВАЮЩУЮ информацию для заполнения Excel-таблицы без обращения к markdown-тексту.
 
 ПОЛНЫЙ КОНТЕКСТ ТЕНДЕРНОЙ ДОКУМЕНТАЦИИ:
 __TEXT__

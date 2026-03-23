@@ -624,19 +624,19 @@ async def api_export_risks_excel(data: dict = Body(...)):
         
         # 3. Подробный отчет
         ws_report = wb.create_sheet(title="Подробный отчет")
-        ws_report.append(["ID Тендера", "Раздел", "Данные 1", "Данные 2", "Данные 3", "Данные 4", "Данные 5", "Данные 6"])
+        ws_report.append(["ID Тендера", "Раздел", "Текст", "Детали / Рекомендация", "Риск / Санкция", "Источник"])
         
         # 4. Документы заявки
         ws_app_docs = wb.create_sheet(title="Документы заявки")
-        ws_app_docs.append(["ID Тендера", "Документы в составе заявки", "Данные 2", "Данные 3", "Данные 4"])
+        ws_app_docs.append(["ID Тендера", "Наименование документа", "Источник"])
         
         # 5. Документы при поставке
         ws_del_docs = wb.create_sheet(title="Документы при поставке")
-        ws_del_docs.append(["ID Тендера", "Документы при поставке", "Данные 2", "Данные 3", "Данные 4"])
+        ws_del_docs.append(["ID Тендера", "Наименование документа", "Источник"])
         
         # 6. Противоречия и соответствие
         ws_comp = wb.create_sheet(title="Противоречия и соответствие")
-        ws_comp.append(["ID Тендера", "Раздел / Тип", "Описание", "Детали", "Основание"])
+        ws_comp.append(["ID Тендера", "Суть противоречия", "Детали", "Источник"])
         
         # 7. Полный текст отчета
         ws_full_report = wb.create_sheet(title="Полный текст отчета")
@@ -659,355 +659,285 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 ws.column_dimensions[get_column_letter(i)].width = 30
                 
         tenders_added = set()
+        
+        def is_not_found(text: str) -> bool:
+            if not text or not isinstance(text, str):
+                return True
+            not_found_markers = [
+                "не обнаружена", "не найдена", "отсутствует", "не указан", 
+                "не содержит", "информация не найдена", "информация отсутствует",
+                "не удалось найти", "не обнаружено", "not found"
+            ]
+            text_lower = text.lower()
+            if len(text) > 200:
+                return False
+            return any(marker in text_lower for marker in not_found_markers)
+
         for tender in results:
             tid = str(tender.get('id', 'N/A'))
             desc = tender.get('description', 'Нет описания')
-            has_contract = "Да" if tender.get('has_contract') else "Нет"
             
-            file_statuses = tender.get('file_statuses') or []
-            if not isinstance(file_statuses, list): file_statuses = []
-            file_count = len(file_statuses)
-            
-            rows = tender.get('rows') or []
-            if not isinstance(rows, list): rows = []
-            
-            # risk_count will be calculated after processing ws_risks
+            # Initialize variables to avoid UnboundLocalError
             risk_count = 0
-            
-            summary_notes = tender.get('summary_notes') or []
-            if not isinstance(summary_notes, list): summary_notes = [str(summary_notes)]
-            notes_full = "\n".join(summary_notes)
-            desc_short = desc if len(desc) <= 150 else desc[:147] + "..."
-            
-            final_report_sections = tender.get('final_report_sections') or []
-            if not isinstance(final_report_sections, (list, dict)): final_report_sections = []
-            
-            detailed_report = tender.get('detailed_report') or {}
-            if not isinstance(detailed_report, dict): detailed_report = {}
-            
-            contradictions = tender.get('contradictions') or []
-            if not isinstance(contradictions, list): contradictions = []
-            
-            final_report_markdown = tender.get('final_report_markdown') or ""
-            if not isinstance(final_report_markdown, str): final_report_markdown = ""
-            
-            merged_sections = []
-            
-            logger.info(f"--- [EXCEL EXPORT PREPARATION FOR TENDER: {tid}] ---")
-            logger.info(f"Sections count: {len(final_report_sections)}")
-            logger.info(f"Markdown length: {len(final_report_markdown)}")
-            logger.info(f"Contradictions count: {len(contradictions)}")
-            
-            logger.info("--- [STRUCTURE QUALITY LOGGING] ---")
-            if isinstance(final_report_sections, list):
-                for sec in final_report_sections:
-                    title = sec.get('section_title', 'Unknown')
-                    s_data = sec.get('structured_data', [])
-                    sub_sec = sec.get('sub_sections', {})
-                    
-                    if isinstance(s_data, list):
-                        logger.info(f"Section '{title}': {len(s_data)} objects in structured_data")
-                    elif isinstance(s_data, dict):
-                        logger.info(f"Section '{title}': {len(s_data.keys())} keys in structured_data (dict)")
-                    
-                    if sub_sec:
-                        in_app = sub_sec.get('in_application', [])
-                        on_del = sub_sec.get('on_delivery', [])
-                        in_app_count = len(in_app) if isinstance(in_app, list) else (1 if in_app else 0)
-                        on_del_count = len(on_del) if isinstance(on_del, list) else (1 if on_del else 0)
-                        logger.info(f"Section '{title}' -> documents_list.in_application: {in_app_count} objects")
-                        logger.info(f"Section '{title}' -> documents_list.on_delivery: {on_del_count} objects")
-            elif isinstance(final_report_sections, dict):
-                for k, v in final_report_sections.items():
-                    if isinstance(v, list):
-                        logger.info(f"Section '{k}': {len(v)} objects")
-                    elif isinstance(v, dict):
-                        if k == "documents_list":
-                            in_app = v.get('in_application', [])
-                            on_del = v.get('on_delivery', [])
-                            logger.info(f"Section '{k}' -> documents_list.in_application: {len(in_app) if isinstance(in_app, list) else 0}")
-                            logger.info(f"Section '{k}' -> documents_list.on_delivery: {len(on_del) if isinstance(on_del, list) else 0}")
-            
-            logger.info("-----------------------------------")
-            
-            # 1. Populate parsed_sections from final_report_sections (Priority 1)
+            has_report = "Нет"
+            has_contradictions = "Нет"
+            notes_full = ""
             parsed_sections = {}
             structured_sections = {}
-            section_sources = {}
-            sub_sections_data = {}
-
-            section_title_mapping = {
-                "1) Риски участия и исполнения договора": 1,
-                "2) Риски недопуска заявки и потери баллов": 2,
-                "3) Проверка соответствия документации и закона": 3,
-                "4) Условия поставки и приемки": 4,
-                "5) Условия оплаты": 5,
-                "6) Ответственность сторон": 6,
-                "7) Перечень документов": 7,
-                "8) Требования по реестрам и ограничениям": 8,
-                "9) Рекомендации Поставщику": 9
-            }
-
-            if isinstance(final_report_sections, list):
-                for sec in final_report_sections:
-                    title = sec.get('section_title', '')
-                    content = sec.get('content', '')
-                    sub_sections = sec.get('sub_sections')
-                    structured_data = sec.get('structured_data')
-                    
-                    i = section_title_mapping.get(title)
-                    if i is not None and i not in parsed_sections:
-                        parsed_sections[i] = content
-                        section_sources[i] = "final_report_sections"
-                        if sub_sections:
-                            sub_sections_data[i] = sub_sections
-                        if structured_data:
-                            structured_sections[i] = structured_data
-            elif isinstance(final_report_sections, dict):
-                # Map the JSON keys to section numbers
-                key_to_section = {
-                    "risks_execution": 1,
-                    "rejection_risks": 2,
-                    "compliance_check": 3,
-                    "delivery_acceptance": 4,
-                    "payment_terms": 5,
-                    "liability": 6,
-                    "documents_list": 7,
-                    "registries_restrictions": 8,
-                    "supplier_recommendations": 9
-                }
-                
-                for k, v in final_report_sections.items():
-                    i = key_to_section.get(k)
-                    if i is not None and i not in parsed_sections:
-                        content = "\n".join([str(item) for item in v]) if isinstance(v, list) else str(v)
-                        parsed_sections[i] = content
-                        structured_sections[i] = v if isinstance(v, list) else []
-                        section_sources[i] = "final_report_sections"
-                        if k == "documents_list" and isinstance(v, dict):
-                            sub_sections_data[i] = v
-                            structured_sections[i] = [] # It's a dict, not a list of items
-
-            # 2. Fallback to final_report_markdown parsing (Priority 2)
-            # Removed as per user request: "Полностью перестать строить листы через повторный разбор markdown"
+            contradictions = []
+            final_report_markdown = ""
             
-            FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
-            EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
+            try:
+                file_statuses = tender.get('file_statuses') or []
+                if not isinstance(file_statuses, list): file_statuses = []
+                
+                rows = tender.get('rows') or []
+                if not isinstance(rows, list): rows = []
+                
+                summary_notes = tender.get('summary_notes') or []
+                if not isinstance(summary_notes, list): 
+                    summary_notes = [str(summary_notes)] if summary_notes else []
+                notes_full = "\n".join(summary_notes)
+                
+                final_report_sections = tender.get('final_report_sections') or []
+                if not isinstance(final_report_sections, (list, dict)): final_report_sections = []
+                
+                contradictions = tender.get('contradictions') or []
+                if not isinstance(contradictions, list): contradictions = []
+                
+                final_report_markdown = tender.get('final_report_markdown') or ""
+                if not isinstance(final_report_markdown, str): final_report_markdown = ""
+                
+                logger.info(f"--- [EXCEL EXPORT PREPARATION FOR TENDER: {tid}] ---")
+                
+                # 1. Populate parsed_sections from final_report_sections (Priority 1)
+                section_sources = {}
+                sub_sections_data = {}
 
-            def get_fallback_text(section_num):
-                if section_num in parsed_sections and parsed_sections[section_num]:
-                    return clean_markdown(parsed_sections[section_num])
-                elif final_report_markdown:
-                    return "Данные представлены в листе 'Полный текст отчета'"
-                else:
+                section_title_mapping = {
+                    "1) Риски участия и исполнения договора": 1,
+                    "2) Риски недопуска заявки и потери баллов": 2,
+                    "3) Проверка соответствия документации и закона": 3,
+                    "4) Условия поставки и приемки": 4,
+                    "5) Условия оплаты": 5,
+                    "6) Ответственность сторон": 6,
+                    "7) Перечень документов": 7,
+                    "8) Требования по реестрам и ограничениям": 8,
+                    "9) Рекомендации Поставщику": 9
+                }
+
+                if isinstance(final_report_sections, list):
+                    for sec in final_report_sections:
+                        title = sec.get('section_title', '')
+                        content = sec.get('content', '')
+                        sub_sections = sec.get('sub_sections')
+                        structured_data = sec.get('structured_data')
+                        
+                        i = section_title_mapping.get(title)
+                        if i is not None and i not in parsed_sections:
+                            parsed_sections[i] = content
+                            section_sources[i] = "final_report_sections"
+                            if sub_sections:
+                                sub_sections_data[i] = sub_sections
+                            if structured_data:
+                                structured_sections[i] = structured_data
+                elif isinstance(final_report_sections, dict):
+                    key_to_section = {
+                        "risks_execution": 1,
+                        "rejection_risks": 2,
+                        "compliance_check": 3,
+                        "delivery_acceptance": 4,
+                        "payment_terms": 5,
+                        "liability": 6,
+                        "documents_list": 7,
+                        "registries_restrictions": 8,
+                        "supplier_recommendations": 9
+                    }
+                    
+                    for k, v in final_report_sections.items():
+                        i = key_to_section.get(k)
+                        if i is not None and i not in parsed_sections:
+                            content = "\n".join([str(item) for item in v]) if isinstance(v, list) else str(v)
+                            parsed_sections[i] = content
+                            structured_sections[i] = v if isinstance(v, list) else []
+                            section_sources[i] = "final_report_sections"
+                            if k == "documents_list" and isinstance(v, dict):
+                                sub_sections_data[i] = v
+                                structured_sections[i] = []
+
+                FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
+                EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
+
+                def get_fallback_text(section_num):
+                    if section_num in parsed_sections and parsed_sections[section_num]:
+                        content = parsed_sections[section_num]
+                        if not is_not_found(content):
+                            return clean_markdown(content)
                     return EMPTY_SECTION_TEXT
 
-            # --- Visual separation for all sheets except Сводка ---
-            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
-                ws.append([f"ТЕНДЕР: {tid}"])
-                ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
-                ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
-                
-                ws.append([f"Описание: {desc}"])
-                ws[ws.max_row][0].font = Font(italic=True)
-                ws[ws.max_row][0].fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-                ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
+                # --- Visual separation for all sheets except Сводка ---
+                for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
+                    ws.append([f"ТЕНДЕР: {tid}"])
+                    ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
+                    ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
+                    
+                    ws.append([f"Описание: {desc}"])
+                    ws[ws.max_row][0].font = Font(italic=True)
+                    ws[ws.max_row][0].fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+                    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
 
-            # --- Build Подробный отчет (Sections 1, 2, 4, 5, 6, 8, 9) ---
-            section_names = [
-                "1) Риски участия и исполнения договора",
-                "2) Риски недопуска заявки и потери баллов",
-                "3) Проверка соответствия документации и закона",
-                "4) Условия поставки и приемки",
-                "5) Условия оплаты",
-                "6) Ответственность сторон",
-                "7) Перечень документов",
-                "8) Требования по реестрам и ограничениям",
-                "9) Рекомендации Поставщику"
-            ]
-            
-            report_sections_indices = [1, 2, 4, 5, 6, 8, 9]
-            for i in report_sections_indices:
-                s_name = section_names[i-1]
-                first_row_in_sec = True
+                # --- Build Подробный отчет ---
+                section_names = [
+                    "1) Риски участия и исполнения договора",
+                    "2) Риски недопуска заявки и потери баллов",
+                    "3) Проверка соответствия документации и закона",
+                    "4) Условия поставки и приемки",
+                    "5) Условия оплаты",
+                    "6) Ответственность сторон",
+                    "7) Перечень документов",
+                    "8) Требования по реестрам и ограничениям",
+                    "9) Рекомендации Поставщику"
+                ]
                 
-                if i in structured_sections and structured_sections[i]:
-                    sec_data = structured_sections[i]
-                    if isinstance(sec_data, list) and len(sec_data) > 0:
-                        for item in sec_data:
-                            if isinstance(item, dict):
-                                row_data = [clean_markdown(str(v)) for v in item.values()]
-                                ws_report.append([tid, s_name if first_row_in_sec else ""] + row_data)
-                                first_row_in_sec = False
-                            elif isinstance(item, str):
-                                ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(item)])
-                                first_row_in_sec = False
-                    elif isinstance(sec_data, dict) and len(sec_data) > 0:
-                        for k, v in sec_data.items():
-                            ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(str(k)), clean_markdown(str(v))])
-                            first_row_in_sec = False
-                    elif isinstance(sec_data, str) and len(sec_data) > 0:
-                        ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(sec_data)])
-                        first_row_in_sec = False
+                report_sections_indices = [1, 2, 4, 5, 6, 8, 9]
+                for i in report_sections_indices:
+                    s_name = section_names[i-1]
+                    first_row_in_sec = True
+                    
+                    if i in structured_sections and structured_sections[i]:
+                        sec_data = structured_sections[i]
+                        if isinstance(sec_data, list) and len(sec_data) > 0:
+                            for item in sec_data:
+                                if isinstance(item, dict):
+                                    text = item.get('text', '')
+                                    source = item.get('source', '')
+                                    details = ""
+                                    risk_sanction = ""
+                                    
+                                    if i == 1: details = item.get('recommendation', ''); risk_sanction = item.get('risk_level', '')
+                                    elif i == 2: details = item.get('how_to_avoid', '')
+                                    elif i in [4, 5]: details = item.get('details', '')
+                                    elif i == 6: details = item.get('sanction', '')
+                                    elif i == 8: details = item.get('details', '')
+                                    elif i == 9: details = item.get('basis', '')
+                                    
+                                    ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(str(text)), clean_markdown(str(details)), clean_markdown(str(risk_sanction)), clean_markdown(str(source))])
+                                    first_row_in_sec = False
+                                else:
+                                    ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(str(item))])
+                                    first_row_in_sec = False
+                        else:
+                            ws_report.append([tid, s_name, EMPTY_SECTION_TEXT])
                     else:
                         ws_report.append([tid, s_name, EMPTY_SECTION_TEXT])
-                else:
-                    ws_report.append([tid, s_name, EMPTY_SECTION_TEXT])
-            
-            # --- Build Полный текст отчета ---
-            if final_report_markdown:
-                ws_full_report.append([tid, final_report_markdown])
-            else:
-                ws_full_report.append([tid, FALLBACK_TEXT])
-            
-            # --- Build Документы заявки ---
-            if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "in_application" in sub_sections_data[7] and sub_sections_data[7]["in_application"]:
-                in_app = sub_sections_data[7]["in_application"]
-                if isinstance(in_app, list):
-                    for doc_item in in_app:
-                        if isinstance(doc_item, dict):
-                            ws_app_docs.append([tid] + [clean_markdown(str(v)) for v in doc_item.values()])
-                        elif isinstance(doc_item, str):
-                            ws_app_docs.append([tid, clean_markdown(doc_item)])
-                elif isinstance(in_app, str):
-                    ws_app_docs.append([tid, clean_markdown(in_app)])
-            else:
-                ws_app_docs.append([tid, get_fallback_text(7)])
-
-            # --- Build Документы при поставке ---
-            if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "on_delivery" in sub_sections_data[7] and sub_sections_data[7]["on_delivery"]:
-                on_del = sub_sections_data[7]["on_delivery"]
-                if isinstance(on_del, list):
-                    for doc_item in on_del:
-                        if isinstance(doc_item, dict):
-                            ws_del_docs.append([tid] + [clean_markdown(str(v)) for v in doc_item.values()])
-                        elif isinstance(doc_item, str):
-                            ws_del_docs.append([tid, clean_markdown(doc_item)])
-                elif isinstance(on_del, str):
-                    ws_del_docs.append([tid, clean_markdown(on_del)])
-            else:
-                ws_del_docs.append([tid, get_fallback_text(7)])
-
-            # --- Build Противоречия и соответствие ---
-            comp_added = False
-            if 3 in structured_sections and isinstance(structured_sections[3], list) and len(structured_sections[3]) > 0:
-                for item in structured_sections[3]:
-                    if isinstance(item, dict):
-                        issue = item.get("issue", "")
-                        details = item.get("details", "")
-                        source = item.get("source", "Документация")
-                        
-                        if "не обнаружено" in str(issue).lower():
-                            continue
-                            
-                        ws_comp.append([
-                            tid, 
-                            clean_markdown(str(issue)), 
-                            clean_markdown(str(source)), 
-                            clean_markdown(str(issue)), 
-                            "Закон/Документация", 
-                            clean_markdown(str(details))
-                        ])
-                        comp_added = True
-            
-            if not comp_added:
-                ws_comp.append([tid, get_fallback_text(3)])
-
-            # --- Build Краткие риски ---
-            risks_added = False
-            
-            # Priority 1: Use risks_execution from final_report_sections
-            if 1 in structured_sections and isinstance(structured_sections[1], list) and len(structured_sections[1]) > 0:
-                for item in structured_sections[1]:
-                    if isinstance(item, dict):
-                        ws_risks.append([
-                            tid,
-                            "Риски участия и исполнения",
-                            clean_markdown(str(item.get("risk", ""))),
-                            clean_markdown(str(item.get("level", "Medium"))),
-                            clean_markdown(str(item.get("recommendation", ""))),
-                            clean_markdown(str(item.get("source", ""))),
-                            ""
-                        ])
-                        risks_added = True
-                        risk_count += 1
-
-            # Priority 2: Use rejection_risks from final_report_sections
-            if 2 in structured_sections and isinstance(structured_sections[2], list) and len(structured_sections[2]) > 0:
-                for item in structured_sections[2]:
-                    if isinstance(item, dict):
-                        ws_risks.append([
-                            tid,
-                            "Риски недопуска",
-                            clean_markdown(str(item.get("reason", ""))),
-                            "High",
-                            clean_markdown(str(item.get("how_to_avoid", ""))),
-                            clean_markdown(str(item.get("source", ""))),
-                            ""
-                        ])
-                        risks_added = True
-                        risk_count += 1
-
-            if not risks_added:
-                ws_risks.append([tid, "Риски отсутствуют или не найдены", "-", "-", "-", "-", "-"])
-
-            # --- Build Сводка (at the end to have correct risk_count) ---
-            has_report = "Да" if final_report_markdown or parsed_sections else "Нет"
-            
-            # Calculate has_contradictions based on structured data
-            has_contradictions = "Нет"
-            if 3 in structured_sections and isinstance(structured_sections[3], list):
-                has_contradictions = "Да" if any("не обнаружено" not in str(item.get("issue", "")).lower() for item in structured_sections[3] if isinstance(item, dict)) else "Нет"
-
-            ws_summary.append([tid, risk_count, has_contradictions, has_report, notes_full])
-            
-            # --- Build Источники и служебная инфо ---
-            # 1. File statuses
-            file_info = "\n".join([f"{f.get('filename', 'N/A')}: {f.get('status', 'N/A')}" for f in file_statuses if isinstance(f, dict)])
-            ws_meta.append([tid, "Статусы файлов", file_info, ""])
-            
-            # 2. Classification notes
-            class_notes = "\n".join(tender.get('classification_notes', []) if isinstance(tender.get('classification_notes'), list) else [])
-            if class_notes:
-                ws_meta.append([tid, "Заметки классификации", class_notes, ""])
                 
-            # 3. Sources from markdown and structured_sections
-            md_sources = set()
-            if final_report_markdown:
-                bracket_matches = re.findall(r'\[(.*?)\]', final_report_markdown)
-                for m in bracket_matches:
-                    if any(kw in m.lower() for kw in ['договор', 'контракт', 'тз', 'задан', 'п.', 'раздел', 'ст.', 'фз', 'закон', 'документаци', 'приложени', 'часть']):
+                # --- Build Полный текст отчета ---
+                if final_report_markdown:
+                    ws_full_report.append([tid, final_report_markdown])
+                else:
+                    ws_full_report.append([tid, FALLBACK_TEXT])
+                
+                # --- Build Документы заявки ---
+                if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "in_application" in sub_sections_data[7] and sub_sections_data[7]["in_application"]:
+                    in_app = sub_sections_data[7]["in_application"]
+                    if isinstance(in_app, list):
+                        for doc_item in in_app:
+                            if isinstance(doc_item, dict):
+                                text = doc_item.get('text', '')
+                                source = doc_item.get('source', '')
+                                ws_app_docs.append([tid, clean_markdown(str(text)), clean_markdown(str(source))])
+                            elif isinstance(doc_item, str):
+                                ws_app_docs.append([tid, clean_markdown(doc_item)])
+                    elif isinstance(in_app, str):
+                        ws_app_docs.append([tid, clean_markdown(in_app)])
+                else:
+                    ws_app_docs.append([tid, get_fallback_text(7)])
+
+                # --- Build Документы при поставке ---
+                if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "on_delivery" in sub_sections_data[7] and sub_sections_data[7]["on_delivery"]:
+                    on_del = sub_sections_data[7]["on_delivery"]
+                    if isinstance(on_del, list):
+                        for doc_item in on_del:
+                            if isinstance(doc_item, dict):
+                                text = doc_item.get('text', '')
+                                source = doc_item.get('source', '')
+                                ws_del_docs.append([tid, clean_markdown(str(text)), clean_markdown(str(source))])
+                            elif isinstance(doc_item, str):
+                                ws_del_docs.append([tid, clean_markdown(doc_item)])
+                    elif isinstance(on_del, str):
+                        ws_del_docs.append([tid, clean_markdown(on_del)])
+                else:
+                    ws_del_docs.append([tid, get_fallback_text(7)])
+
+                # --- Build Противоречия и соответствие ---
+                if 3 in structured_sections and isinstance(structured_sections[3], list) and len(structured_sections[3]) > 0:
+                    for item in structured_sections[3]:
+                        if isinstance(item, dict):
+                            text = item.get('text', '')
+                            details = item.get('details', '')
+                            source = item.get('source', '')
+                            if is_not_found(str(text)): continue
+                            ws_comp.append([tid, clean_markdown(str(text)), clean_markdown(str(details)), clean_markdown(str(source))])
+                else:
+                    ws_comp.append([tid, get_fallback_text(3)])
+
+                # --- Build Краткие риски ---
+                if rows:
+                    for row in rows:
+                        if isinstance(row, dict):
+                            block = row.get('block', '')
+                            finding = row.get('finding', '')
+                            risk_level = row.get('risk_level', 'Medium')
+                            supplier_action = row.get('supplier_action', '')
+                            source_doc = row.get('source_document', '')
+                            source_ref = row.get('source_reference', '')
+                            legal_basis = row.get('legal_basis', '')
+                            source = f"{source_doc} {source_ref}".strip()
+                            ws_risks.append([tid, clean_markdown(str(block)), clean_markdown(str(finding)), clean_markdown(str(risk_level)), clean_markdown(str(supplier_action)), clean_markdown(str(source)), clean_markdown(str(legal_basis))])
+                            risk_count += 1
+                else:
+                    ws_risks.append([tid, "Риски отсутствуют или не найдены", "-", "-", "-", "-", "-"])
+
+                # --- Build Сводка ---
+                has_report = "Да" if final_report_markdown or parsed_sections else "Нет"
+                has_contradictions = "Нет"
+                if 3 in structured_sections and isinstance(structured_sections[3], list):
+                    has_contradictions = "Да" if any(not is_not_found(str(item.get("text", ""))) for item in structured_sections[3] if isinstance(item, dict)) else "Нет"
+
+                # --- Build Источники и служебная инфо ---
+                md_sources = set()
+                if final_report_markdown:
+                    bracket_matches = re.findall(r'\[(.*?)\]', final_report_markdown)
+                    for m in bracket_matches:
+                        if any(kw in m.lower() for kw in ['договор', 'контракт', 'тз', 'задан', 'п.', 'раздел', 'ст.', 'фз', 'закон', 'документаци', 'приложени', 'часть']):
+                            md_sources.add(m.strip())
+                    source_matches = re.findall(r'(?i)источник[и]?\s*[:\-]?\s*([^\n\.\;]+)', final_report_markdown)
+                    for m in source_matches:
                         md_sources.add(m.strip())
-                source_matches = re.findall(r'(?i)источник[и]?\s*[:\-]?\s*([^\n\.\;]+)', final_report_markdown)
-                for m in source_matches:
-                    md_sources.add(m.strip())
-                    
-            for sec_num, sec_data in structured_sections.items():
-                if isinstance(sec_data, list):
-                    for item in sec_data:
-                        if isinstance(item, dict) and 'source' in item and item['source']:
-                            md_sources.add(str(item['source']).strip())
-                elif isinstance(sec_data, dict):
-                    for k, v in sec_data.items():
-                        if isinstance(v, list):
-                            for item in v:
-                                if isinstance(item, dict) and 'source' in item and item['source']:
-                                    md_sources.add(str(item['source']).strip())
+                for sec_num, sec_data in structured_sections.items():
+                    if isinstance(sec_data, list):
+                        for item in sec_data:
+                            if isinstance(item, dict) and 'source' in item and item['source']:
+                                md_sources.add(str(item['source']).strip())
+                for src in md_sources:
+                    ws_meta.append([tid, "Источник (из отчета)", clean_markdown(src), ""])
+                row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
+                for src in row_sources:
+                    if src and src not in md_sources:
+                        ws_meta.append([tid, "Источник (из рисков)", clean_markdown(src), ""])
+
+                logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
+            except Exception as e:
+                logger.error(f"Error processing tender {tid} for Excel: {e}", exc_info=True)
+                notes_full = f"Ошибка при обработке тендера: {str(e)}"
+                has_report = "Ошибка"
+                has_contradictions = "Ошибка"
+                risk_count = 0
             
-            for src in md_sources:
-                ws_meta.append([tid, "Источник (из отчета)", clean_markdown(src), ""])
-            
-            # 4. Sources from rows (if unique)
-            row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
-            for src in row_sources:
-                if src and src not in md_sources:
-                    ws_meta.append([tid, "Источник (из рисков)", clean_markdown(src), ""])
-            
+            # This append to summary is OUTSIDE the try block to ensure it's always added
+            ws_summary.append([tid, risk_count, has_contradictions, has_report, notes_full])
             tenders_added.add(tid)
-            
-            logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
-            logger.info(f"Counts -> risks: {risk_count}, sections: {len(parsed_sections)}, contradictions: {len(contradictions)}")
             
             # Empty row before next tender
             for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
@@ -1019,9 +949,7 @@ async def api_export_risks_excel(data: dict = Body(...)):
         unique_tids_in_results = {str(t.get('id')) for t in results if t.get('id')}
         if len(tenders_added) != len(unique_tids_in_results):
             missing = unique_tids_in_results - tenders_added
-            error_msg = f"Export validation failed: expected {len(unique_tids_in_results)} tenders, but added {len(tenders_added)}. Missing IDs: {missing}"
-            logger.error(error_msg)
-            raise HTTPException(status_code=500, detail=error_msg)
+            logger.warning(f"Export validation warning: expected {len(unique_tids_in_results)} tenders, but added {len(tenders_added)}. Missing IDs: {missing}")
 
         # Add filters
         # Only apply auto_filter to the first row to avoid issues with merged cells

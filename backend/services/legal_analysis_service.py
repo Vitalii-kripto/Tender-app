@@ -428,6 +428,64 @@ class LegalAnalysisService:
             
         return "\n\n".join(full_context)
 
+    def _is_not_found(self, text: str) -> bool:
+        """
+        Проверяет, является ли текст строкой "не найдено".
+        """
+        if not text or not isinstance(text, str):
+            return True
+        
+        not_found_markers = [
+            "не обнаружена", "не найдена", "отсутствует", "не указан", 
+            "не содержит", "информация не найдена", "информация отсутствует",
+            "не удалось найти", "не обнаружено", "not found"
+        ]
+        text_lower = text.lower()
+        # Если текст слишком длинный, это скорее всего реальный контент, а не просто "не найдено"
+        if len(text) > 200:
+            return False
+            
+        return any(marker in text_lower for marker in not_found_markers)
+
+    def _extract_section_from_markdown(self, markdown: str, section_title: str) -> str:
+        """
+        Пытается извлечь содержимое секции из markdown по заголовку.
+        Более гибкий поиск с учетом вариаций заголовков.
+        """
+        if not markdown or not section_title:
+            return ""
+            
+        # Очищаем заголовок от цифр в начале (например "1) " -> "Риски")
+        clean_title = re.sub(r'^\d+[\)\.]\s*', '', section_title).strip()
+        
+        # Список ключевых слов для поиска (если заголовок в markdown короче)
+        keywords = clean_title.split()
+        if len(keywords) > 2:
+            # Берем первые два значимых слова для более гибкого поиска
+            keywords = keywords[:2]
+        
+        keyword_pattern = ".*?".join([re.escape(k) for k in keywords])
+        
+        # Ищем заголовок в markdown (## Заголовок или ### Заголовок)
+        # Используем нечувствительный к регистру поиск и допускаем вариации в пунктуации
+        patterns = [
+            rf"(?i)##\s*.*{re.escape(clean_title)}.*?\n(.*?)(?=\n##|$)",
+            rf"(?i)###\s*.*{re.escape(clean_title)}.*?\n(.*?)(?=\n###|$)",
+            rf"(?i)\*\*{re.escape(clean_title)}\*\*.*?\n(.*?)(?=\n\*\*|$)",
+            # Более гибкий поиск по ключевым словам
+            rf"(?i)##\s*.*{keyword_pattern}.*?\n(.*?)(?=\n##|$)",
+            rf"(?i)###\s*.*{keyword_pattern}.*?\n(.*?)(?=\n###|$)"
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, markdown, re.DOTALL)
+            if match:
+                content = match.group(1).strip()
+                if content and not self._is_not_found(content):
+                    return content
+                    
+        return ""
+
     def _validate_and_filter_rows(self, rows: List[Dict[str, Any]], group_name: str, files: List[Dict[str, str]] = None) -> List[Dict[str, Any]]:
         valid_rows = []
         rejected_rows = []
@@ -459,6 +517,12 @@ class LegalAnalysisService:
                 else:
                     rejected_rows.append({"row": row, "reason": "empty finding and no supplier_action"})
                     continue
+            
+            # Проверка на "не найдено"
+            if self._is_not_found(finding):
+                logger.info(f"Row rejected: 'not found' finding: {finding}")
+                rejected_rows.append({"row": row, "reason": "not found finding"})
+                continue
             
             # Нормализация блока (приведение к каноническим названиям)
             normalized_block_input = block.lower()
@@ -630,6 +694,9 @@ class LegalAnalysisService:
         final_report_sections = res.get('final_report_sections') or {}
         final_report_markdown = res.get('final_report_markdown') or ""
         
+        # Мягкая валидация строк
+        rows = self._validate_and_filter_rows(rows, "full", files)
+        
         # Берем противоречия только из структурированного ответа ИИ
         compliance_data = []
         if isinstance(final_report_sections, dict):
@@ -643,14 +710,16 @@ class LegalAnalysisService:
 
         if isinstance(compliance_data, list):
             for item in compliance_data:
-                if isinstance(item, dict) and item.get("issue") and "не обнаружено" not in str(item.get("issue")).lower():
-                    contradictions.append({
-                        "slot_name": "Противоречие",
-                        "source_1": item.get("source", "Документация"),
-                        "value_1": item.get("issue", ""),
-                        "source_2": "Закон/Документация",
-                        "value_2": item.get("details", "")
-                    })
+                if isinstance(item, dict) and item.get("issue"):
+                    issue = item.get("issue", "")
+                    if not self._is_not_found(issue):
+                        contradictions.append({
+                            "slot_name": "Противоречие",
+                            "source_1": item.get("source", "Документация"),
+                            "value_1": issue,
+                            "source_2": "Закон/Документация",
+                            "value_2": item.get("details", "")
+                        })
         
         logger.info(f"AI response: {len(rows)} raw rows received, {len(final_report_sections)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
@@ -736,8 +805,15 @@ class LegalAnalysisService:
                             formatted_items.append(str(item))
                     
                     content_str = "\n\n".join(formatted_items)
-                    if not content_str.strip():
-                        content_str = "Информация в предоставленной документации не обнаружена."
+                    if self._is_not_found(content_str):
+                        recovered_content = self._extract_section_from_markdown(final_report_markdown, title)
+                        if recovered_content:
+                            logger.info(f"Recovered section '{title}' from markdown (Priority 3)")
+                            content_str = recovered_content
+                            if not content_items or (isinstance(content_items, list) and len(content_items) == 0):
+                                content_items = [recovered_content]
+                        else:
+                            content_str = "Информация в предоставленной документации не обнаружена."
                 
                 section_data = {
                     "section_title": title,
@@ -773,48 +849,79 @@ class LegalAnalysisService:
                 for key, title in section_titles.items():
                     content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
                     
+                    section_data = {
+                        "section_title": title,
+                        "content": "" # Будет заполнено ниже
+                    }
+                    
                     if key == "documents_list" and isinstance(content_items, dict):
                         in_app = content_items.get("in_application", [])
                         on_del = content_items.get("on_delivery", [])
+                        
+                        # Попытка восстановления из markdown если оба списка пусты
+                        if not in_app and not on_del:
+                            recovered_content = self._extract_section_from_markdown(final_report_markdown, title)
+                            if recovered_content:
+                                logger.info(f"Recovered section '{title}' from markdown for Section 7")
+                                # Пытаемся разделить на "в заявку" и "при поставке"
+                                if "составе заявки" in recovered_content.lower() or "при поставке" in recovered_content.lower():
+                                    parts = re.split(r'(?i)(?:в составе заявки|при поставке|в заявку|на поставку):?', recovered_content)
+                                    # Если удалось разделить, берем первую часть как in_app, вторую как on_del
+                                    # Это грубое разделение, но лучше чем ничего
+                                    if len(parts) >= 3:
+                                        in_app = [{"text": parts[1].strip(), "source": "Извлечено из отчета"}]
+                                        on_del = [{"text": parts[2].strip(), "source": "Извлечено из отчета"}]
+                                    else:
+                                        in_app = [{"text": recovered_content, "source": "Извлечено из отчета"}]
+                                else:
+                                    in_app = [{"text": recovered_content, "source": "Извлечено из отчета"}]
+
+                        # Формируем текстовое представление для markdown/просмотра
                         content_str = "**В составе заявки**:\n"
-                        content_str += "\n".join([f"- {i.get('document', i) if isinstance(i, dict) else i}" for i in in_app]) if in_app else "Информация не обнаружена."
+                        content_str += "\n".join([f"- {i.get('text', i) if isinstance(i, dict) else i}" for i in in_app]) if in_app else "Информация не обнаружена."
                         content_str += "\n\n**При поставке**:\n"
-                        content_str += "\n".join([f"- {i.get('document', i) if isinstance(i, dict) else i}" for i in on_del]) if on_del else "Информация не обнаружена."
+                        content_str += "\n".join([f"- {i.get('text', i) if isinstance(i, dict) else i}" for i in on_del]) if on_del else "Информация не обнаружена."
+                        
+                        section_data["content"] = content_str
+                        section_data["sub_sections"] = {
+                            "in_application": in_app,
+                            "on_delivery": on_del
+                        }
                     else:
                         if not isinstance(content_items, list):
                             content_items = [content_items]
                         
+                        # Формируем текстовое представление
                         formatted_items = []
                         for item in content_items:
-                            if not item:
-                                continue
+                            if not item: continue
                             if isinstance(item, dict):
-                                # Форматируем объект в строку для markdown-представления в Excel
-                                parts = []
-                                for k, v in item.items():
-                                    if k != "source":
-                                        parts.append(f"**{k}**: {v}")
-                                if "source" in item:
-                                    parts.append(f"*(Источник: {item['source']})*")
-                                formatted_items.append("\n".join(parts))
+                                # Используем 'text' как основной заголовок, остальные поля как детали
+                                main_text = item.get('text', '')
+                                details = [f"{k}: {v}" for k, v in item.items() if k not in ['text', 'source']]
+                                source = item.get('source', '')
+                                
+                                item_str = f"- {main_text}"
+                                if details:
+                                    item_str += f" ({', '.join(details)})"
+                                if source:
+                                    item_str += f" [Источник: {source}]"
+                                formatted_items.append(item_str)
                             else:
                                 formatted_items.append(str(item))
                         
-                        content_str = "\n\n".join(formatted_items)
-                        if not content_str.strip():
-                            content_str = "Информация в предоставленной документации не обнаружена."
-                    
-                    section_data = {
-                        "section_title": title,
-                        "content": content_str.strip()
-                    }
-                    
-                    if key == "documents_list" and isinstance(content_items, dict):
-                        section_data["sub_sections"] = {
-                            "in_application": content_items.get("in_application", []),
-                            "on_delivery": content_items.get("on_delivery", [])
-                        }
-                    else:
+                        content_str = "\n\n".join(formatted_items) if formatted_items else "Информация не обнаружена."
+                        
+                        # Попытка восстановления из markdown если пусто или "не найдено"
+                        if self._is_not_found(content_str):
+                            recovered_content = self._extract_section_from_markdown(final_report_markdown, title)
+                            if recovered_content:
+                                logger.info(f"Recovered section '{title}' from markdown (Priority 2)")
+                                content_str = recovered_content
+                                if not content_items or (isinstance(content_items, list) and len(content_items) == 0):
+                                    content_items = [{"text": recovered_content, "source": "Извлечено из текста отчета"}]
+                        
+                        section_data["content"] = content_str.strip()
                         section_data["structured_data"] = content_items
                     
                     valid_final_report_sections.append(section_data)
