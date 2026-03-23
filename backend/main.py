@@ -613,38 +613,30 @@ async def api_export_risks_excel(data: dict = Body(...)):
     try:
         wb = openpyxl.Workbook()
         
-        # 1. Сводка
-        ws_summary = wb.active
-        ws_summary.title = "Сводка"
-        ws_summary.append(["ID Тендера", "Кол-во рисков", "Наличие противоречий", "Подробный отчет", "Ключевой вывод"])
-        
-        # 2. Краткие риски
-        ws_risks = wb.create_sheet(title="Краткие риски")
+        # 1. Краткие риски
+        ws_risks = wb.active
+        ws_risks.title = "Краткие риски"
         ws_risks.append(["ID Тендера", "Блок", "Что найдено", "Риск", "Что делать поставщику", "Источник", "Основание"])
         
-        # 3. Подробный отчет
+        # 2. Подробный отчет
         ws_report = wb.create_sheet(title="Подробный отчет")
         ws_report.append(["ID Тендера", "Раздел", "Текст", "Детали / Рекомендация", "Риск / Санкция", "Источник"])
         
-        # 4. Документы заявки
+        # 3. Документы заявки
         ws_app_docs = wb.create_sheet(title="Документы заявки")
         ws_app_docs.append(["ID Тендера", "Наименование документа", "Источник"])
         
-        # 5. Документы при поставке
+        # 4. Документы при поставке
         ws_del_docs = wb.create_sheet(title="Документы при поставке")
         ws_del_docs.append(["ID Тендера", "Наименование документа", "Источник"])
         
-        # 6. Противоречия и соответствие
+        # 5. Противоречия и соответствие
         ws_comp = wb.create_sheet(title="Противоречия и соответствие")
         ws_comp.append(["ID Тендера", "Суть противоречия", "Детали", "Источник"])
         
-        # 7. Полный текст отчета
+        # 6. Полный текст отчета
         ws_full_report = wb.create_sheet(title="Полный текст отчета")
         ws_full_report.append(["ID Тендера", "Полный текст отчета (Markdown)"])
-        
-        # 8. Источники и служебная информация
-        ws_meta = wb.create_sheet(title="Источники и служебная инфо")
-        ws_meta.append(["ID Тендера", "Тип инфо", "Содержание", "Детали"])
         
         # Style headers
         header_font = Font(bold=True, color="FFFFFF")
@@ -775,8 +767,8 @@ async def api_export_risks_excel(data: dict = Body(...)):
                             return clean_markdown(content)
                     return EMPTY_SECTION_TEXT
 
-                # --- Visual separation for all sheets except Сводка ---
-                for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
+                # --- Visual separation for all sheets ---
+                for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report]:
                     ws.append([f"ТЕНДЕР: {tid}"])
                     ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
                     ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
@@ -899,48 +891,15 @@ async def api_export_risks_excel(data: dict = Body(...)):
                 else:
                     ws_risks.append([tid, "Риски отсутствуют или не найдены", "-", "-", "-", "-", "-"])
 
-                # --- Build Сводка ---
-                has_report = "Да" if final_report_markdown or parsed_sections else "Нет"
-                has_contradictions = "Нет"
-                if 3 in structured_sections and isinstance(structured_sections[3], list):
-                    has_contradictions = "Да" if any(not is_not_found(str(item.get("text", ""))) for item in structured_sections[3] if isinstance(item, dict)) else "Нет"
-
-                # --- Build Источники и служебная инфо ---
-                md_sources = set()
-                if final_report_markdown:
-                    bracket_matches = re.findall(r'\[(.*?)\]', final_report_markdown)
-                    for m in bracket_matches:
-                        if any(kw in m.lower() for kw in ['договор', 'контракт', 'тз', 'задан', 'п.', 'раздел', 'ст.', 'фз', 'закон', 'документаци', 'приложени', 'часть']):
-                            md_sources.add(m.strip())
-                    source_matches = re.findall(r'(?i)источник[и]?\s*[:\-]?\s*([^\n\.\;]+)', final_report_markdown)
-                    for m in source_matches:
-                        md_sources.add(m.strip())
-                for sec_num, sec_data in structured_sections.items():
-                    if isinstance(sec_data, list):
-                        for item in sec_data:
-                            if isinstance(item, dict) and 'source' in item and item['source']:
-                                md_sources.add(str(item['source']).strip())
-                for src in md_sources:
-                    ws_meta.append([tid, "Источник (из отчета)", clean_markdown(src), ""])
-                row_sources = {f"{r.get('source_document', '')} {r.get('source_reference', '')}".strip() for r in rows if isinstance(r, dict)}
-                for src in row_sources:
-                    if src and src not in md_sources:
-                        ws_meta.append([tid, "Источник (из рисков)", clean_markdown(src), ""])
-
                 logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
             except Exception as e:
                 logger.error(f"Error processing tender {tid} for Excel: {e}", exc_info=True)
                 notes_full = f"Ошибка при обработке тендера: {str(e)}"
-                has_report = "Ошибка"
-                has_contradictions = "Ошибка"
-                risk_count = 0
             
-            # This append to summary is OUTSIDE the try block to ensure it's always added
-            ws_summary.append([tid, risk_count, has_contradictions, has_report, notes_full])
             tenders_added.add(tid)
             
             # Empty row before next tender
-            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report, ws_meta]:
+            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report]:
                 ws.append([])
 
         logger.info("Excel export data prepared successfully")

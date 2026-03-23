@@ -617,16 +617,6 @@ class LegalAnalysisService:
 
 
 
-    def _add_missing_critical_topics(self, evidence_package: Dict[str, Any], existing_rows: List[Dict[str, Any]], final_report_sections: Dict[str, Any] = None, final_report_markdown: str = "", full_context: str = "") -> List[Dict[str, Any]]:
-        """
-        Добавляет строки "не найдено" для критически важных тем, если они отсутствуют и в ИИ-ответе, и в полном контексте.
-        """
-        # Пользователь: Запретить автодобавление строк `не найдено`, если соответствующая информация уже есть... 
-        # В первую очередь убрать ложные `не найдено` по темам: разгрузка, срок оплаты, срок приемки, документы при поставке, состав заявки, нацрежим / ограничения.
-        # Возвращаем пустой список, чтобы полностью отключить эту логику, так как ИИ сам пишет "Информация не обнаружена" в markdown.
-        logger.info("Skipping _add_missing_critical_topics as per user request to avoid false negatives.")
-        return []
-
     def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
         Основной метод анализа полного пакета документов.
@@ -650,26 +640,23 @@ class LegalAnalysisService:
         
         self._log_progress("Анализ документации", 30, callback=callback)
 
-        # 1. Вспомогательное извлечение улик (теперь идет первым для определения ролей)
+        # 1. Вспомогательное извлечение улик (ТОЛЬКО ДЛЯ ЛОГОВ)
         logger.info("--- [AUXILIARY SLOT EXTRACTION START] ---")
-        evidence_package = self.evidence_collector.collect_evidence(files)
-        
-        formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
-        logger.info(formatted_evidence)
+        try:
+            evidence_package = self.evidence_collector.collect_evidence(files)
+            formatted_evidence = self.evidence_collector.format_for_llm(evidence_package)
+            logger.info(formatted_evidence)
+            
+            aux_contradictions = evidence_package.get("contradictions", [])
+            if aux_contradictions:
+                logger.info(f"Found {len(aux_contradictions)} contradictions (auxiliary - LOG ONLY)")
+                for c in aux_contradictions:
+                    logger.info(f"Contradiction: {c.get('slot_name')} - {c.get('source_1')} vs {c.get('source_2')}")
+        except Exception as e:
+            logger.error(f"Error during auxiliary slot extraction (logging only): {e}")
         logger.info("--- [AUXILIARY SLOT EXTRACTION END] ---")
         
-        found_slots = [slot_id for slot_id, items in evidence_package.get("slots", {}).items() if items]
-        logger.info(f"Summary of found slots: {found_slots}")
-        
         # Пользователь: Полностью убрать влияние мусорных auxiliary slots на финальный результат.
-        # Slot extraction оставить только как вспомогательный слой для логов и диагностики.
-        aux_contradictions = evidence_package.get("contradictions", [])
-        if aux_contradictions:
-            logger.info(f"Found {len(aux_contradictions)} contradictions (auxiliary - LOG ONLY)")
-            for c in aux_contradictions:
-                logger.info(f"Contradiction: {c.get('slot_name')} - {c.get('source_1')} vs {c.get('source_2')}")
-        
-        # Запретить формирование contradictions по несопоставимым фрагментам.
         # Оставляем пустой список, чтобы не портить Excel и финальный отчет.
         contradictions = []
 
@@ -854,9 +841,27 @@ class LegalAnalysisService:
                         "content": "" # Будет заполнено ниже
                     }
                     
-                    if key == "documents_list" and isinstance(content_items, dict):
-                        in_app = content_items.get("in_application", [])
-                        on_del = content_items.get("on_delivery", [])
+                    if key == "documents_list":
+                        in_app = []
+                        on_del = []
+                        
+                        if isinstance(content_items, dict):
+                            in_app = content_items.get("in_application", [])
+                            on_del = content_items.get("on_delivery", [])
+                        elif isinstance(content_items, list):
+                            # Если ИИ вернул список вместо словаря, пытаемся распределить
+                            # (хотя промпт требует словарь)
+                            for item in content_items:
+                                text = ""
+                                if isinstance(item, dict):
+                                    text = item.get('text', '')
+                                else:
+                                    text = str(item)
+                                
+                                if "поставке" in text.lower() or "приемке" in text.lower() or "delivery" in text.lower():
+                                    on_del.append(item)
+                                else:
+                                    in_app.append(item)
                         
                         # Попытка восстановления из markdown если оба списка пусты
                         if not in_app and not on_del:
@@ -866,8 +871,6 @@ class LegalAnalysisService:
                                 # Пытаемся разделить на "в заявку" и "при поставке"
                                 if "составе заявки" in recovered_content.lower() or "при поставке" in recovered_content.lower():
                                     parts = re.split(r'(?i)(?:в составе заявки|при поставке|в заявку|на поставку):?', recovered_content)
-                                    # Если удалось разделить, берем первую часть как in_app, вторую как on_del
-                                    # Это грубое разделение, но лучше чем ничего
                                     if len(parts) >= 3:
                                         in_app = [{"text": parts[1].strip(), "source": "Извлечено из отчета"}]
                                         on_del = [{"text": parts[2].strip(), "source": "Извлечено из отчета"}]
@@ -916,24 +919,25 @@ class LegalAnalysisService:
                         if self._is_not_found(content_str):
                             recovered_content = self._extract_section_from_markdown(final_report_markdown, title)
                             if recovered_content:
-                                logger.info(f"Recovered section '{title}' from markdown (Priority 2)")
+                                logger.warning(f"QUALITY ERROR: Section '{title}' was missing in structured data but found in markdown. Recovering...")
                                 content_str = recovered_content
+                                
+                                # Если в восстановленном тексте есть пункты списка, пытаемся разделить их
                                 if not content_items or (isinstance(content_items, list) and len(content_items) == 0):
-                                    content_items = [{"text": recovered_content, "source": "Извлечено из текста отчета"}]
+                                    # Ищем пункты списка (-, *, 1., 1) и т.д.)
+                                    items = re.split(r'\n\s*[-*•]\s*|\n\s*\d+[\)\.]\s*', '\n' + recovered_content)
+                                    items = [item.strip() for item in items if item.strip()]
+                                    
+                                    if len(items) > 1:
+                                        content_items = [{"text": item, "source": "Извлечено из текста отчета (восстановление)"} for item in items]
+                                    else:
+                                        content_items = [{"text": recovered_content, "source": "Извлечено из текста отчета (восстановление)"}]
                         
                         section_data["content"] = content_str.strip()
                         section_data["structured_data"] = content_items
                     
                     valid_final_report_sections.append(section_data)
 
-        # Добавляем недостающие критические темы только в rows (сводку), 
-        # но не трогаем основной markdown отчет, чтобы не портить его структуру "техническими" вставками.
-        added_rows = self._add_missing_critical_topics(evidence_package, rows, final_report_sections, final_report_markdown, full_context)
-        rows += added_rows
-        logger.info(f"Rows after adding {len(added_rows)} critical topics: {len(rows)}")
-        if added_rows:
-            logger.info(f"Automatically added rows details: {json.dumps(added_rows, ensure_ascii=False)}")
-        
         all_notes = res.get('summary_notes', [])
         
         self._log_progress("Формирование отчета", 95, callback=callback)
