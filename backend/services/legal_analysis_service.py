@@ -163,17 +163,22 @@ class LegalAnalysisService:
         ]
         
         procurement_signals = [
-            "извещение", "описание объекта закупки", "техническое задание",
-            "инструкция по заполнению заявки", "требования к содержанию заявки",
+            "извещение", "инструкция по заполнению заявки", "требования к содержанию заявки",
             "состав заявки", "критерии оценки", "порядок рассмотрения заявок",
             "основания отклонения", "участник закупки", "национальный режим",
             "реестровый номер", "страна происхождения", "обоснование нмцк",
             "начальная максимальная цена", "условия допуска", "ограничение допуска",
             "преимущества", "запрет", "характеристики товара"
         ]
+        
+        tz_signals = [
+            "техническое задание", "описание объекта закупки", "спецификация",
+            "требования к товару", "требования к материалам", "показатели товара"
+        ]
 
         strong_contract_signals = ["проект контракта", "проект договора", "цена контракта", "ответственность сторон", "порядок расчетов"]
         strong_procurement_signals = ["извещение", "требования к содержанию заявки", "инструкция по заполнению заявки"]
+        strong_tz_signals = ["техническое задание", "описание объекта закупки"]
 
         for f in files:
             filename = f.get('filename', 'unknown')
@@ -186,8 +191,10 @@ class LegalAnalysisService:
                     "category": "unclassified_due_to_no_text",
                     "contract_score": 0,
                     "procurement_score": 0,
+                    "tz_score": 0,
                     "matched_contract_signals": [],
                     "matched_procurement_signals": [],
+                    "matched_tz_signals": [],
                     "classification_reason": "Текст слишком короткий или не извлечен"
                 })
                 continue
@@ -196,8 +203,10 @@ class LegalAnalysisService:
             
             c_score = 0
             p_score = 0
+            tz_score = 0
             matched_c = []
             matched_p = []
+            matched_tz = []
             
             for sig in contract_signals:
                 if sig in text_to_analyze:
@@ -210,8 +219,18 @@ class LegalAnalysisService:
                     weight = 3 if sig in strong_procurement_signals else 1
                     p_score += weight
                     matched_p.append(sig)
+                    
+            for sig in tz_signals:
+                if sig in text_to_analyze:
+                    weight = 3 if sig in strong_tz_signals else 1
+                    tz_score += weight
+                    matched_tz.append(sig)
 
-            if c_score >= 3 and p_score < 3:
+            # ТЗ имеет приоритет над контрактом, если есть сильные сигналы ТЗ
+            if tz_score >= 3 and (any(sig in text_to_analyze for sig in strong_tz_signals) or "техническое задание" in filename.lower() or "описание объекта" in filename.lower()):
+                category = "tz"
+                reason = f"Найдено {len(matched_tz)} признаков ТЗ: {', '.join(matched_tz[:3])}..."
+            elif c_score >= 3 and p_score < 3:
                 category = "contract"
                 reason = f"Найдено {len(matched_c)} договорных признаков: {', '.join(matched_c[:3])}..."
             elif p_score >= 3 and c_score < 3:
@@ -224,7 +243,7 @@ class LegalAnalysisService:
                 category = "unclassified"
                 reason = "Текст слишком короткий или признаки не обнаружены"
 
-            if any(sig in text_to_analyze for sig in strong_contract_signals):
+            if any(sig in text_to_analyze for sig in strong_contract_signals) and category != "tz":
                 has_contract = True
 
             classification_data = {
@@ -232,13 +251,15 @@ class LegalAnalysisService:
                 "category": category,
                 "contract_score": c_score,
                 "procurement_score": p_score,
+                "tz_score": tz_score,
                 "matched_contract_signals": matched_c,
                 "matched_procurement_signals": matched_p,
+                "matched_tz_signals": matched_tz,
                 "classification_reason": reason
             }
             file_classifications.append(classification_data)
             
-            logger.info(f"Classified {filename} (len: {len(text)}): category={category}, c_score={c_score}, p_score={p_score}, matched_c={matched_c}, matched_p={matched_p}, reason={reason}")
+            logger.info(f"Classified {filename} (len: {len(text)}): category={category}, c_score={c_score}, p_score={p_score}, tz_score={tz_score}, reason={reason}")
 
         classification_notes = []
         if not has_contract:
@@ -379,37 +400,16 @@ class LegalAnalysisService:
             callback(stage, progress, status)
         logger.info(f"Stage: {stage}, Progress: {progress}%")
 
-    def _prepare_full_context(self, files: List[Dict[str, str]], evidence_package: Dict[str, Any] = None) -> str:
+    def _prepare_full_context(self, files: List[Dict[str, str]]) -> str:
         """
         Подготавливает полный очищенный контекст из всех документов.
         Извлекает текст, очищает его и размечает явными границами.
         """
         full_context = []
         
-        # Маппинг ролей документов из EvidenceCollector
-        roles_map = {}
-        if evidence_package and "documents" in evidence_package:
-            for doc in evidence_package["documents"]:
-                roles_map[doc.get('filename')] = doc.get('role')
-        
-        # Русские названия для ролей
-        role_labels = {
-            "contract": "Проект контракта",
-            "procurement": "Извещение / Информационная карта",
-            "tz": "Техническое задание / Описание объекта закупки",
-            "application_rules": "Требования к заявке / Инструкция",
-            "nmck": "Обоснование НМЦК",
-            "mixed": "Смешанный документ (закупка + контракт)",
-            "unknown": "Не определен"
-        }
-        
         for f in files:
             filename = f.get('filename', 'unknown')
             text = f.get('text', '')
-            raw_role = roles_map.get(filename, "unknown")
-            role_label = role_labels.get(raw_role, "Не определен")
-            
-            logger.info(f"Document role: {filename} -> {role_label} ({raw_role})")
             
             if not text or len(text.strip()) < 10:
                 logger.warning(f"Document {filename} has no meaningful text, skipping from context")
@@ -421,7 +421,6 @@ class LegalAnalysisService:
             # Разметка документа с явными границами (согласно требованиям)
             doc_block = (
                 f"=== ДОКУМЕНТ: {filename} ===\n"
-                f"=== ТИП ДОКУМЕНТА: {role_label} ===\n"
                 f"{cleaned_text}\n"
                 f"=== КОНЕЦ ДОКУМЕНТА ==="
             )
@@ -612,7 +611,7 @@ class LegalAnalysisService:
 
         # 2. Подготовка полного контекста (основной вход для модели)
         logger.info(f"Preparing full context from {len(files)} files...")
-        full_context = self._prepare_full_context(files, evidence_package)
+        full_context = self._prepare_full_context(files)
         logger.info(f"Full context size: {len(full_context)} characters")
         
         logger.info("--- [ASSEMBLED FULL CLEANED CONTEXT START] ---")
@@ -630,6 +629,29 @@ class LegalAnalysisService:
         rows = res.get('rows') or []
         final_report_sections = res.get('final_report_sections') or {}
         final_report_markdown = res.get('final_report_markdown') or ""
+        
+        # Берем противоречия только из структурированного ответа ИИ
+        compliance_data = []
+        if isinstance(final_report_sections, dict):
+            compliance_data = final_report_sections.get("compliance_check", [])
+        elif isinstance(final_report_sections, list):
+            # Если ИИ вернул список, поищем объект с нужным заголовком
+            for sec in final_report_sections:
+                if isinstance(sec, dict) and "compliance_check" in sec.get("section_title", "").lower():
+                    compliance_data = sec.get("structured_data", [])
+                    break
+
+        if isinstance(compliance_data, list):
+            for item in compliance_data:
+                if isinstance(item, dict) and item.get("issue") and "не обнаружено" not in str(item.get("issue")).lower():
+                    contradictions.append({
+                        "slot_name": "Противоречие",
+                        "source_1": item.get("source", "Документация"),
+                        "value_1": item.get("issue", ""),
+                        "source_2": "Закон/Документация",
+                        "value_2": item.get("details", "")
+                    })
+        
         logger.info(f"AI response: {len(rows)} raw rows received, {len(final_report_sections)} detailed report sections, markdown length: {len(final_report_markdown)}")
         
         logger.info("--- [RAW ROWS START] ---")
@@ -741,47 +763,61 @@ class LegalAnalysisService:
             
             # Для совместимости (например, для Excel) все равно подготовим секции, 
             # но берем их из AI ответа без модификаций.
-            for key, title in section_titles.items():
-                content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
-                
-                if key == "documents_list" and isinstance(content_items, dict):
-                    in_app = content_items.get("in_application", [])
-                    on_del = content_items.get("on_delivery", [])
-                    content_str = "**В составе заявки**:\n"
-                    content_str += "\n".join([f"- {i}" for i in in_app]) if in_app else "Информация не обнаружена."
-                    content_str += "\n\n**При поставке**:\n"
-                    content_str += "\n".join([f"- {i}" for i in on_del]) if on_del else "Информация не обнаружена."
-                else:
-                    if not isinstance(content_items, list):
-                        content_items = [content_items]
+            if isinstance(final_report_sections, list):
+                # Если уже список, просто переносим (но проверяем структуру)
+                for sec in final_report_sections:
+                    if isinstance(sec, dict) and "section_title" in sec:
+                        valid_final_report_sections.append(sec)
+            else:
+                # Если словарь, конвертируем в список секций
+                for key, title in section_titles.items():
+                    content_items = final_report_sections.get(key, []) if isinstance(final_report_sections, dict) else []
                     
-                    formatted_items = []
-                    for item in content_items:
-                        if not item:
-                            continue
-                        if isinstance(item, dict):
-                            formatted_items.append("\n".join([f"- **{k}**: {v}" for k, v in item.items()]))
-                        else:
-                            formatted_items.append(str(item))
+                    if key == "documents_list" and isinstance(content_items, dict):
+                        in_app = content_items.get("in_application", [])
+                        on_del = content_items.get("on_delivery", [])
+                        content_str = "**В составе заявки**:\n"
+                        content_str += "\n".join([f"- {i.get('document', i) if isinstance(i, dict) else i}" for i in in_app]) if in_app else "Информация не обнаружена."
+                        content_str += "\n\n**При поставке**:\n"
+                        content_str += "\n".join([f"- {i.get('document', i) if isinstance(i, dict) else i}" for i in on_del]) if on_del else "Информация не обнаружена."
+                    else:
+                        if not isinstance(content_items, list):
+                            content_items = [content_items]
+                        
+                        formatted_items = []
+                        for item in content_items:
+                            if not item:
+                                continue
+                            if isinstance(item, dict):
+                                # Форматируем объект в строку для markdown-представления в Excel
+                                parts = []
+                                for k, v in item.items():
+                                    if k != "source":
+                                        parts.append(f"**{k}**: {v}")
+                                if "source" in item:
+                                    parts.append(f"*(Источник: {item['source']})*")
+                                formatted_items.append("\n".join(parts))
+                            else:
+                                formatted_items.append(str(item))
+                        
+                        content_str = "\n\n".join(formatted_items)
+                        if not content_str.strip():
+                            content_str = "Информация в предоставленной документации не обнаружена."
                     
-                    content_str = "\n\n".join(formatted_items)
-                    if not content_str.strip():
-                        content_str = "Информация в предоставленной документации не обнаружена."
-                
-                section_data = {
-                    "section_title": title,
-                    "content": content_str.strip()
-                }
-                
-                if key == "documents_list" and isinstance(content_items, dict):
-                    section_data["sub_sections"] = {
-                        "in_application": content_items.get("in_application", []),
-                        "on_delivery": content_items.get("on_delivery", [])
+                    section_data = {
+                        "section_title": title,
+                        "content": content_str.strip()
                     }
-                else:
-                    section_data["structured_data"] = content_items
-                
-                valid_final_report_sections.append(section_data)
+                    
+                    if key == "documents_list" and isinstance(content_items, dict):
+                        section_data["sub_sections"] = {
+                            "in_application": content_items.get("in_application", []),
+                            "on_delivery": content_items.get("on_delivery", [])
+                        }
+                    else:
+                        section_data["structured_data"] = content_items
+                    
+                    valid_final_report_sections.append(section_data)
 
         # Добавляем недостающие критические темы только в rows (сводку), 
         # но не трогаем основной markdown отчет, чтобы не портить его структуру "техническими" вставками.

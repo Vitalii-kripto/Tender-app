@@ -66,11 +66,13 @@ export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupporte
 
 export interface FileClassification {
   filename: string;
-  category: 'contract' | 'procurement' | 'mixed' | 'unclassified' | 'unclassified_due_to_no_text';
+  category: 'contract' | 'procurement' | 'tz' | 'mixed' | 'unclassified' | 'unclassified_due_to_no_text';
   contract_score: number;
   procurement_score: number;
+  tz_score?: number;
   matched_contract_signals: string[];
   matched_procurement_signals: string[];
+  matched_tz_signals?: string[];
   classification_reason: string;
 }
 

@@ -631,7 +631,7 @@ const Analysis = () => {
                                             <div>
                                                 <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
                                                 <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                                                    {['contract', 'procurement', 'mixed', 'unclassified', 'unclassified_due_to_no_text'].map((category) => {
+                                                    {['contract', 'procurement', 'tz', 'mixed', 'unclassified', 'unclassified_due_to_no_text'].map((category) => {
                                                         const filesInCategory = result.file_classifications!.filter(fc => fc.category === category);
                                                         if (filesInCategory.length === 0) return null;
                                                         
@@ -639,6 +639,7 @@ const Analysis = () => {
                                                         let categoryColor = '';
                                                         if (category === 'contract') { categoryTitle = 'Договорные документы'; categoryColor = 'text-emerald-600 bg-emerald-50 border-emerald-100'; }
                                                         else if (category === 'procurement') { categoryTitle = 'Закупочная документация'; categoryColor = 'text-blue-600 bg-blue-50 border-blue-100'; }
+                                                        else if (category === 'tz') { categoryTitle = 'Техническое задание'; categoryColor = 'text-purple-600 bg-purple-50 border-purple-100'; }
                                                         else if (category === 'mixed') { categoryTitle = 'Смешанные документы'; categoryColor = 'text-amber-600 bg-amber-50 border-amber-100'; }
                                                         else if (category === 'unclassified') { categoryTitle = 'Не классифицировано'; categoryColor = 'text-slate-600 bg-slate-50 border-slate-200'; }
                                                         else if (category === 'unclassified_due_to_no_text') { categoryTitle = 'Не классифицировано (нет текста)'; categoryColor = 'text-red-600 bg-red-50 border-red-100'; }
