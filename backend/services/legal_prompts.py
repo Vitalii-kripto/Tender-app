@@ -58,17 +58,20 @@ PROMPT_FULL_PACKAGE = """
   "rows": [ { "block": "Название раздела (например, 'Проверка соответствия документации и закона' для противоречий)", "finding": "...", "risk_level": "...", "supplier_action": "...", "source_document": "...", "source_reference": "..." } ],
   "summary_notes": ["3-5 главных вывода"],
   "final_report_sections": {
-    "risks_execution": [],
-    "rejection_risks": [],
-    "compliance_check": [],
-    "delivery_acceptance": [],
-    "payment_terms": [],
-    "liability": [],
-    "documents_list": { "in_application": [], "on_delivery": [] },
-    "registries_restrictions": [],
-    "supplier_recommendations": []
+    "risks_execution": [{"risk": "...", "level": "...", "recommendation": "...", "source": "..."}],
+    "rejection_risks": [{"reason": "...", "how_to_avoid": "...", "source": "..."}],
+    "compliance_check": [{"issue": "...", "details": "...", "source": "..."}],
+    "delivery_acceptance": [{"parameter": "...", "condition": "...", "source": "..."}],
+    "payment_terms": [{"parameter": "...", "condition": "...", "source": "..."}],
+    "liability": [{"violation": "...", "sanction": "...", "source": "..."}],
+    "documents_list": { "in_application": [{"document": "...", "source": "..."}], "on_delivery": [{"document": "...", "source": "..."}] },
+    "registries_restrictions": [{"requirement": "...", "details": "...", "source": "..."}],
+    "supplier_recommendations": [{"step": "...", "basis": "..."}]
   }
 }
+
+ПРАВИЛО ДЛЯ final_report_sections:
+Запрещено возвращать плоские списки коротких строк. final_report_sections обязан содержать подробные структурированные записи (массивы объектов), пригодные для прямой выгрузки в Excel без дополнительного смыслового разбора.
 
 ПОЛНЫЙ КОНТЕКСТ ТЕНДЕРНОЙ ДОКУМЕНТАЦИИ:
 __TEXT__

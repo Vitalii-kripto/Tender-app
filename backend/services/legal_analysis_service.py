@@ -704,7 +704,16 @@ class LegalAnalysisService:
                     # Мы больше не подмешиваем технические противоречия из слотов. 
                     # Доверяем только тому, что нашел ИИ.
                     
-                    content_str = "\n\n".join([str(item) for item in content_items if item])
+                    formatted_items = []
+                    for item in content_items:
+                        if not item:
+                            continue
+                        if isinstance(item, dict):
+                            formatted_items.append("\n".join([f"- **{k}**: {v}" for k, v in item.items()]))
+                        else:
+                            formatted_items.append(str(item))
+                    
+                    content_str = "\n\n".join(formatted_items)
                     if not content_str.strip():
                         content_str = "Информация в предоставленной документации не обнаружена."
                 
@@ -718,6 +727,8 @@ class LegalAnalysisService:
                         "in_application": content_items.get("in_application", []),
                         "on_delivery": content_items.get("on_delivery", [])
                     }
+                else:
+                    section_data["structured_data"] = content_items
                 
                 valid_final_report_sections.append(section_data)
                 
@@ -744,7 +755,16 @@ class LegalAnalysisService:
                     if not isinstance(content_items, list):
                         content_items = [content_items]
                     
-                    content_str = "\n\n".join([str(item) for item in content_items if item])
+                    formatted_items = []
+                    for item in content_items:
+                        if not item:
+                            continue
+                        if isinstance(item, dict):
+                            formatted_items.append("\n".join([f"- **{k}**: {v}" for k, v in item.items()]))
+                        else:
+                            formatted_items.append(str(item))
+                    
+                    content_str = "\n\n".join(formatted_items)
                     if not content_str.strip():
                         content_str = "Информация в предоставленной документации не обнаружена."
                 
@@ -758,6 +778,8 @@ class LegalAnalysisService:
                         "in_application": content_items.get("in_application", []),
                         "on_delivery": content_items.get("on_delivery", [])
                     }
+                else:
+                    section_data["structured_data"] = content_items
                 
                 valid_final_report_sections.append(section_data)
 
