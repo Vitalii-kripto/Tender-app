@@ -51,49 +51,15 @@ export interface LegalRisk {
   description: string;
 }
 
-export interface LegalAnalysisRow {
-  block: string;
-  finding: string;
-  risk_level: 'High' | 'Medium' | 'Low';
-  supplier_action: string;
-  source_document: string;
-  source_reference: string;
-  legal_basis?: string;
-  doc_group?: 'contract' | 'other' | 'full';
-}
-
 export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupported_format' | 'empty_file' | 'extract_error' | 'ok';
-
-export interface FileClassification {
-  filename: string;
-  category: 'contract' | 'procurement' | 'tz' | 'mixed' | 'unclassified' | 'unclassified_due_to_no_text';
-  contract_score: number;
-  procurement_score: number;
-  tz_score?: number;
-  matched_contract_signals: string[];
-  matched_procurement_signals: string[];
-  matched_tz_signals?: string[];
-  classification_reason: string;
-}
-
-export interface LegalAnalysisDetailedReportSection {
-  section_title: string;
-  content: string;
-}
 
 export interface LegalAnalysisResult {
   id: string;
   status: 'success' | 'error' | 'partial';
-  summary_notes: string[];
-  rows: LegalAnalysisRow[];
-  final_report_sections?: LegalAnalysisDetailedReportSection[];
   final_report_markdown?: string;
-  has_contract: boolean;
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
   showDoc?: boolean;
-  classification_notes?: string[];
-  file_classifications?: FileClassification[];
   stage?: string;
   progress?: number;
   selected_files_count?: number;

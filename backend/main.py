@@ -4,17 +4,15 @@ import sys
 import os
 import logging
 import tempfile
-import openpyxl
 import re
 import sqlite3
 from dotenv import load_dotenv
 
 # Загружаем переменные окружения в самом начале
 load_dotenv()
-from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-from openpyxl.utils import get_column_letter
-from openpyxl.cell.cell import MergedCell
 from typing import List, Dict, Any
+from docx import Document
+from docx.shared import Pt, RGBColor
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
 from fastapi.responses import FileResponse
@@ -602,363 +600,102 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "is_demo": False
     }
 
-@app.post("/api/ai/export-risks-excel")
-async def api_export_risks_excel(data: dict = Body(...)):
-    """Экспорт результатов анализа рисков в Excel .xlsx"""
-    logger.info("Excel export started")
+from backend.markdown_parser import add_markdown_to_docx
+import zipfile
+import io
+
+@app.post("/api/ai/export-risks-word")
+async def api_export_risks_word(data: dict = Body(...)):
+    """Экспорт результатов анализа рисков в Word .docx (или ZIP для нескольких)"""
+    logger.info("Word export started")
     results = data.get('results', [])
     if not results:
         raise HTTPException(status_code=400, detail="No results to export")
 
     try:
-        wb = openpyxl.Workbook()
-        
-        # 1. Краткие риски
-        ws_risks = wb.active
-        ws_risks.title = "Краткие риски"
-        ws_risks.append(["ID Тендера", "Блок", "Что найдено", "Риск", "Что делать поставщику", "Источник", "Основание"])
-        
-        # 2. Подробный отчет
-        ws_report = wb.create_sheet(title="Подробный отчет")
-        ws_report.append(["ID Тендера", "Раздел", "Текст", "Детали / Рекомендация", "Риск / Санкция", "Источник"])
-        
-        # 3. Документы заявки
-        ws_app_docs = wb.create_sheet(title="Документы заявки")
-        ws_app_docs.append(["ID Тендера", "Наименование документа", "Источник"])
-        
-        # 4. Документы при поставке
-        ws_del_docs = wb.create_sheet(title="Документы при поставке")
-        ws_del_docs.append(["ID Тендера", "Наименование документа", "Источник"])
-        
-        # 5. Противоречия и соответствие
-        ws_comp = wb.create_sheet(title="Противоречия и соответствие")
-        ws_comp.append(["ID Тендера", "Суть противоречия", "Детали", "Источник"])
-        
-        # 6. Полный текст отчета
-        ws_full_report = wb.create_sheet(title="Полный текст отчета")
-        ws_full_report.append(["ID Тендера", "Полный текст отчета (Markdown)"])
-        
-        # Style headers
-        header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-        for ws in wb.worksheets:
-            for cell in ws[1]:
-                cell.font = header_font
-                cell.fill = header_fill
-                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-            # Set default column width
-            for i in range(1, ws.max_column + 1):
-                ws.column_dimensions[get_column_letter(i)].width = 30
-                
-        tenders_added = set()
-        
-        def is_not_found(text: str) -> bool:
-            if not text or not isinstance(text, str):
-                return True
-            not_found_markers = [
-                "не обнаружена", "не найдена", "отсутствует", "не указан", 
-                "не содержит", "информация не найдена", "информация отсутствует",
-                "не удалось найти", "не обнаружено", "not found"
-            ]
-            text_lower = text.lower()
-            if len(text) > 200:
-                return False
-            return any(marker in text_lower for marker in not_found_markers)
-
-        for tender in results:
+        if len(results) == 1:
+            # Single file export
+            tender = results[0]
             tid = str(tender.get('id', 'N/A'))
             desc = tender.get('description', 'Нет описания')
+            final_report_markdown = tender.get('final_report_markdown') or ""
+            file_statuses = tender.get('file_statuses', [])
             
-            # Initialize variables to avoid UnboundLocalError
-            risk_count = 0
-            has_report = "Нет"
-            has_contradictions = "Нет"
-            notes_full = ""
-            parsed_sections = {}
-            structured_sections = {}
-            contradictions = []
-            final_report_markdown = ""
+            doc = Document()
+            style = doc.styles['Normal']
+            font = style.font
+            font.name = 'Arial'
+            font.size = Pt(11)
             
-            try:
-                file_statuses = tender.get('file_statuses') or []
-                if not isinstance(file_statuses, list): file_statuses = []
-                
-                rows = tender.get('rows') or []
-                if not isinstance(rows, list): rows = []
-                
-                summary_notes = tender.get('summary_notes') or []
-                if not isinstance(summary_notes, list): 
-                    summary_notes = [str(summary_notes)] if summary_notes else []
-                notes_full = "\n".join(summary_notes)
-                
-                final_report_sections = tender.get('final_report_sections') or []
-                if not isinstance(final_report_sections, (list, dict)): final_report_sections = []
-                
-                contradictions = tender.get('contradictions') or []
-                if not isinstance(contradictions, list): contradictions = []
-                
-                final_report_markdown = tender.get('final_report_markdown') or ""
-                if not isinstance(final_report_markdown, str): final_report_markdown = ""
-                
-                logger.info(f"--- [EXCEL EXPORT PREPARATION FOR TENDER: {tid}] ---")
-                
-                # 1. Populate parsed_sections from final_report_sections (Priority 1)
-                section_sources = {}
-                sub_sections_data = {}
-
-                section_title_mapping = {
-                    "1) Риски участия и исполнения договора": 1,
-                    "2) Риски недопуска заявки и потери баллов": 2,
-                    "3) Проверка соответствия документации и закона": 3,
-                    "4) Условия поставки и приемки": 4,
-                    "5) Условия оплаты": 5,
-                    "6) Ответственность сторон": 6,
-                    "7) Перечень документов": 7,
-                    "8) Требования по реестрам и ограничениям": 8,
-                    "9) Рекомендации Поставщику": 9
-                }
-
-                if isinstance(final_report_sections, list):
-                    for sec in final_report_sections:
-                        title = sec.get('section_title', '')
-                        content = sec.get('content', '')
-                        sub_sections = sec.get('sub_sections')
-                        structured_data = sec.get('structured_data')
-                        
-                        i = section_title_mapping.get(title)
-                        if i is not None and i not in parsed_sections:
-                            parsed_sections[i] = content
-                            section_sources[i] = "final_report_sections"
-                            if sub_sections:
-                                sub_sections_data[i] = sub_sections
-                            if structured_data:
-                                structured_sections[i] = structured_data
-                elif isinstance(final_report_sections, dict):
-                    key_to_section = {
-                        "risks_execution": 1,
-                        "rejection_risks": 2,
-                        "compliance_check": 3,
-                        "delivery_acceptance": 4,
-                        "payment_terms": 5,
-                        "liability": 6,
-                        "documents_list": 7,
-                        "registries_restrictions": 8,
-                        "supplier_recommendations": 9
-                    }
-                    
-                    for k, v in final_report_sections.items():
-                        i = key_to_section.get(k)
-                        if i is not None and i not in parsed_sections:
-                            content = "\n".join([str(item) for item in v]) if isinstance(v, list) else str(v)
-                            parsed_sections[i] = content
-                            structured_sections[i] = v if isinstance(v, list) else []
-                            section_sources[i] = "final_report_sections"
-                            if k == "documents_list" and isinstance(v, dict):
-                                sub_sections_data[i] = v
-                                structured_sections[i] = []
-
-                FALLBACK_TEXT = "Подробный отчет отсутствует в результате анализа"
-                EMPTY_SECTION_TEXT = "Информация в предоставленной документации не обнаружена."
-
-                def get_fallback_text(section_num):
-                    if section_num in parsed_sections and parsed_sections[section_num]:
-                        content = parsed_sections[section_num]
-                        if not is_not_found(content):
-                            return clean_markdown(content)
-                    return EMPTY_SECTION_TEXT
-
-                # --- Visual separation for all sheets ---
-                for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report]:
-                    ws.append([f"ТЕНДЕР: {tid}"])
-                    ws[ws.max_row][0].font = Font(bold=True, size=12, color="FFFFFF")
-                    ws[ws.max_row][0].fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
-                    
-                    ws.append([f"Описание: {desc}"])
-                    ws[ws.max_row][0].font = Font(italic=True)
-                    ws[ws.max_row][0].fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-                    ws.merge_cells(start_row=ws.max_row, start_column=1, end_row=ws.max_row, end_column=ws.max_column if ws.max_column > 1 else 2)
-
-                # --- Build Подробный отчет ---
-                section_names = [
-                    "1) Риски участия и исполнения договора",
-                    "2) Риски недопуска заявки и потери баллов",
-                    "3) Проверка соответствия документации и закона",
-                    "4) Условия поставки и приемки",
-                    "5) Условия оплаты",
-                    "6) Ответственность сторон",
-                    "7) Перечень документов",
-                    "8) Требования по реестрам и ограничениям",
-                    "9) Рекомендации Поставщику"
-                ]
-                
-                report_sections_indices = [1, 2, 4, 5, 6, 8, 9]
-                for i in report_sections_indices:
-                    s_name = section_names[i-1]
-                    first_row_in_sec = True
-                    
-                    if i in structured_sections and structured_sections[i]:
-                        sec_data = structured_sections[i]
-                        if isinstance(sec_data, list) and len(sec_data) > 0:
-                            for item in sec_data:
-                                if isinstance(item, dict):
-                                    text = item.get('text', '')
-                                    source = item.get('source', '')
-                                    details = ""
-                                    risk_sanction = ""
-                                    
-                                    if i == 1: details = item.get('recommendation', ''); risk_sanction = item.get('risk_level', '')
-                                    elif i == 2: details = item.get('how_to_avoid', '')
-                                    elif i in [4, 5]: details = item.get('details', '')
-                                    elif i == 6: details = item.get('sanction', '')
-                                    elif i == 8: details = item.get('details', '')
-                                    elif i == 9: details = item.get('basis', '')
-                                    
-                                    ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(str(text)), clean_markdown(str(details)), clean_markdown(str(risk_sanction)), clean_markdown(str(source))])
-                                    first_row_in_sec = False
-                                else:
-                                    ws_report.append([tid, s_name if first_row_in_sec else "", clean_markdown(str(item))])
-                                    first_row_in_sec = False
-                        else:
-                            ws_report.append([tid, s_name, EMPTY_SECTION_TEXT])
-                    else:
-                        ws_report.append([tid, s_name, EMPTY_SECTION_TEXT])
-                
-                # --- Build Полный текст отчета ---
-                if final_report_markdown:
-                    ws_full_report.append([tid, final_report_markdown])
-                else:
-                    ws_full_report.append([tid, FALLBACK_TEXT])
-                
-                # --- Build Документы заявки ---
-                if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "in_application" in sub_sections_data[7] and sub_sections_data[7]["in_application"]:
-                    in_app = sub_sections_data[7]["in_application"]
-                    if isinstance(in_app, list):
-                        for doc_item in in_app:
-                            if isinstance(doc_item, dict):
-                                text = doc_item.get('text', '')
-                                source = doc_item.get('source', '')
-                                ws_app_docs.append([tid, clean_markdown(str(text)), clean_markdown(str(source))])
-                            elif isinstance(doc_item, str):
-                                ws_app_docs.append([tid, clean_markdown(doc_item)])
-                    elif isinstance(in_app, str):
-                        ws_app_docs.append([tid, clean_markdown(in_app)])
-                else:
-                    ws_app_docs.append([tid, get_fallback_text(7)])
-
-                # --- Build Документы при поставке ---
-                if 7 in sub_sections_data and isinstance(sub_sections_data[7], dict) and "on_delivery" in sub_sections_data[7] and sub_sections_data[7]["on_delivery"]:
-                    on_del = sub_sections_data[7]["on_delivery"]
-                    if isinstance(on_del, list):
-                        for doc_item in on_del:
-                            if isinstance(doc_item, dict):
-                                text = doc_item.get('text', '')
-                                source = doc_item.get('source', '')
-                                ws_del_docs.append([tid, clean_markdown(str(text)), clean_markdown(str(source))])
-                            elif isinstance(doc_item, str):
-                                ws_del_docs.append([tid, clean_markdown(doc_item)])
-                    elif isinstance(on_del, str):
-                        ws_del_docs.append([tid, clean_markdown(on_del)])
-                else:
-                    ws_del_docs.append([tid, get_fallback_text(7)])
-
-                # --- Build Противоречия и соответствие ---
-                if 3 in structured_sections and isinstance(structured_sections[3], list) and len(structured_sections[3]) > 0:
-                    for item in structured_sections[3]:
-                        if isinstance(item, dict):
-                            text = item.get('text', '')
-                            details = item.get('details', '')
-                            source = item.get('source', '')
-                            if is_not_found(str(text)): continue
-                            ws_comp.append([tid, clean_markdown(str(text)), clean_markdown(str(details)), clean_markdown(str(source))])
-                else:
-                    ws_comp.append([tid, get_fallback_text(3)])
-
-                # --- Build Краткие риски ---
-                if rows:
-                    for row in rows:
-                        if isinstance(row, dict):
-                            block = row.get('block', '')
-                            finding = row.get('finding', '')
-                            risk_level = row.get('risk_level', 'Medium')
-                            supplier_action = row.get('supplier_action', '')
-                            source_doc = row.get('source_document', '')
-                            source_ref = row.get('source_reference', '')
-                            legal_basis = row.get('legal_basis', '')
-                            source = f"{source_doc} {source_ref}".strip()
-                            ws_risks.append([tid, clean_markdown(str(block)), clean_markdown(str(finding)), clean_markdown(str(risk_level)), clean_markdown(str(supplier_action)), clean_markdown(str(source)), clean_markdown(str(legal_basis))])
-                            risk_count += 1
-                else:
-                    ws_risks.append([tid, "Риски отсутствуют или не найдены", "-", "-", "-", "-", "-"])
-
-                logger.info(f"--- [EXCEL EXPORT COMPLETED FOR TENDER: {tid}] ---")
-            except Exception as e:
-                logger.error(f"Error processing tender {tid} for Excel: {e}", exc_info=True)
-                notes_full = f"Ошибка при обработке тендера: {str(e)}"
+            doc.add_heading('Юридическое заключение по тендеру', 0)
+            doc.add_heading(f'Тендер: {tid}', level=1)
             
-            tenders_added.add(tid)
+            p = doc.add_paragraph()
+            p.add_run('Описание: ').bold = True
+            p.add_run(desc)
             
-            # Empty row before next tender
-            for ws in [ws_risks, ws_report, ws_app_docs, ws_del_docs, ws_comp, ws_full_report]:
-                ws.append([])
-
-        logger.info("Excel export data prepared successfully")
+            if file_statuses:
+                doc.add_heading('Обработанные документы:', level=2)
+                for fs in file_statuses:
+                    status_text = "Успешно" if fs.get('status') == 'ok' else "Ошибка"
+                    doc.add_paragraph(f"{fs.get('filename')} - {status_text}", style='List Bullet')
+            
+            if not final_report_markdown:
+                doc.add_paragraph("Отчет отсутствует.")
+            else:
+                add_markdown_to_docx(doc, final_report_markdown)
+                
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+                doc.save(tmp.name)
+                logger.info(f"Word export finished successfully (single). Path: {tmp.name}")
+                return FileResponse(tmp.name, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", filename=f"tender_{tid}_report.docx")
         
-        # Validation: Check if all tenders from results are present in tenders_added
-        unique_tids_in_results = {str(t.get('id')) for t in results if t.get('id')}
-        if len(tenders_added) != len(unique_tids_in_results):
-            missing = unique_tids_in_results - tenders_added
-            logger.warning(f"Export validation warning: expected {len(unique_tids_in_results)} tenders, but added {len(tenders_added)}. Missing IDs: {missing}")
-
-        # Add filters
-        # Only apply auto_filter to the first row to avoid issues with merged cells
-        ws_risks.auto_filter.ref = f"A1:{get_column_letter(ws_risks.max_column)}1"
-        ws_report.auto_filter.ref = f"A1:{get_column_letter(ws_report.max_column)}1"
-        ws_app_docs.auto_filter.ref = f"A1:{get_column_letter(ws_app_docs.max_column)}1"
-        ws_del_docs.auto_filter.ref = f"A1:{get_column_letter(ws_del_docs.max_column)}1"
-        ws_comp.auto_filter.ref = f"A1:{get_column_letter(ws_comp.max_column)}1"
-        ws_full_report.auto_filter.ref = f"A1:{get_column_letter(ws_full_report.max_column)}1"
-        ws_meta.auto_filter.ref = f"A1:{get_column_letter(ws_meta.max_column)}1"
-
-        # Set column widths and wrap text
-        for ws in wb.worksheets:
-            for col_idx in range(1, ws.max_column + 1):
-                column = get_column_letter(col_idx)
-                if ws.title == "Сводка":
-                    widths = {'A': 15, 'B': 15, 'C': 20, 'D': 20, 'E': 60}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                elif ws.title == "Краткие риски":
-                    widths = {'A': 15, 'B': 20, 'C': 40, 'D': 15, 'E': 40, 'F': 30, 'G': 30}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                elif ws.title == "Подробный отчет":
-                    widths = {'A': 15, 'B': 40, 'C': 100}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                elif ws.title in ["Документы заявки", "Документы при поставке", "Противоречия и соответствие"]:
-                    widths = {'A': 15, 'B': 100}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                elif ws.title == "Полный текст отчета":
-                    widths = {'A': 15, 'B': 120}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                elif ws.title == "Источники и служебная инфо":
-                    widths = {'A': 15, 'B': 30, 'C': 80, 'D': 40}
-                    ws.column_dimensions[column].width = widths.get(column, 20)
-                
-            for row in ws.iter_rows(min_row=2):
-                for cell in row:
-                    if type(cell).__name__ == 'MergedCell':
-                        continue
-                    cell.alignment = Alignment(wrap_text=True, vertical="top")
-                    thin_border = Border(left=Side(style='thin'), right=Side(style='thin'), top=Side(style='thin'), bottom=Side(style='thin'))
-                    cell.border = thin_border
-
-        # Save to temp file
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            wb.save(tmp.name)
-            logger.info("Excel export finished successfully")
-            return FileResponse(tmp.name, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", filename="tender_risks_report.xlsx")
+        else:
+            # Multiple files export (ZIP)
+            zip_buffer = io.BytesIO()
+            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for tender in results:
+                    tid = str(tender.get('id', 'N/A'))
+                    desc = tender.get('description', 'Нет описания')
+                    final_report_markdown = tender.get('final_report_markdown') or ""
+                    file_statuses = tender.get('file_statuses', [])
+                    
+                    doc = Document()
+                    style = doc.styles['Normal']
+                    font = style.font
+                    font.name = 'Arial'
+                    font.size = Pt(11)
+                    
+                    doc.add_heading('Юридическое заключение по тендеру', 0)
+                    doc.add_heading(f'Тендер: {tid}', level=1)
+                    
+                    p = doc.add_paragraph()
+                    p.add_run('Описание: ').bold = True
+                    p.add_run(desc)
+                    
+                    if file_statuses:
+                        doc.add_heading('Обработанные документы:', level=2)
+                        for fs in file_statuses:
+                            status_text = "Успешно" if fs.get('status') == 'ok' else "Ошибка"
+                            doc.add_paragraph(f"{fs.get('filename')} - {status_text}", style='List Bullet')
+                    
+                    if not final_report_markdown:
+                        doc.add_paragraph("Отчет отсутствует.")
+                    else:
+                        add_markdown_to_docx(doc, final_report_markdown)
+                        
+                    doc_buffer = io.BytesIO()
+                    doc.save(doc_buffer)
+                    zip_file.writestr(f"tender_{tid}_report.docx", doc_buffer.getvalue())
+            
+            zip_buffer.seek(0)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                tmp.write(zip_buffer.getvalue())
+                logger.info(f"Word export finished successfully (zip). Path: {tmp.name}")
+                return FileResponse(tmp.name, media_type="application/zip", filename="tenders_reports.zip")
 
     except Exception as e:
-        logger.error(f"Excel Export Error: {e}", exc_info=True)
+        logger.error(f"Word Export Error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

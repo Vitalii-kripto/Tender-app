@@ -33,6 +33,14 @@ const Analysis = () => {
   const [filterProblematicFiles, setFilterProblematicFiles] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'risk' | 'block'>('risk');
 
+  const getRecommendedProduct = (id: string) => {
+    return MOCK_CATALOG.find(p => p.id === id);
+  };
+
+  const formatSpecKey = (key: string) => {
+    return key.replace(/_/g, ' ');
+  };
+
   useEffect(() => {
     const loadData = async () => {
         try {
@@ -225,9 +233,8 @@ const Analysis = () => {
     setSelectedFiles(prev => ({ ...prev, [tenderId]: new Set() }));
   };
 
-  const exportToExcel = async (results: LegalAnalysisResult[]) => {
+  const exportToWord = async (results: LegalAnalysisResult[]) => {
     try {
-        // Attach tender title and description to results
         const resultsWithMeta = results.map(result => {
             const tender = crmTenders.find(t => t.id === result.id);
             return {
@@ -236,7 +243,7 @@ const Analysis = () => {
             };
         });
 
-        const response = await fetch('/api/ai/export-risks-excel', {
+        const response = await fetch('/api/ai/export-risks-word', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ results: resultsWithMeta })
@@ -247,67 +254,18 @@ const Analysis = () => {
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `tender_risks_report_${new Date().toISOString().split('T')[0]}.xlsx`;
+        
+        const isZip = response.headers.get('Content-Type') === 'application/zip';
+        const extension = isZip ? 'zip' : 'docx';
+        
+        a.download = `tender_risks_report_${new Date().toISOString().split('T')[0]}.${extension}`;
         document.body.appendChild(a);
         a.click();
         window.URL.revokeObjectURL(url);
     } catch (e) {
-        console.error("Excel export failed", e);
-        alert("Не удалось экспортировать в Excel.");
+        console.error("Word export failed", e);
+        alert("Не удалось экспортировать в Word.");
     }
-  };
-
-  const getFilteredRows = (rows: any[]) => {
-    return rows;
-  };
-
-  const getUniqueBlocks = (rows: any[]) => {
-    return [];
-  };
-
-  const exportToExcelFiltered = async (tenderId: string) => {
-    const result = batchResults[tenderId];
-    if (!result) return;
-    
-    const filteredRows = getFilteredRows(result.rows);
-    const filteredResult = { ...result, rows: filteredRows };
-    exportToExcel([filteredResult]);
-  };
-
-  const getRecommendedProduct = (id: string) => {
-    return MOCK_CATALOG.find(p => p.id === id);
-  };
-
-  const formatSpecKey = (key: string) => {
-    const map: Record<string, string> = {
-      thickness_mm: 'Толщина (мм)',
-      weight_kg_m2: 'Вес (кг/м²)',
-      flexibility_temp_c: 'Гибкость на брусе (°C)',
-      tensile_strength_n: 'Разрывная сила (Н)'
-    };
-    return map[key] || key;
-  };
-
-  const exportToCSV = (result: LegalAnalysisResult, tenderNumber: string) => {
-    const headers = ['Блок', 'Риск', 'Уровень риска', 'Действие поставщика', 'Документ', 'Ссылка', 'Обоснование'];
-    const rows = result.rows.map(r => [
-      `"${r.block.replace(/"/g, '""')}"`,
-      `"${r.finding.replace(/"/g, '""')}"`,
-      r.risk_level,
-      `"${r.supplier_action.replace(/"/g, '""')}"`,
-      `"${r.source_document.replace(/"/g, '""')}"`,
-      `"${r.source_reference.replace(/"/g, '""')}"`,
-      `"${(r.legal_basis || '').replace(/"/g, '""')}"`
-    ]);
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', `risks_report_${tenderNumber}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
   };
 
   const exportToPDF = () => {
@@ -395,12 +353,8 @@ const Analysis = () => {
                                             <span className="text-[10px] font-mono bg-slate-100 px-1.5 py-0.5 rounded text-slate-500 border border-slate-200">#{tender.eis_number}</span>
                                             <span className="text-xs font-black text-blue-700">{formatCurrency(tender.initial_price)}</span>
                                             {batchResults[tender.id] && (
-                                                <span className={`ml-auto text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter ${
-                                                    batchResults[tender.id].rows.some(r => r.risk_level === 'High') ? 'bg-red-100 text-red-600' : 
-                                                    batchResults[tender.id].rows.some(r => r.risk_level === 'Medium') ? 'bg-amber-100 text-amber-600' : 
-                                                    'bg-emerald-100 text-emerald-600'
-                                                }`}>
-                                                    {batchResults[tender.id].rows.some(r => r.risk_level === 'High') ? 'High Risk' : 'Analyzed'}
+                                                <span className="ml-auto text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter bg-emerald-100 text-emerald-600">
+                                                    Analyzed
                                                 </span>
                                             )}
                                         </div>
@@ -541,13 +495,15 @@ const Analysis = () => {
              <div className="space-y-8">
                 <div className="flex justify-between items-center bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
                     <h2 className="text-lg font-bold text-slate-800">Результаты анализа ({Object.keys(batchResults).length})</h2>
-                    <button 
-                        onClick={() => exportToExcel(Object.values(batchResults))}
-                        className="flex items-center gap-2 px-4 py-2 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 rounded-lg text-sm font-bold transition-colors shadow-sm"
-                    >
-                        <FileDown size={16} />
-                        Экспорт всех в Excel
-                    </button>
+                    <div className="flex gap-2">
+                        <button 
+                            onClick={() => exportToWord(Object.values(batchResults))}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm font-bold transition-colors shadow-sm"
+                        >
+                            <FileDown size={16} />
+                            Экспорт всех в Word
+                        </button>
+                    </div>
                 </div>
                 {Object.values(batchResults).map(result => {
                     const tender = crmTenders.find(t => t.id === result.id);
@@ -570,10 +526,6 @@ const Analysis = () => {
                                     <p className="text-sm text-slate-600 mb-4 leading-relaxed">{tender.description}</p>
                                     
                                     <div className="flex flex-wrap gap-3">
-                                        <span className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider shadow-sm ${result.has_contract ? 'bg-emerald-100 text-emerald-700 border border-emerald-200' : 'bg-red-100 text-red-700 border border-red-200'}`}>
-                                            {result.has_contract ? <CheckCircle size={14}/> : <AlertTriangle size={14}/>}
-                                            Проект договора {result.has_contract ? 'найден' : 'не найден'}
-                                        </span>
                                         <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-200 shadow-sm">
                                             <FileText size={14}/>
                                             Файлов выбрано пользователем: {result.selected_files_count !== undefined ? result.selected_files_count : result.file_statuses.length}
@@ -585,106 +537,29 @@ const Analysis = () => {
                                     </div>
                                 </div>
 
-                                {/* Risk Counters - Big & Bold */}
-                                <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100 bg-white">
-                                    <div className="p-4 text-center hover:bg-red-50/30 transition-colors">
-                                        <div className="text-3xl font-black text-red-600">{result.rows.filter(r => r.risk_level === 'High').length}</div>
-                                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Высокий риск</div>
-                                    </div>
-                                    <div className="p-4 text-center hover:bg-amber-50/30 transition-colors">
-                                        <div className="text-3xl font-black text-amber-600">{result.rows.filter(r => r.risk_level === 'Medium').length}</div>
-                                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Средний риск</div>
-                                    </div>
-                                    <div className="p-4 text-center hover:bg-blue-50/30 transition-colors">
-                                        <div className="text-3xl font-black text-blue-600">{result.rows.filter(r => r.risk_level === 'Low').length}</div>
-                                        <div className="text-[10px] text-slate-400 uppercase font-black tracking-widest mt-1">Низкий риск</div>
-                                    </div>
-                                </div>
-
                                 {/* File Statuses Block */}
-                                <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div>
-                                        <div className="flex justify-between items-center mb-2">
-                                            <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Статус документов</h4>
-                                            <label className="flex items-center gap-1.5 text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">
-                                                <input type="checkbox" checked={filterProblematicFiles} onChange={(e) => setFilterProblematicFiles(e.target.checked)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
-                                                Только проблемные
-                                            </label>
-                                        </div>
-                                        <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                                            {result.file_statuses
-                                                .filter(fs => !filterProblematicFiles || fs.status !== 'ok')
-                                                .sort((a, b) => (a.status === 'ok' ? 1 : -1) - (b.status === 'ok' ? 1 : -1))
-                                                .map((fs, i) => (
-                                                <div key={i} className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`}>
-                                                    {fs.status === 'ok' ? <CheckCircle size={14} className="text-emerald-500 mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />}
-                                                    <div className="flex flex-col min-w-0">
-                                                        <span className="truncate font-bold">{fs.filename}</span>
-                                                        {fs.status !== 'ok' && <span className="text-[10px] text-red-600/80 mt-0.5 leading-tight">{fs.message}</span>}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
+                                <div className="px-5 py-4 bg-slate-50 border-b border-slate-100">
+                                    <div className="flex justify-between items-center mb-2">
+                                        <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Статус документов</h4>
+                                        <label className="flex items-center gap-1.5 text-[10px] text-slate-500 cursor-pointer hover:text-slate-700">
+                                            <input type="checkbox" checked={filterProblematicFiles} onChange={(e) => setFilterProblematicFiles(e.target.checked)} className="rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+                                            Только проблемные
+                                        </label>
                                     </div>
-                                    <div className="space-y-4">
-                                        {result.file_classifications && result.file_classifications.length > 0 && (
-                                            <div>
-                                                <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Классификация файлов</h4>
-                                                <div className="space-y-3 max-h-48 overflow-y-auto custom-scrollbar pr-1">
-                                                    {['contract', 'procurement', 'tz', 'mixed', 'unclassified', 'unclassified_due_to_no_text'].map((category) => {
-                                                        const filesInCategory = result.file_classifications!.filter(fc => fc.category === category);
-                                                        if (filesInCategory.length === 0) return null;
-                                                        
-                                                        let categoryTitle = '';
-                                                        let categoryColor = '';
-                                                        if (category === 'contract') { categoryTitle = 'Договорные документы'; categoryColor = 'text-emerald-600 bg-emerald-50 border-emerald-100'; }
-                                                        else if (category === 'procurement') { categoryTitle = 'Закупочная документация'; categoryColor = 'text-blue-600 bg-blue-50 border-blue-100'; }
-                                                        else if (category === 'tz') { categoryTitle = 'Техническое задание'; categoryColor = 'text-purple-600 bg-purple-50 border-purple-100'; }
-                                                        else if (category === 'mixed') { categoryTitle = 'Смешанные документы'; categoryColor = 'text-amber-600 bg-amber-50 border-amber-100'; }
-                                                        else if (category === 'unclassified') { categoryTitle = 'Не классифицировано'; categoryColor = 'text-slate-600 bg-slate-50 border-slate-200'; }
-                                                        else if (category === 'unclassified_due_to_no_text') { categoryTitle = 'Не классифицировано (нет текста)'; categoryColor = 'text-red-600 bg-red-50 border-red-100'; }
-
-                                                        return (
-                                                            <div key={category} className={`p-2 rounded-lg border ${categoryColor}`}>
-                                                                <div className="text-[10px] font-bold uppercase tracking-wider mb-1.5 opacity-80">{categoryTitle}</div>
-                                                                <div className="space-y-1.5">
-                                                                    {filesInCategory.map((fc, i) => (
-                                                                        <div key={i} className="flex flex-col gap-0.5">
-                                                                            <span className="text-[11px] font-semibold truncate">{fc.filename}</span>
-                                                                            <span className="text-[10px] opacity-75 leading-tight">{fc.classification_reason}</span>
-                                                                        </div>
-                                                                    ))}
-                                                                </div>
-                                                            </div>
-                                                        );
-                                                    })}
+                                    <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto custom-scrollbar pr-1">
+                                        {result.file_statuses
+                                            .filter(fs => !filterProblematicFiles || fs.status !== 'ok')
+                                            .sort((a, b) => (a.status === 'ok' ? 1 : -1) - (b.status === 'ok' ? 1 : -1))
+                                            .map((fs, i) => (
+                                            <div key={i} className={`flex items-start gap-2 px-2.5 py-1.5 rounded-lg border text-[11px] font-medium transition-colors ${fs.status === 'ok' ? 'bg-white border-slate-200 text-slate-600' : 'bg-red-50 border-red-200 text-red-700'}`}>
+                                                {fs.status === 'ok' ? <CheckCircle size={14} className="text-emerald-500 mt-0.5 shrink-0" /> : <AlertTriangle size={14} className="text-red-500 mt-0.5 shrink-0" />}
+                                                <div className="flex flex-col min-w-0">
+                                                    <span className="truncate font-bold">{fs.filename}</span>
+                                                    {fs.status !== 'ok' && <span className="text-[10px] text-red-600/80 mt-0.5 leading-tight">{fs.message}</span>}
                                                 </div>
                                             </div>
-                                        )}
+                                        ))}
                                     </div>
-                                </div>
-
-                                {result.summary_notes && result.summary_notes.length > 0 && (
-                                    <div className="px-5 py-4 bg-blue-50/40 border-b border-blue-100">
-                                        <div className="flex items-center gap-2 mb-3">
-                                            <div className="p-1 bg-blue-600 rounded text-white">
-                                                <ScanEye size={14} />
-                                            </div>
-                                            <h4 className="text-xs font-black text-blue-900 uppercase tracking-widest">Сводка юридического анализа</h4>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-2">
-                                            {result.summary_notes.map((note, i) => (
-                                                <div key={i} className="flex items-start gap-2.5 text-[11px] text-blue-800 leading-relaxed font-medium bg-white/50 p-2 rounded-lg border border-blue-100/50">
-                                                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 mt-1.5 shrink-0 shadow-sm"></div>
-                                                    {note}
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Filtering & Sorting UI */}
-                                <div className="px-5 py-3 bg-white border-b border-slate-100 flex flex-wrap items-center gap-4">
                                 </div>
 
                                  {/* 1. Main Legal Report (Markdown) - PRIMARY OUTPUT */}
@@ -711,145 +586,31 @@ const Analysis = () => {
                                      </div>
                                  )}
 
-                                 {/* 2. Secondary Data Layers */}
-                                 <div className="bg-slate-50/50 p-6 space-y-6">
-                                     <div className="flex items-center gap-3 px-2">
-                                         <h5 className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Дополнительные слои данных</h5>
-                                         <div className="h-px flex-1 bg-slate-200"></div>
-                                     </div>
-
-                                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                         {/* Risk Summary Table */}
-                                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                             <div className="px-4 py-3 bg-slate-50/50 border-b border-slate-100 flex justify-between items-center">
-                                                 <h6 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                                                     <ShieldAlert size={14} className="text-amber-500" />
-                                                     Краткая таблица рисков
-                                                 </h6>
-                                             </div>
-                                             <div className="overflow-x-auto">
-                                                 <table className="w-full text-left text-[11px] border-collapse">
-                                                     <thead className="bg-slate-50/30 text-slate-500 uppercase font-black tracking-widest border-b border-slate-100">
-                                                         <tr>
-                                                             <th className="px-4 py-2">Блок</th>
-                                                             <th className="px-4 py-2">Риск</th>
-                                                             <th className="px-4 py-2">Ур.</th>
-                                                         </tr>
-                                                     </thead>
-                                                     <tbody className="divide-y divide-slate-50">
-                                                         {result.rows.slice(0, 8).map((row, idx) => (
-                                                             <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
-                                                                 <td className="px-4 py-2 font-bold text-slate-600 truncate max-w-[100px]">{row.block}</td>
-                                                                 <td className="px-4 py-2 text-slate-900 line-clamp-1">{row.finding}</td>
-                                                                 <td className="px-4 py-2">
-                                                                     <div className={`w-2 h-2 rounded-full ${
-                                                                         row.risk_level === 'High' ? 'bg-red-500' : 
-                                                                         row.risk_level === 'Medium' ? 'bg-amber-500' : 
-                                                                         'bg-emerald-500'
-                                                                     }`}></div>
-                                                                 </td>
-                                                             </tr>
-                                                         ))}
-                                                     </tbody>
-                                                 </table>
-                                             </div>
-                                         </div>
-
-                                         {/* Service Sections */}
-                                         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                             <div className="px-4 py-3 bg-slate-50/50 border-b border-slate-100">
-                                                 <h6 className="text-xs font-black text-slate-700 uppercase tracking-wider flex items-center gap-2">
-                                                     <Layout size={14} className="text-indigo-500" />
-                                                     Служебные секции
-                                                 </h6>
-                                             </div>
-                                             <div className="p-3 space-y-2 max-h-[250px] overflow-y-auto custom-scrollbar">
-                                                 {result.final_report_sections?.map((section, idx) => (
-                                                     <details key={idx} className="group border border-slate-100 rounded-lg overflow-hidden">
-                                                         <summary className="px-3 py-2 text-[11px] font-bold text-slate-600 bg-slate-50/50 cursor-pointer hover:bg-slate-100 transition-colors flex justify-between items-center group-open:bg-indigo-50 group-open:text-indigo-700">
-                                                             {section.section_title}
-                                                             <ChevronDown size={12} className="transition-transform group-open:rotate-180" />
-                                                         </summary>
-                                                         <div className="p-3 text-[11px] text-slate-500 whitespace-pre-wrap bg-white leading-relaxed">
-                                                             {section.content}
-                                                         </div>
-                                                     </details>
-                                                 ))}
-                                             </div>
-                                         </div>
-                                     </div>
-
-                                     {/* Full Technical Table (Collapsible) */}
-                                     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
-                                         <details className="group">
-                                             <summary className="px-5 py-4 cursor-pointer hover:bg-slate-50 transition-colors flex justify-between items-center">
-                                                 <div className="flex items-center gap-3">
-                                                     <Table size={18} className="text-slate-400" />
-                                                     <span className="text-sm font-black text-slate-700 uppercase tracking-wider">Полная техническая таблица (JSON-слой)</span>
-                                                     <span className="px-2 py-0.5 bg-slate-100 text-slate-500 text-[10px] font-black rounded-full">
-                                                         {result.rows.length} записей
-                                                     </span>
-                                                 </div>
-                                                 <ChevronDown size={18} className="text-slate-400 transition-transform group-open:rotate-180" />
-                                             </summary>
-                                             <div className="border-t border-slate-100">
-                                                 <div className="overflow-x-auto">
-                                                     <table className="w-full text-left text-xs border-collapse">
-                                                         <thead className="bg-slate-50 text-slate-500 uppercase font-black tracking-widest border-b border-slate-200">
-                                                             <tr>
-                                                                 <th className="px-5 py-3">Блок</th>
-                                                                 <th className="px-5 py-3">Находка</th>
-                                                                 <th className="px-5 py-3">Риск</th>
-                                                                 <th className="px-5 py-3">Действие</th>
-                                                                 <th className="px-5 py-3">Источник</th>
-                                                             </tr>
-                                                         </thead>
-                                                         <tbody className="divide-y divide-slate-100">
-                                                             {getFilteredRows(result.rows).map((row, idx) => (
-                                                                 <tr key={idx} className="transition-colors hover:bg-slate-50/30">
-                                                                     <td className="px-5 py-3 align-top font-bold text-slate-900">{row.block}</td>
-                                                                     <td className="px-5 py-3 align-top text-slate-700 leading-relaxed">{row.finding}</td>
-                                                                     <td className="px-5 py-3 align-top">
-                                                                         <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase ${
-                                                                             row.risk_level === 'High' ? 'bg-red-100 text-red-600' : 
-                                                                             row.risk_level === 'Medium' ? 'bg-amber-100 text-amber-600' : 
-                                                                             'bg-emerald-100 text-emerald-600'
-                                                                         }`}>
-                                                                             {row.risk_level}
-                                                                         </span>
-                                                                     </td>
-                                                                     <td className="px-5 py-3 align-top text-slate-600 leading-relaxed">{row.supplier_action}</td>
-                                                                     <td className="px-5 py-3 align-top text-slate-500 text-[10px]">
-                                                                         <div className="font-bold">{row.source_document}</div>
-                                                                         <div>{row.source_reference}</div>
-                                                                     </td>
-                                                                 </tr>
-                                                             ))}
-                                                         </tbody>
-                                                     </table>
-                                                 </div>
-                                             </div>
-                                         </details>
-                                     </div>
-                                 </div>
-
-                                 {result.status === 'success' && result.rows.length === 0 && !result.final_report_markdown && (
+                                 {/* Fallback for empty results */}
+                                 {result.status === 'success' && !result.final_report_markdown && (
                                     <div className="p-10 text-center text-slate-400 bg-white">
                                         <Shield size={48} className="mx-auto mb-4 opacity-20" />
                                         <p className="text-sm font-medium">Документация выглядит стандартной. Критических условий не найдено.</p>
                                     </div>
                                  )}
 
+                                 {/* Error Block */}
+                                 {result.status === 'error' && result.final_report_markdown && (
+                                     <div className="p-6 bg-red-50 border-b border-red-100">
+                                         <div className="flex items-center gap-3 mb-4">
+                                             <AlertTriangle size={24} className="text-red-500" />
+                                             <h4 className="text-lg font-bold text-red-900">Ошибка анализа</h4>
+                                         </div>
+                                         <div className="text-red-700 text-sm whitespace-pre-wrap">
+                                             {result.final_report_markdown}
+                                         </div>
+                                     </div>
+                                 )}
+
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-6">
-                                        <button onClick={() => exportToExcelFiltered(result.id)} className="text-[10px] text-emerald-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
-                                            <FileDown size={14} /> Excel (фильтры)
-                                        </button>
-                                        <button onClick={() => exportToExcel([result])} className="text-[10px] text-emerald-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
-                                            <FileDown size={14} /> Полный Excel
-                                        </button>
-                                        <button onClick={() => exportToCSV(result, tender.eis_number)} className="text-[10px] text-blue-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
-                                            <FileDown size={14} /> CSV
+                                        <button onClick={() => exportToWord([result])} className="text-[10px] text-blue-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
+                                            <FileDown size={14} /> Полный Word
                                         </button>
                                         <button onClick={exportToPDF} className="text-[10px] text-slate-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
                                             <Printer size={14} /> Печать / PDF
@@ -896,7 +657,7 @@ const Analysis = () => {
                             {Object.entries(p.specs).map(([k,v]) => (
                                 <div key={k}>
                                     <span className="block text-xs text-slate-400 capitalize">{formatSpecKey(k)}</span>
-                                    <span className="font-medium text-slate-800">{v}</span>
+                                    <span className="font-medium text-slate-800">{String(v)}</span>
                                 </div>
                             ))}
                          </div>

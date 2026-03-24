@@ -130,53 +130,6 @@ class DocumentService:
                 logger.error(f"DOCX Error: {e}")
                 return f"[DOCX ERROR] Не удалось прочитать файл: {str(e)}"
         
-        elif ext == '.xlsx':
-            try:
-                import openpyxl
-                wb = openpyxl.load_workbook(file_path, data_only=True)
-                sheets_text = []
-                for sheet in wb.worksheets:
-                    sheet_data = []
-                    for row in sheet.iter_rows(values_only=True):
-                        row_text = "\t".join([str(cell) if cell is not None else "" for cell in row])
-                        if row_text.strip():
-                            sheet_data.append(row_text)
-                    if sheet_data:
-                        sheets_text.append(f"--- Sheet: {sheet.title} ---\n" + "\n".join(sheet_data))
-                full_text = "\n\n".join(sheets_text)
-                logger.info(f"XLSX extracted {len(full_text)} characters.")
-                return full_text
-            except ImportError:
-                logger.warning("openpyxl is not installed. Cannot read XLSX.")
-                return "[SYSTEM INFO] openpyxl не установлен."
-            except Exception as e:
-                logger.error(f"XLSX Error: {e}")
-                return f"[XLSX ERROR] Не удалось прочитать файл: {str(e)}"
-        
-        elif ext == '.xls':
-            try:
-                import xlrd
-                wb = xlrd.open_workbook(file_path)
-                sheets_text = []
-                for sheet in wb.sheets():
-                    sheet_data = []
-                    for row_idx in range(sheet.nrows):
-                        row = sheet.row_values(row_idx)
-                        row_text = "\t".join([str(cell) if cell is not None else "" for cell in row])
-                        if row_text.strip():
-                            sheet_data.append(row_text)
-                    if sheet_data:
-                        sheets_text.append(f"--- Sheet: {sheet.name} ---\n" + "\n".join(sheet_data))
-                full_text = "\n\n".join(sheets_text)
-                logger.info(f"XLS extracted {len(full_text)} characters.")
-                return full_text
-            except ImportError:
-                logger.warning("xlrd is not installed. Cannot read XLS.")
-                return "[SYSTEM INFO] xlrd не установлен."
-            except Exception as e:
-                logger.error(f"XLS Error: {e}")
-                return f"[XLS ERROR] Не удалось прочитать файл: {str(e)}"
-        
         elif ext == '.doc':
             logger.info(f"Legacy .doc format detected: {file_path}. Attempting extraction...")
             return self._extract_text_from_doc(file_path)

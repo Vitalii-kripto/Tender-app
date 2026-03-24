@@ -23,9 +23,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             logger.warning(f"No files selected for tender {tid}")
             job_service.complete_tender(job_id, tid, {
                 "status": "error",
-                "summary_notes": ["Ошибка: не выбрано ни одного файла для анализа. Пожалуйста, выберите хотя бы один документ."],
-                "rows": [],
-                "has_contract": False,
+                "final_report_markdown": "Ошибка: не выбрано ни одного файла для анализа. Пожалуйста, выберите хотя бы один документ.",
                 "file_statuses": [],
                 "selected_files_count": 0
             })
@@ -37,9 +35,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             logger.warning(f"No documents found for tender {tid}")
             job_service.complete_tender(job_id, tid, {
                 "status": "error",
-                "summary_notes": ["Документы не найдены. Возможно, они еще скачиваются или не были загружены."],
-                "rows": [],
-                "has_contract": False,
+                "final_report_markdown": "Документы не найдены. Возможно, они еще скачиваются или не были загружены.",
                 "file_statuses": [{"filename": "N/A", "status": "file_not_read", "message": "Директория с документами не найдена"}],
                 "selected_files_count": selected_count
             })
@@ -68,9 +64,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             logger.warning(f"No valid files remaining after filtering for tender {tid}")
             job_service.complete_tender(job_id, tid, {
                 "status": "error",
-                "summary_notes": [f"Ошибка: ни один из выбранных файлов не найден на диске. Пропущенные файлы: {', '.join(missing_files)}"],
-                "rows": [],
-                "has_contract": False,
+                "final_report_markdown": f"Ошибка: ни один из выбранных файлов не найден на диске. Пропущенные файлы: {', '.join(missing_files)}",
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })
@@ -85,25 +79,20 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 
             try:
                 text = doc_service.extract_text(filepath)
-                if len(text.strip()) < 50:
-                    file_statuses.append({"filename": filename, "status": "empty_file", "message": "Текст не найден или файл пуст"})
-                else:
-                    files_data.append({"filename": filename, "text": text})
-                    file_statuses.append({"filename": filename, "status": "ok", "message": "Текст успешно извлечен"})
+                files_data.append({"filename": filename, "text": text})
+                file_statuses.append({"filename": filename, "status": "ok", "message": "Текст успешно извлечен"})
             except Exception as e:
                 logger.error(f"Failed to extract text from {filename}: {e}")
                 file_statuses.append({"filename": filename, "status": "extract_error", "message": str(e)})
                 
         if not files_data:
-            summary = ["Не удалось извлечь текст ни из одного документа."]
+            summary = "Не удалось извлечь текст ни из одного документа."
             if missing_files:
-                summary.append(f"Некоторые выбранные файлы не найдены на диске: {', '.join(missing_files)}")
+                summary += f"\nНекоторые выбранные файлы не найдены на диске: {', '.join(missing_files)}"
                 
             job_service.complete_tender(job_id, tid, {
                 "status": "error",
-                "summary_notes": summary,
-                "rows": [],
-                "has_contract": False,
+                "final_report_markdown": summary,
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })
@@ -115,20 +104,14 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
 
             analysis_result = legal_service.analyze_tender(files_data, tender_id=tid, callback=stage_callback)
             
-            # Добавляем инфо о пропущенных файлах в summary_notes
-            final_summary = analysis_result.get('summary_notes', [])
+            # Добавляем инфо о пропущенных файлах в final_report_markdown
+            final_markdown = analysis_result.get('final_report_markdown', '')
             if missing_files:
-                final_summary.insert(0, f"ВНИМАНИЕ: Следующие выбранные файлы отсутствуют в системе: {', '.join(missing_files)}")
+                final_markdown = f"**ВНИМАНИЕ: Следующие выбранные файлы отсутствуют в системе: {', '.join(missing_files)}**\n\n" + final_markdown
 
             job_service.complete_tender(job_id, tid, {
                 "status": analysis_result.get('status', 'success'),
-                "summary_notes": final_summary,
-                "rows": analysis_result.get('rows', []),
-                "final_report_sections": analysis_result.get('final_report_sections', []),
-                "final_report_markdown": analysis_result.get('final_report_markdown', ''),
-                "has_contract": analysis_result.get('has_contract', False),
-                "classification_notes": analysis_result.get('classification_notes', []),
-                "file_classifications": analysis_result.get('file_classifications', []),
+                "final_report_markdown": final_markdown,
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })
@@ -136,11 +119,7 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             logger.error(f"Analysis failed for tender {tid}: {e}")
             job_service.complete_tender(job_id, tid, {
                 "status": "error",
-                "summary_notes": [f"Ошибка ИИ-анализа: {str(e)}"],
-                "rows": [],
-                "has_contract": False,
-                "classification_notes": [],
-                "file_classifications": [],
+                "final_report_markdown": f"Ошибка ИИ-анализа: {str(e)}",
                 "file_statuses": file_statuses,
                 "selected_files_count": selected_count
             })

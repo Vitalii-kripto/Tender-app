@@ -483,9 +483,6 @@ export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: R
         return tenderIds.map(id => ({
             id,
             status: "error",
-            summary_notes: ["Ошибка связи с сервером"],
-            rows: [],
-            has_contract: false,
             file_statuses: []
         }));
     }

@@ -14,12 +14,7 @@ class JobService:
                     "stage": "Подготовка документов",
                     "progress": 0,
                     "status": "pending",
-                    "summary_notes": [],
-                    "rows": [],
-                    "has_contract": False,
-                    "file_statuses": [],
-                    "classification_notes": [],
-                    "file_classifications": []
+                    "file_statuses": []
                 } for tid in tender_ids
             }
         }
