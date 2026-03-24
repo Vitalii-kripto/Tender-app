@@ -6,7 +6,6 @@ from typing import List, Dict, Any, Optional, Callable
 from google import genai
 from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
-from backend.config import GEMINI_MODEL
 from backend.logger import logger
 from .ai_service import AiService
 

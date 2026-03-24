@@ -44,6 +44,8 @@ class AiService:
         Тестовый запрос к моделям при старте для выбора рабочей модели.
         Возвращает имя выбранной модели или пустую строку, если ни одна не доступна.
         """
+        logger.info(f"AI Startup Check: Primary model: {self.model_name}, Fallback model: {self.fallback_model_name}")
+        
         if not self.client:
             logger.error("Startup check: Client not initialized (no API_KEY).")
             return ""
@@ -60,6 +62,8 @@ class AiService:
             if response and response.text:
                 logger.info(f"Startup check: Primary model {self.model_name} is ONLINE. Selected as active.")
                 self.active_model = self.model_name
+                # Логируем статус fallback как пропущено, чтобы выполнить требование о наличии лога по каждой модели
+                logger.info(f"Startup check: Fallback model {self.fallback_model_name} - SKIPPED (Primary is OK).")
                 return self.active_model
         except Exception as e:
             logger.warning(f"Startup check: Primary model {self.model_name} is OFFLINE: {e}")
@@ -106,12 +110,13 @@ class AiService:
             raise Exception("Внешний AI-сервис временно недоступен, анализ не завершен")
 
         max_retries = 4
-        current_model = self.active_model
+        # Используем текущую активную модель как стартовую для этого вызова
+        current_attempt_model = self.active_model
         start_overall = time.time()
         
         # Если модель не передана в kwargs, используем активную
         if 'model' not in kwargs:
-            kwargs['model'] = current_model
+            kwargs['model'] = current_attempt_model
 
         for attempt in range(1, max_retries + 1):
             attempt_start = time.time()
@@ -123,6 +128,12 @@ class AiService:
                 
                 duration = time.time() - attempt_start
                 logger.info(f"AI Call Success | Attempt: {attempt} | Duration: {duration:.2f}s")
+                
+                # Если вызов был успешен с моделью, отличной от текущей активной (fallback),
+                # обновляем активную модель для всего сервиса
+                if kwargs['model'] != self.active_model:
+                    logger.warning(f"Dynamic model switch: {self.active_model} -> {kwargs['model']} (Success after retry)")
+                    self.active_model = kwargs['model']
                 
                 return response
 
@@ -143,9 +154,9 @@ class AiService:
                         logger.error(f"AI Call: All {max_retries} attempts exhausted for transient errors.")
                     raise Exception("Внешний AI-сервис временно недоступен, анализ не завершен") from e
 
-                # Переключение на fallback после половины попыток
-                if attempt == max_retries // 2 and kwargs['model'] == self.model_name:
-                    logger.warning(f"Switching to fallback model: {self.fallback_model_name}")
+                # Переключение на fallback после половины попыток, если мы еще на основной модели
+                if attempt == max_retries // 2 and kwargs['model'] == self.model_name and self.fallback_model_name:
+                    logger.warning(f"Attempt {attempt} failed. Switching to fallback model for remaining retries: {self.fallback_model_name}")
                     kwargs['model'] = self.fallback_model_name
 
                 # Пауза с экспоненциальным бэк-оффом
