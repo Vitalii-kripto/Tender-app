@@ -1,37 +1,45 @@
 import os
 import re
+import io
+import numpy as np
 from pypdf import PdfReader
 from fastapi import UploadFile
 import aiofiles
-from pdf2image import convert_from_path
 import platform
 import logging
 
 from backend.logger import logger
 
-# Безопасный импорт pytesseract
+# Безопасный импорт pypdfium2 и paddleocr
 try:
-    import pytesseract
+    import pypdfium2 as pdfium
 except ImportError:
-    pytesseract = None
-    logger.warning("Pytesseract library not installed.")
+    pdfium = None
+    logger.warning("pypdfium2 library not installed.")
+
+try:
+    from paddleocr import PaddleOCR
+except ImportError:
+    PaddleOCR = None
+    logger.warning("paddleocr library not installed.")
 
 class DocumentService:
     """
     Сервис для работы с документами.
-    Поддерживает извлечение текста из PDF и OCR (распознавание сканов).
+    Поддерживает извлечение текста из PDF и OCR (распознавание сканов) через PaddleOCR.
     """
     UPLOAD_DIR = "uploaded_docs"
 
     def __init__(self):
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
-        # Опциональная настройка пути для Windows, если Tesseract установлен в стандартную папку
-        if platform.system() == "Windows" and pytesseract:
-            tesseract_path = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-            if os.path.exists(tesseract_path):
-                pytesseract.pytesseract.tesseract_cmd = tesseract_path
-            else:
-                logger.warning(f"Tesseract executable not found at: {tesseract_path}")
+        self.ocr_engine = None
+        if PaddleOCR:
+            try:
+                # Инициализация PaddleOCR (модели скачиваются при первом запуске)
+                self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru', show_log=False)
+                logger.info("PaddleOCR engine initialized successfully.")
+            except Exception as e:
+                logger.error(f"Failed to initialize PaddleOCR: {e}")
 
     async def save_file(self, file: UploadFile) -> str:
         """Сохраняет загруженный файл"""
@@ -203,7 +211,7 @@ class DocumentService:
                         full_text = ocr_result
                     else:
                         logger.info("OCR fallback successful.")
-                        handler = "pypdf + pytesseract (OCR)"
+                        handler = "pypdf + pypdfium2 + PaddleOCR (OCR)"
                         full_text = ocr_result
                 else:
                     logger.info(f"PDF text quality is GOOD (Chars: {char_count}). Using native text layer.")
@@ -277,55 +285,59 @@ class DocumentService:
         return True
 
     def _perform_ocr(self, file_path: str, existing_text: str) -> str:
-        """Вспомогательный метод для OCR распознавания"""
-        if not pytesseract:
-            logger.warning("OCR requested but Pytesseract is not available.")
-            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Текст не распознан: требуется библиотека Pytesseract. Извлечение цен и спецификаций может быть неточным."
+        """Вспомогательный метод для OCR распознавания через pypdfium2 и PaddleOCR"""
+        if not pdfium or not self.ocr_engine:
+            logger.warning("OCR requested but pypdfium2 or PaddleOCR is not available.")
+            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Текст не распознан: требуются библиотеки pypdfium2 и paddleocr. Извлечение цен и спецификаций может быть неточным."
 
         try:
-            # Попытка проверки Poppler (нужен для pdf2image)
-            try:
-                # Пытаемся вызвать convert_from_path для проверки наличия poppler
-                images = convert_from_path(file_path, first_page=1, last_page=1)
-            except Exception as poppler_error:
-                error_str = str(poppler_error).lower()
-                if "poppler" in error_str or "not found" in error_str or "find" in error_str:
-                     logger.error("Poppler not found. OCR cannot be performed.")
-                     msg = "Статус: деградированный режим. Для распознавания сканов (OCR) необходимо установить Poppler. В данный момент используется только PyPDF. Извлечение цен и спецификаций может быть неточным."
-                     if platform.system() == "Windows":
-                         msg += " Скачайте Poppler для Windows, распакуйте и добавьте папку 'bin' в системную переменную PATH."
-                     return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
-                raise poppler_error
-
-            # Проверка Tesseract через pytesseract
-            try:
-                pytesseract.get_tesseract_version()
-            except Exception as tess_err:
-                logger.error(f"Tesseract Error: {tess_err}")
-                if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
-                     msg = "Статус: деградированный режим. Tesseract OCR не найден. Извлечение цен и спецификаций может быть неточным."
-                     if platform.system() == "Windows":
-                         msg += " Установите Tesseract OCR и убедитесь, что он в PATH."
-                     return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
-                raise tess_err
-
-            # Выполняем OCR (первые 20 страниц для баланса)
-            images = convert_from_path(file_path, first_page=1, last_page=20)
-            ocr_text = []
-            for i, image in enumerate(images):
-                text = pytesseract.image_to_string(image, lang='rus+eng')
-                ocr_text.append(f"--- Page {i+1} ---\n{text}")
+            logger.info(f"Starting OCR for {file_path} using pypdfium2 + PaddleOCR")
             
-            if ocr_text:
-                logger.info(f"OCR successful. Extracted {len(''.join(ocr_text))} characters.")
-                return "\n".join(ocr_text)
+            # Открываем PDF через pypdfium2
+            pdf = pdfium.PdfDocument(file_path)
+            num_pages = len(pdf)
+            # Ограничиваем количество страниц для OCR (первые 20 для баланса скорости и качества)
+            pages_to_process = min(num_pages, 20)
+            
+            ocr_text_pages = []
+            
+            for i in range(pages_to_process):
+                logger.info(f"Processing page {i+1}/{pages_to_process}...")
+                page = pdf[i]
+                
+                # Рендерим страницу в изображение (scale=2 для 144 DPI, scale=3 для 216 DPI)
+                # PaddleOCR хорошо работает на 144-200 DPI
+                bitmap = page.render(scale=2)
+                pil_image = bitmap.to_pil()
+                
+                # Конвертируем PIL Image в numpy array для PaddleOCR
+                img_array = np.array(pil_image)
+                
+                # Выполняем OCR
+                result = self.ocr_engine.ocr(img_array, cls=True)
+                
+                page_text = []
+                if result and result[0]:
+                    for line in result[0]:
+                        # line[1][0] - это текст, line[1][1] - это уверенность (confidence)
+                        text_line = line[1][0]
+                        page_text.append(text_line)
+                
+                ocr_text_pages.append(f"--- Page {i+1} ---\n" + "\n".join(page_text))
+            
+            pdf.close()
+            
+            if ocr_text_pages:
+                full_ocr_text = "\n\n".join(ocr_text_pages)
+                logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages.")
+                return full_ocr_text
             else:
                 logger.warning("OCR ran but found no text.")
                 return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. OCR отработал, но текст не найден."
 
         except Exception as e:
-            logger.error(f"OCR Global Error: {e}")
-            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Не удалось выполнить распознавание: {str(e)}. Извлечение цен и спецификаций может быть неточным."
+            logger.error(f"OCR Global Error using PaddleOCR: {e}", exc_info=True)
+            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Не удалось выполнить распознавание (PaddleOCR): {str(e)}. Извлечение цен и спецификаций может быть неточным."
 
     def _extract_text_from_doc(self, file_path: str) -> str:
         """
