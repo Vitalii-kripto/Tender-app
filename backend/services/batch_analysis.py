@@ -68,7 +68,17 @@ def analyze_tenders_batch_job(
         file_statuses = []
         available_files = os.listdir(tender_dir)
         
-        for filename in requested_files:
+        # Дедупликация: если есть и .doc и .docx с одним именем, берем только .docx
+        docx_bases = {os.path.splitext(f)[0] for f in requested_files if f.lower().endswith('.docx')}
+        filtered_files = []
+        for f in requested_files:
+            base, ext = os.path.splitext(f)
+            if ext.lower() == '.doc' and base in docx_bases:
+                logger.info(f"Skipping {f} because {base}.docx is also in requested files.")
+                continue
+            filtered_files.append(f)
+        
+        for filename in filtered_files:
             if filename not in available_files:
                 logger.warning(f"File {filename} not found in {tender_dir}")
                 file_statuses.append({"filename": filename, "status": "error", "message": "Файл не найден на диске"})

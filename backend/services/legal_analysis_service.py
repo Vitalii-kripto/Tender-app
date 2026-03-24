@@ -69,6 +69,16 @@ class LegalAnalysisService:
             response_text = response.text if response else ""
             end_time = time.time()
             
+            # Проверка на деградированный режим (отсутствие Poppler/Tesseract)
+            degraded_files = []
+            for file in files_data:
+                if "[SYSTEM INFO]" in file.get('text', '') and "деградированный" in file.get('text', '').lower():
+                    degraded_files.append(file.get('filename', 'Unknown'))
+            
+            if degraded_files:
+                warning_msg = f"\n\n> **⚠️ ВНИМАНИЕ: Техническое ограничение**\n> Некоторые документы ({', '.join(degraded_files)}) были обработаны в деградированном режиме (без OCR), так как на сервере не установлен Poppler или Tesseract. Качество анализа этих файлов может быть неполным.\n\n"
+                response_text = warning_msg + response_text
+
             final_report_len = len(response_text)
             logger.info(f"AI Response received in {end_time - start_time:.2f}s. Length: {final_report_len} chars")
 

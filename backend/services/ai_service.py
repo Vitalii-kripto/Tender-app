@@ -67,24 +67,6 @@ class AiService:
         else:
             self.client = genai.Client(api_key=self.api_key)
             logger.info(f"Gemini Client initialized with model: {self.model_name}")
-            self._validate_model()
-
-    def _validate_model(self):
-        """Проверка доступности модели и поддержки generate_content"""
-        if not self.client:
-            return
-        try:
-            # Попытка получить информацию о модели (или просто проверить имя)
-            # В новом SDK genai.Client можно проверить через models.get
-            model_info = self.client.models.get(model=self.model_name)
-            if 'generateContent' not in model_info.supported_generation_methods:
-                logger.error(f"CRITICAL: Model {self.model_name} does NOT support 'generateContent'!")
-            else:
-                logger.info(f"Model {self.model_name} validated successfully.")
-        except Exception as e:
-            logger.error(f"CRITICAL: Model {self.model_name} is unavailable or invalid: {e}")
-            if "404" in str(e):
-                logger.error("Model not found (404). Please check GEMINI_MODEL in .env")
 
     def _call_ai_with_retry(self, method, **kwargs):
         retries = 3
