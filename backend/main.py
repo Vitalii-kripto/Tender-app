@@ -24,7 +24,7 @@ if sys.platform == 'win32':
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
-from .services.eis_service import EisService, Notice, mark_seen, csv_append_row
+from .services.eis_service import EisService, Notice, mark_seen
 from backend.config import DOCUMENTS_ROOT
 from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
@@ -417,18 +417,6 @@ def skip_tender(tender: dict = Body(...)):
     logger.info(f"Skipping tender: {tender.get('id')}")
     try:
         mark_seen(tender['id'])
-        csv_append_row(
-            tender['id'], 
-            tender.get('ntype', ''), 
-            tender.get('keyword', ''), 
-            tender.get('search_url', ''), 
-            tender.get('docs_url', ''), 
-            "SKIP:user_not_selected", 
-            tender.get('title', ''), 
-            tender.get('description', ''), 
-            str(tender.get('initial_price', '')), 
-            tender.get('deadline', '')
-        )
         return {"status": "success"}
     except Exception as e:
         logger.error(f"Error skipping tender: {e}", exc_info=True)

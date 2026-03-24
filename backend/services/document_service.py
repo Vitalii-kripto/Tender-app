@@ -1,4 +1,5 @@
 import os
+import re
 from pypdf import PdfReader
 from fastapi import UploadFile
 import aiofiles
@@ -170,16 +171,25 @@ class DocumentService:
                 reader = PdfReader(file_path)
                 text_pages = []
                 for page in reader.pages:
-                    extracted = page.extract_text()
-                    if extracted:
-                        text_pages.append(extracted)
+                    try:
+                        extracted = page.extract_text()
+                        if extracted:
+                            text_pages.append(extracted)
+                    except Exception as e:
+                        logger.warning(f"Failed to extract text from a PDF page: {e}")
+                
                 full_text = "\n".join(text_pages)
                 
-                # OCR fallback
-                if len(full_text.strip()) < 50:
-                    logger.info("PDF text layer is empty or too short. Attempting OCR...")
-                    handler = "pypdf + pytesseract"
+                # Оценка качества извлеченного текста
+                is_quality_good = self._is_text_quality_good(full_text)
+                char_count = len(full_text)
+                
+                if not is_quality_good:
+                    logger.info(f"PDF text quality is POOR (Chars: {char_count}). Triggering OCR fallback...")
+                    handler = "pypdf + pytesseract (OCR)"
                     full_text = self._perform_ocr(file_path, full_text)
+                else:
+                    logger.info(f"PDF text quality is GOOD (Chars: {char_count}). Using native text layer.")
 
             # 6. Неподдерживаемый формат
             else:
@@ -193,6 +203,61 @@ class DocumentService:
         except Exception as e:
             logger.error(f"Extraction failed for {file_path} using {handler}. Error: {str(e)}", exc_info=True)
             return f"[ERROR] Ошибка при чтении {ext} ({handler}): {str(e)}"
+
+    def _is_text_quality_good(self, text: str) -> bool:
+        """
+        Проверяет качество извлеченного текста.
+        Возвращает True, если текст качественный, и False, если требуется OCR.
+        """
+        if not text or len(text.strip()) < 100:
+            return False
+
+        total_chars = len(text)
+        
+        # 1. Доля мусорных символов (не буквы, не цифры, не стандартная пунктуация/пробелы)
+        # Оставляем: буквы (лат/кир), цифры, пробелы, переносы и базовые знаки
+        clean_pattern = r'[a-zA-Zа-яА-ЯёЁ0-9\s\.,!?;:()""\'\'\-\+=\[\]/\\<>@#\$%\^&\*«»№]'
+        clean_chars_count = len(re.findall(clean_pattern, text))
+        garbage_ratio = 1 - (clean_chars_count / total_chars) if total_chars > 0 else 1
+        
+        # 2. Доля нормальных слов на русском (хотя бы 3 буквы кириллицы)
+        words = text.split()
+        if not words:
+            return False
+            
+        russian_words = [w for w in words if re.search(r'[а-яА-ЯёЁ]{3,}', w)]
+        russian_words_ratio = len(russian_words) / len(words) if words else 0
+        
+        # 3. Наличие длинных испорченных строк (слова без пробелов > 80 символов)
+        max_word_len = max(len(w) for w in words)
+        avg_word_len = sum(len(w) for w in words) / len(words)
+        
+        # 4. Доля нечитаемых фрагментов (символы-заполнители типа  или слишком много знаков вопроса)
+        unreadable_chars = len(re.findall(r'[\?\x00-\x08\x0b\x0c\x0e-\x1f]', text))
+        unreadable_ratio = unreadable_chars / total_chars if total_chars > 0 else 0
+
+        logger.info(f"PDF Quality Metrics: Garbage={garbage_ratio:.2f}, RusWords={russian_words_ratio:.2f}, MaxWord={max_word_len}, AvgWord={avg_word_len:.1f}, Unreadable={unreadable_ratio:.2f}")
+
+        # Пороговые значения для признания текста "плохим":
+        # - Слишком много мусора (> 15%)
+        # - Слишком мало русских слов (< 20% - для тендеров РФ это подозрительно)
+        # - Слишком длинные "слова" (> 100 символов - признак отсутствия пробелов)
+        # - Слишком много нечитаемых знаков (> 5%)
+        
+        if garbage_ratio > 0.15:
+            return False
+        if russian_words_ratio < 0.20:
+            # Если это не технический документ на английском (проверяем латиницу)
+            english_words = [w for w in words if re.search(r'[a-zA-Z]{3,}', w)]
+            english_words_ratio = len(english_words) / len(words)
+            if english_words_ratio < 0.30: # И не английский тоже
+                return False
+        if max_word_len > 100 or avg_word_len > 20:
+            return False
+        if unreadable_ratio > 0.05:
+            return False
+
+        return True
 
     def _perform_ocr(self, file_path: str, existing_text: str) -> str:
         """Вспомогательный метод для OCR распознавания"""

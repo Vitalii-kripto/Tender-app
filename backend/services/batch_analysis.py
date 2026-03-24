@@ -1,5 +1,6 @@
 import os
 import logging
+import zipfile
 from typing import List, Dict, Any
 from .document_service import DocumentService
 from .legal_analysis_service import LegalAnalysisService
@@ -18,13 +19,15 @@ def analyze_tenders_batch_job(
     """
     Основной воркер для пакетного анализа тендеров.
     Реализует Word-only архитектуру:
-    1. Извлечение текста из выбранных файлов.
+    1. Извлечение текста (DocumentService).
     2. Полнотекстовый ИИ-анализ (LegalAnalysisService).
     3. Генерация Word-отчета.
     4. Сохранение результатов в JobService.
+    5. Создание ZIP-архива для пакета.
     """
     selected_files = selected_files or {}
     documents_root = DOCUMENTS_ROOT
+    report_paths = []
     
     for tid in tender_ids:
         logger.info(f"--- [START TENDER ANALYSIS: {tid}] ---")
@@ -107,6 +110,8 @@ def analyze_tenders_batch_job(
             
             final_markdown = analysis_result.get('final_report_markdown', '')
             summary_notes = analysis_result.get('summary_notes', '')
+            cleaned_context_len = analysis_result.get('cleaned_context_len', 0)
+            final_report_len = analysis_result.get('final_report_len', 0)
             
             # 5. Генерация Word-отчета
             report_path = "N/A"
@@ -114,10 +119,9 @@ def analyze_tenders_batch_job(
             try:
                 from docx import Document
                 from backend.markdown_parser import add_markdown_to_docx
+                from docx.shared import Pt
                 
                 doc = Document()
-                # Настройка шрифта по умолчанию
-                from docx.shared import Pt
                 style = doc.styles['Normal']
                 font = style.font
                 font.name = 'Arial'
@@ -134,12 +138,19 @@ def analyze_tenders_batch_job(
                 report_filename = f"report_{tid}.docx"
                 report_path = os.path.abspath(os.path.join(tender_dir, report_filename))
                 doc.save(report_path)
+                report_paths.append(report_path)
                 export_available = True
-                logger.info(f"Word report saved to: {report_path}")
             except Exception as e:
                 logger.error(f"Error generating Word report for tender {tid}: {e}")
 
-            # 6. Завершение задачи для тендера
+            # 6. Финальное логирование требуемых метрик
+            logger.info(f"--- [ANALYSIS LOGS FOR TENDER {tid}] ---")
+            logger.info(f"- Cleaned context length: {cleaned_context_len} chars")
+            logger.info(f"- Final markdown report length: {final_report_len} chars")
+            logger.info(f"- Word report path: {report_path}")
+            logger.info(f"----------------------------------------")
+
+            # 7. Завершение задачи для тендера
             job_service.complete_tender(job_id, tid, {
                 "status": analysis_result.get('status', 'success'),
                 "final_report_markdown": final_markdown,
@@ -160,5 +171,25 @@ def analyze_tenders_batch_job(
                 "export_available": False
             })
             
-    # 7. Проверка завершения всего задания
+    # 8. Создание ZIP-архива для пакета (если больше 1 тендера)
+    zip_path = "N/A"
+    if len(report_paths) > 1:
+        try:
+            batch_dir = os.path.join(documents_root, "batch_results")
+            os.makedirs(batch_dir, exist_ok=True)
+            zip_filename = f"batch_{job_id}.zip"
+            zip_path = os.path.abspath(os.path.join(batch_dir, zip_filename))
+            
+            with zipfile.ZipFile(zip_path, 'w') as zipf:
+                for r_path in report_paths:
+                    if os.path.exists(r_path):
+                        zipf.write(r_path, os.path.basename(r_path))
+            
+            logger.info(f"--- [BATCH ZIP LOG] ---")
+            logger.info(f"- Batch ZIP path: {zip_path}")
+            logger.info(f"------------------------")
+        except Exception as e:
+            logger.error(f"Error creating batch ZIP: {e}")
+
+    # 9. Проверка завершения всего задания
     job_service.check_job_completion(job_id)

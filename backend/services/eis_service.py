@@ -36,7 +36,6 @@ SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
 
 # --- PATHS (Relative to project root) ---
 DB_PATH = os.path.join(DATA_DIR, "seen.sqlite")
-CSV_LOG_PATH = os.path.join(DATA_DIR, "notices_okpd2_log.csv")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
 
 USE_PROXY = os.getenv("USE_PROXY", "true").lower() == "true"
@@ -95,61 +94,9 @@ def mark_seen(reg: str):
     with sqlite3.connect(DB_PATH) as con:
         con.execute("INSERT OR IGNORE INTO seen(regNumber) VALUES(?)", (reg,))
 
-def csv_init():
-    ensure_dir(os.path.dirname(CSV_LOG_PATH))
-    if not os.path.exists(CSV_LOG_PATH):
-        with open(CSV_LOG_PATH, "w", newline="", encoding="utf-8") as f:
-            w = csv.writer(f, delimiter=";")
-            w.writerow(
-                [
-                    "ts",
-                    "regNumber",
-                    "noticeType",
-                    "keyword",
-                    "searchUrl",
-                    "docsUrl",
-                    "decision",
-                    "title",
-                    "object_info",
-                    "initial_price",
-                    "application_deadline",
-                ]
-            )
-
-def csv_append_row(
-    reg: str,
-    ntype: str,
-    keyword: str,
-    search_url: str,
-    d_url: str,
-    decision: str,
-    title: str,
-    object_info: str,
-    initial_price: str,
-    application_deadline: str,
-):
-    with open(CSV_LOG_PATH, "a", newline="", encoding="utf-8") as f:
-        w = csv.writer(f, delimiter=";")
-        w.writerow(
-            [
-                datetime.now().isoformat(timespec="seconds"),
-                reg,
-                ntype,
-                keyword,
-                search_url,
-                d_url,
-                decision,
-                title,
-                object_info,
-                initial_price,
-                application_deadline,
-            ]
-        )
-
 # Initialize on module load
 try:
     db_init()
-    csv_init()
 except Exception as e:
     print(f"Init error: {e}")
 
@@ -409,20 +356,17 @@ class EisService:
                             html = page.content()
                         except PwTimeoutError as e:
                             log_exception(f"Timeout fetching docs page {d_url}", e)
-                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"SKIP:documents_timeout", n.title, n.object_info, n.initial_price, n.application_deadline)
                             log_skip(f"SKIP:documents_timeout for {n.reg}")
                             results.append({"reg": n.reg, "status": "skip", "reason": "documents_timeout", "docs_url": d_url, "files": []})
                             continue
                         except Exception as e:
                             log_exception(f"Failed to fetch docs page {d_url}", e)
-                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, f"ERROR:fetch_docs_page:{e}", n.title, n.object_info, n.initial_price, n.application_deadline)
                             results.append({"reg": n.reg, "status": "error", "reason": f"fetch_docs_page:{e}", "docs_url": d_url, "files": []})
                             continue
 
                         items = parse_docs_block(html)
                         if not items:
                             log(f"No files found on docs page for {n.reg}")
-                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:no_files_found", n.title, n.object_info, n.initial_price, n.application_deadline)
                             log_skip(f"SKIP:no_files_found for {n.reg}")
                             mark_seen(n.reg)
                             results.append({"reg": n.reg, "status": "skip", "reason": "no_files_found", "docs_url": d_url, "files": []})
@@ -443,11 +387,9 @@ class EisService:
                                 log_exception(f"  Failed to download {file_url}", e)
 
                         if downloaded_files:
-                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SELECTED", n.title, n.object_info, n.initial_price, n.application_deadline)
                             mark_seen(n.reg)
                             results.append({"reg": n.reg, "status": "selected", "docs_url": d_url, "files": downloaded_files})
                         else:
-                            csv_append_row(n.reg, n.ntype, n.keyword, n.search_url, d_url, "SKIP:all_downloads_failed", n.title, n.object_info, n.initial_price, n.application_deadline)
                             log_skip(f"SKIP:all_downloads_failed for {n.reg}")
                             results.append({"reg": n.reg, "status": "skip", "reason": "all_downloads_failed", "docs_url": d_url, "files": []})
 
