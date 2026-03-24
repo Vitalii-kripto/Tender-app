@@ -57,6 +57,7 @@ export interface LegalAnalysisResult {
   id: string;
   status: 'success' | 'error' | 'partial';
   final_report_markdown?: string;
+  error_message?: string;
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
   showDoc?: boolean;

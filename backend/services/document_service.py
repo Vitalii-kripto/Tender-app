@@ -186,8 +186,17 @@ class DocumentService:
                 
                 if not is_quality_good:
                     logger.info(f"PDF text quality is POOR (Chars: {char_count}). Triggering OCR fallback...")
-                    handler = "pypdf + pytesseract (OCR)"
-                    full_text = self._perform_ocr(file_path, full_text)
+                    ocr_result = self._perform_ocr(file_path, full_text)
+                    
+                    # Если OCR вернул системную инфу об ошибке, значит он не отработал полноценно
+                    if "[SYSTEM INFO]" in ocr_result or "[OCR ERROR]" in ocr_result:
+                        logger.warning("OCR fallback failed or degraded. Using low-quality PyPDF text.")
+                        handler = "pypdf (degraded, OCR failed)"
+                        full_text = ocr_result
+                    else:
+                        logger.info("OCR fallback successful.")
+                        handler = "pypdf + pytesseract (OCR)"
+                        full_text = ocr_result
                 else:
                     logger.info(f"PDF text quality is GOOD (Chars: {char_count}). Using native text layer.")
 
@@ -272,8 +281,8 @@ class DocumentService:
             except Exception as poppler_error:
                 error_str = str(poppler_error).lower()
                 if "poppler" in error_str or "not found" in error_str:
-                     logger.error("Poppler not found.")
-                     msg = "Для распознавания сканов (OCR) необходимо установить Poppler."
+                     logger.error("Poppler not found. OCR cannot be performed.")
+                     msg = "Для распознавания сканов (OCR) необходимо установить Poppler. В данный момент используется только PyPDF (деградированный режим)."
                      if platform.system() == "Windows":
                          msg += " Скачайте Poppler для Windows (например, с GitHub @oschwartz10612), распакуйте и добавьте папку 'bin' в системную переменную PATH."
                      return f"{existing_text}\n\n[SYSTEM INFO] {msg}"

@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional, Callable
 from google import genai
 from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
+from backend.config import GEMINI_MODEL
 
 logger = logging.getLogger("LegalAnalysisService")
 
@@ -27,7 +28,8 @@ class LegalAnalysisService:
                 logger.error("LegalAnalysisService: No API_KEY found and no client provided!")
         
         # Модель для анализа
-        self.model_name = "gemini-1.5-pro" # Или gemini-1.5-flash для скорости
+        self.model_name = GEMINI_MODEL
+        logger.info(f"LegalAnalysisService initialized with model: {self.model_name}")
 
     def analyze_tender(
         self, 
@@ -85,10 +87,12 @@ class LegalAnalysisService:
             }
 
         except Exception as e:
+            error_msg = f"Ошибка при вызове ИИ: {str(e)}"
             logger.error(f"AI Analysis error: {e}", exc_info=True)
             return {
                 "status": "error",
-                "final_report_markdown": f"Ошибка при вызове ИИ: {str(e)}",
+                "final_report_markdown": "",
+                "error_message": error_msg,
                 "summary_notes": "Ошибка анализа.",
                 "cleaned_context_len": cleaned_context_len,
                 "final_report_len": 0

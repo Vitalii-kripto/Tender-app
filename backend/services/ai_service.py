@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import json
 import re
 import logging
+from backend.config import GEMINI_MODEL
 
 # --- LOGGING SETUP ---
 # Загружаем переменные окружения (.env)
@@ -44,6 +45,7 @@ def setup_ai_logger():
     logger.info(f".env file found and loaded: {env_loaded}")
     logger.info(f"LEGAL_AI_DEBUG from env: '{env_debug_val}'")
     logger.info(f"Actual DEBUG_MODE: {debug_mode}")
+    logger.info(f"GEMINI_MODEL from config: '{GEMINI_MODEL}'")
     logger.info(f"-----------------------------------------")
     
     return logger, debug_mode
@@ -54,16 +56,35 @@ class AiService:
     """
     Сервис для работы с Google Gemini API.
     Выполняет анализ рисков, подбор аналогов и проверку соответствия.
-    Используется стабильная модель gemini-3-flash-preview.
+    Используется модель, указанная в GEMINI_MODEL.
     """
     def __init__(self):
         self.api_key = os.getenv("API_KEY")
+        self.model_name = GEMINI_MODEL
         if not self.api_key:
             logger.warning("API_KEY not found in environment variables.")
             self.client = None
         else:
             self.client = genai.Client(api_key=self.api_key)
-            logger.info("Gemini Client initialized.")
+            logger.info(f"Gemini Client initialized with model: {self.model_name}")
+            self._validate_model()
+
+    def _validate_model(self):
+        """Проверка доступности модели и поддержки generate_content"""
+        if not self.client:
+            return
+        try:
+            # Попытка получить информацию о модели (или просто проверить имя)
+            # В новом SDK genai.Client можно проверить через models.get
+            model_info = self.client.models.get(model=self.model_name)
+            if 'generateContent' not in model_info.supported_generation_methods:
+                logger.error(f"CRITICAL: Model {self.model_name} does NOT support 'generateContent'!")
+            else:
+                logger.info(f"Model {self.model_name} validated successfully.")
+        except Exception as e:
+            logger.error(f"CRITICAL: Model {self.model_name} is unavailable or invalid: {e}")
+            if "404" in str(e):
+                logger.error("Model not found (404). Please check GEMINI_MODEL in .env")
 
     def _call_ai_with_retry(self, method, **kwargs):
         retries = 3
@@ -163,7 +184,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -206,7 +227,7 @@ class AiService:
             # Используем Google Search Tool
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -244,7 +265,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -287,7 +308,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -349,7 +370,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -381,7 +402,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -427,7 +448,7 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model='gemini-3-flash-preview',
+                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"

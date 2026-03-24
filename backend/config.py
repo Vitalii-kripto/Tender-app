@@ -10,3 +10,6 @@ DOCUMENTS_ROOT = os.path.join(DATA_DIR, "eis_docs")
 # Ensure data directories exist
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(DOCUMENTS_ROOT, exist_ok=True)
+
+# AI Model Configuration
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")

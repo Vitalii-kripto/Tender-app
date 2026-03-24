@@ -116,32 +116,36 @@ def analyze_tenders_batch_job(
             # 5. Генерация Word-отчета
             report_path = "N/A"
             export_available = False
-            try:
-                from docx import Document
-                from backend.markdown_parser import add_markdown_to_docx
-                from docx.shared import Pt
-                
-                doc = Document()
-                style = doc.styles['Normal']
-                font = style.font
-                font.name = 'Arial'
-                font.size = Pt(11)
-                
-                doc.add_heading(f'Юридическое заключение по тендеру {tid}', 0)
-                
-                if final_markdown:
-                    add_markdown_to_docx(doc, final_markdown)
-                else:
-                    doc.add_paragraph("Отчет пуст.")
-                
-                os.makedirs(tender_dir, exist_ok=True)
-                report_filename = f"report_{tid}.docx"
-                report_path = os.path.abspath(os.path.join(tender_dir, report_filename))
-                doc.save(report_path)
-                report_paths.append(report_path)
-                export_available = True
-            except Exception as e:
-                logger.error(f"Error generating Word report for tender {tid}: {e}")
+            
+            if analysis_result.get('status') == 'success':
+                try:
+                    from docx import Document
+                    from backend.markdown_parser import add_markdown_to_docx
+                    from docx.shared import Pt
+                    
+                    doc = Document()
+                    style = doc.styles['Normal']
+                    font = style.font
+                    font.name = 'Arial'
+                    font.size = Pt(11)
+                    
+                    doc.add_heading(f'Юридическое заключение по тендеру {tid}', 0)
+                    
+                    if final_markdown:
+                        add_markdown_to_docx(doc, final_markdown)
+                    else:
+                        doc.add_paragraph("Отчет пуст.")
+                    
+                    os.makedirs(tender_dir, exist_ok=True)
+                    report_filename = f"report_{tid}.docx"
+                    report_path = os.path.abspath(os.path.join(tender_dir, report_filename))
+                    doc.save(report_path)
+                    report_paths.append(report_path)
+                    export_available = True
+                except Exception as e:
+                    logger.error(f"Error generating Word report for tender {tid}: {e}")
+            else:
+                logger.warning(f"Skipping Word report for tender {tid} due to analysis status: {analysis_result.get('status')}")
 
             # 6. Финальное логирование требуемых метрик
             logger.info(f"--- [ANALYSIS LOGS FOR TENDER {tid}] ---")
@@ -154,6 +158,7 @@ def analyze_tenders_batch_job(
             job_service.complete_tender(job_id, tid, {
                 "status": analysis_result.get('status', 'success'),
                 "final_report_markdown": final_markdown,
+                "error_message": analysis_result.get('error_message', ''),
                 "summary_notes": summary_notes,
                 "file_statuses": file_statuses,
                 "report_path": report_path,

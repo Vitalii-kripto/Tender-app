@@ -586,14 +586,14 @@ const Analysis = () => {
                                  )}
 
                                  {/* Error Block */}
-                                 {result.status === 'error' && result.final_report_markdown && (
+                                 {result.status === 'error' && (
                                      <div className="p-6 bg-red-50 border-b border-red-100">
                                          <div className="flex items-center gap-3 mb-4">
                                              <AlertTriangle size={24} className="text-red-500" />
                                              <h4 className="text-lg font-bold text-red-900">Ошибка анализа</h4>
                                          </div>
                                          <div className="text-red-700 text-sm whitespace-pre-wrap">
-                                             {result.final_report_markdown}
+                                             {result.error_message || result.final_report_markdown || "Произошла неизвестная ошибка при анализе."}
                                          </div>
                                      </div>
                                  )}
