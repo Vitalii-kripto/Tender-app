@@ -7,50 +7,14 @@ import json
 import re
 import logging
 from backend.config import GEMINI_MODEL
+from backend.logger import logger
 
 # --- LOGGING SETUP ---
 # Загружаем переменные окружения (.env)
 env_loaded = load_dotenv()
 
-def setup_ai_logger():
-    env_debug_val = os.getenv("LEGAL_AI_DEBUG", "false")
-    debug_mode = env_debug_val.lower() == "true"
-    logger = logging.getLogger("AiService")
-    logger.setLevel(logging.DEBUG if debug_mode else logging.INFO)
-    
-    # Очищаем старые хендлеры
-    if logger.hasHandlers():
-        logger.handlers.clear()
-        
-    log_dir = os.path.join(os.getcwd(), 'backend', 'logs')
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, 'legal_ai.log')
-    
-    # Используем 'w' (write) для перезаписи при старте и utf-8
-    file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    logger.addHandler(file_handler)
-    
-    # Также в консоль
-    stream_handler = logging.StreamHandler()
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-    
-    # Чтобы не дублировать в корневой логгер
-    logger.propagate = False
-    
-    # Стартовые логи для проверки .env
-    logger.info(f"--- [ENV INITIALIZATION - AI SERVICE] ---")
-    logger.info(f".env file found and loaded: {env_loaded}")
-    logger.info(f"LEGAL_AI_DEBUG from env: '{env_debug_val}'")
-    logger.info(f"Actual DEBUG_MODE: {debug_mode}")
-    logger.info(f"GEMINI_MODEL from config: '{GEMINI_MODEL}'")
-    logger.info(f"-----------------------------------------")
-    
-    return logger, debug_mode
-
-logger, DEBUG_MODE = setup_ai_logger()
+env_debug_val = os.getenv("LEGAL_AI_DEBUG", "false")
+DEBUG_MODE = env_debug_val.lower() == "true"
 
 class AiService:
     """
@@ -60,13 +24,37 @@ class AiService:
     """
     def __init__(self):
         self.api_key = os.getenv("API_KEY")
-        self.model_name = GEMINI_MODEL
+        
+        # Определяем источник значения модели
+        env_model = os.getenv("GEMINI_MODEL")
+        if env_model:
+            self.model_name = env_model
+            model_source = "environment variable GEMINI_MODEL"
+        else:
+            self.model_name = "gemini-3-flash-preview"
+            model_source = "default value"
+            
         if not self.api_key:
-            logger.warning("API_KEY not found in environment variables.")
+            logger.warning("API_KEY not found in environment variables. AI analysis will be unavailable.")
             self.client = None
         else:
-            self.client = genai.Client(api_key=self.api_key)
-            logger.info(f"Gemini Client initialized with model: {self.model_name}")
+            try:
+                self.client = genai.Client(api_key=self.api_key)
+                logger.info(f"Gemini Client initialized. Model: {self.model_name} (Source: {model_source})")
+                
+                # Безопасная проверка доступности модели совместимым способом
+                try:
+                    # Используем метод get для проверки существования и доступности модели
+                    self.client.models.get(model=self.model_name)
+                    logger.info(f"Model check: {self.model_name} is verified and available.")
+                except Exception as model_err:
+                    # Логируем как информацию/предупреждение, не блокируя запуск, 
+                    # так как модель может заработать при фактическом вызове
+                    logger.info(f"Model check result (non-critical): {model_err}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini Client: {e}")
+                self.client = None
 
     def _call_ai_with_retry(self, method, **kwargs):
         retries = 3
@@ -78,11 +66,10 @@ class AiService:
         logger.info(f"Method: {method.__name__}")
         logger.info(f"Model: {model_name}")
         
-        if DEBUG_MODE:
-            prompt_to_log = kwargs.get('contents', 'No contents')
-            logger.info("--- [FULL ASSEMBLED PROMPT] ---")
-            logger.info(prompt_to_log)
-            logger.info("--- [END OF PROMPT] ---")
+        prompt_to_log = kwargs.get('contents', 'No contents')
+        logger.info("--- [FULL ASSEMBLED PROMPT] ---")
+        logger.info(prompt_to_log)
+        logger.info("--- [END OF PROMPT] ---")
         
         logger.info(f"===== [AI REQUEST END] =====")
 
@@ -100,12 +87,9 @@ class AiService:
                 
                 if response:
                     text = response.text
-                    if DEBUG_MODE:
-                        logger.info("--- [FULL RAW RESPONSE] ---")
-                        logger.info(text)
-                        logger.info("--- [END OF RAW RESPONSE] ---")
-                    else:
-                        logger.info(f"Raw AI response (first 2000 chars): {text[:2000]}")
+                    logger.info("--- [FULL RAW RESPONSE] ---")
+                    logger.info(text)
+                    logger.info("--- [END OF RAW RESPONSE] ---")
                 else:
                     logger.warning("AI returned empty response.")
                 

@@ -2,18 +2,7 @@ import uvicorn
 import logging
 import os
 
-# --- LOGGING SETUP ---
-# Логгер для запускающего скрипта
-log_file = "backend_runner_log.txt"
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("BackendRunner")
+from backend.logger import logger
 
 if __name__ == "__main__":
     logger.info("==========================================")

@@ -83,43 +83,7 @@ def parse_markdown_list(text):
             list_items.append(clean_markdown(line))
     return list_items
 
-# --- LOGGING SETUP ---
-log_file = "fastapi_app_log.txt"
-
-# Diagnostic logs for encoding
-print(f"DEBUG: sys.getdefaultencoding() = {sys.getdefaultencoding()}")
-import locale
-print(f"DEBUG: locale.getpreferredencoding(False) = {locale.getpreferredencoding(False)}")
-print(f"DEBUG: os.environ.get('PYTHONUTF8') = {os.environ.get('PYTHONUTF8')}")
-
-# Test case for Russian text
-test_file = "russian_test.txt"
-test_text = "Проверка кириллицы: Привет, мир!"
-try:
-    with open(test_file, "w", encoding="utf-8") as f:
-        f.write(test_text)
-    with open(test_file, "r", encoding="utf-8") as f:
-        read_text = f.read()
-    if read_text == test_text:
-        print(f"✅ Russian text test passed: {read_text}")
-    else:
-        print(f"❌ Russian text test failed: expected '{test_text}', got '{read_text}'")
-except Exception as e:
-    print(f"❌ Russian text test error: {e}")
-
-# Удаляем существующие хендлеры, если они есть, чтобы избежать дублирования при релоаде
-for handler in logging.root.handlers[:]:
-    logging.root.removeHandler(handler)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(log_file, encoding='utf-8', mode='w'), # mode='w' перезаписывает файл
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger("FastAPI_Main")
+from backend.logger import logger
 
 # --- SETUP ---
 def migrate_db():

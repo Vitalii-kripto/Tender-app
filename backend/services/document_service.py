@@ -7,9 +7,7 @@ from pdf2image import convert_from_path
 import platform
 import logging
 
-# --- LOGGING SETUP ---
-logger = logging.getLogger("DocumentService")
-logger.setLevel(logging.INFO)
+from backend.logger import logger
 
 # Безопасный импорт pytesseract
 try:
@@ -109,21 +107,27 @@ class DocumentService:
         handler = "None"
 
         try:
-            # 1. Обработка .doc (с попыткой конвертации)
+            # 1. Обработка .doc (с попыткой конвертации и дедупликации)
             if ext == '.doc':
-                logger.info(f"Handler: .doc legacy converter/antiword")
-                handler = "doc_converter"
-                new_path = self._convert_doc_to_docx(file_path)
-                if new_path.endswith('.docx'):
-                    logger.info(f"Successfully converted .doc to .docx: {new_path}")
-                    file_path = new_path
+                docx_path = file_path + "x"
+                if os.path.exists(docx_path):
+                    logger.info(f"Skipping .doc extraction because .docx already exists: {docx_path}")
+                    file_path = docx_path
                     ext = '.docx'
-                    # Продолжаем как .docx ниже
                 else:
-                    logger.info(f"Conversion failed or not applicable, using fallback extraction for .doc")
-                    full_text = self._extract_text_from_doc(file_path)
-                    logger.info(f"Extraction complete. Handler: {handler}. Characters: {len(full_text)}")
-                    return full_text
+                    logger.info(f"Handler: .doc legacy converter/antiword")
+                    handler = "doc_converter"
+                    new_path = self._convert_doc_to_docx(file_path)
+                    if new_path.endswith('.docx'):
+                        logger.info(f"Successfully converted .doc to .docx: {new_path}")
+                        file_path = new_path
+                        ext = '.docx'
+                        # Продолжаем как .docx ниже
+                    else:
+                        logger.info(f"Conversion failed or not applicable, using fallback extraction for .doc")
+                        full_text = self._extract_text_from_doc(file_path)
+                        logger.info(f"Extraction complete. Handler: {handler}. Characters: {len(full_text)}")
+                        return full_text
 
             # 2. Обработка .docx
             if ext == '.docx':
@@ -190,8 +194,12 @@ class DocumentService:
                     
                     # Если OCR вернул системную инфу об ошибке, значит он не отработал полноценно
                     if "[SYSTEM INFO]" in ocr_result or "[OCR ERROR]" in ocr_result:
-                        logger.warning("OCR fallback failed or degraded. Using low-quality PyPDF text.")
-                        handler = "pypdf (degraded, OCR failed)"
+                        if "деградированный" in ocr_result.lower():
+                            logger.warning("PDF marked as DEGRADED: OCR tools missing.")
+                            handler = "pypdf (degraded, OCR unavailable)"
+                        else:
+                            logger.warning("OCR fallback failed. Using low-quality PyPDF text.")
+                            handler = "pypdf (degraded, OCR failed)"
                         full_text = ocr_result
                     else:
                         logger.info("OCR fallback successful.")
@@ -217,19 +225,19 @@ class DocumentService:
         """
         Проверяет качество извлеченного текста.
         Возвращает True, если текст качественный, и False, если требуется OCR.
+        Ужесточенные критерии для PDF.
         """
-        if not text or len(text.strip()) < 100:
+        if not text or len(text.strip()) < 150: # Увеличили порог минимальной длины
             return False
 
         total_chars = len(text)
         
-        # 1. Доля мусорных символов (не буквы, не цифры, не стандартная пунктуация/пробелы)
-        # Оставляем: буквы (лат/кир), цифры, пробелы, переносы и базовые знаки
+        # 1. Доля мусорных символов
         clean_pattern = r'[a-zA-Zа-яА-ЯёЁ0-9\s\.,!?;:()""\'\'\-\+=\[\]/\\<>@#\$%\^&\*«»№]'
         clean_chars_count = len(re.findall(clean_pattern, text))
         garbage_ratio = 1 - (clean_chars_count / total_chars) if total_chars > 0 else 1
         
-        # 2. Доля нормальных слов на русском (хотя бы 3 буквы кириллицы)
+        # 2. Доля нормальных слов на русском
         words = text.split()
         if not words:
             return False
@@ -237,33 +245,33 @@ class DocumentService:
         russian_words = [w for w in words if re.search(r'[а-яА-ЯёЁ]{3,}', w)]
         russian_words_ratio = len(russian_words) / len(words) if words else 0
         
-        # 3. Наличие длинных испорченных строк (слова без пробелов > 80 символов)
+        # 3. Наличие длинных испорченных строк
         max_word_len = max(len(w) for w in words)
         avg_word_len = sum(len(w) for w in words) / len(words)
         
-        # 4. Доля нечитаемых фрагментов (символы-заполнители типа  или слишком много знаков вопроса)
+        # 4. Доля нечитаемых фрагментов
         unreadable_chars = len(re.findall(r'[\?\x00-\x08\x0b\x0c\x0e-\x1f]', text))
         unreadable_ratio = unreadable_chars / total_chars if total_chars > 0 else 0
 
         logger.info(f"PDF Quality Metrics: Garbage={garbage_ratio:.2f}, RusWords={russian_words_ratio:.2f}, MaxWord={max_word_len}, AvgWord={avg_word_len:.1f}, Unreadable={unreadable_ratio:.2f}")
 
-        # Пороговые значения для признания текста "плохим":
-        # - Слишком много мусора (> 15%)
-        # - Слишком мало русских слов (< 20% - для тендеров РФ это подозрительно)
-        # - Слишком длинные "слова" (> 100 символов - признак отсутствия пробелов)
-        # - Слишком много нечитаемых знаков (> 5%)
+        # Ужесточенные пороговые значения:
+        # - Мусора > 10% (было 15%)
+        # - Русских слов < 30% (было 20%)
+        # - Слишком длинные "слова" (> 80 символов, было 100)
+        # - Слишком много нечитаемых знаков (> 3%, было 5%)
         
-        if garbage_ratio > 0.15:
+        if garbage_ratio > 0.10:
             return False
-        if russian_words_ratio < 0.20:
-            # Если это не технический документ на английском (проверяем латиницу)
+        if russian_words_ratio < 0.30:
+            # Если это не технический документ на английском
             english_words = [w for w in words if re.search(r'[a-zA-Z]{3,}', w)]
             english_words_ratio = len(english_words) / len(words)
-            if english_words_ratio < 0.30: # И не английский тоже
+            if english_words_ratio < 0.40: # И не английский тоже
                 return False
-        if max_word_len > 100 or avg_word_len > 20:
+        if max_word_len > 80 or avg_word_len > 18:
             return False
-        if unreadable_ratio > 0.05:
+        if unreadable_ratio > 0.03:
             return False
 
         return True
@@ -272,45 +280,52 @@ class DocumentService:
         """Вспомогательный метод для OCR распознавания"""
         if not pytesseract:
             logger.warning("OCR requested but Pytesseract is not available.")
-            return f"{existing_text}\n\n[SYSTEM INFO] Текст не распознан: требуется библиотека Pytesseract."
+            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Текст не распознан: требуется библиотека Pytesseract. Извлечение цен и спецификаций может быть неточным."
 
         try:
             # Попытка проверки Poppler (нужен для pdf2image)
             try:
-                images = convert_from_path(file_path, first_page=1, last_page=5) # Ограничим 5 страницами для скорости
+                # Пытаемся вызвать convert_from_path для проверки наличия poppler
+                images = convert_from_path(file_path, first_page=1, last_page=1)
             except Exception as poppler_error:
                 error_str = str(poppler_error).lower()
-                if "poppler" in error_str or "not found" in error_str:
+                if "poppler" in error_str or "not found" in error_str or "find" in error_str:
                      logger.error("Poppler not found. OCR cannot be performed.")
-                     msg = "Для распознавания сканов (OCR) необходимо установить Poppler. В данный момент используется только PyPDF (деградированный режим)."
+                     msg = "Статус: деградированный режим. Для распознавания сканов (OCR) необходимо установить Poppler. В данный момент используется только PyPDF. Извлечение цен и спецификаций может быть неточным."
                      if platform.system() == "Windows":
-                         msg += " Скачайте Poppler для Windows (например, с GitHub @oschwartz10612), распакуйте и добавьте папку 'bin' в системную переменную PATH."
+                         msg += " Скачайте Poppler для Windows, распакуйте и добавьте папку 'bin' в системную переменную PATH."
                      return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
                 raise poppler_error
 
+            # Проверка Tesseract через pytesseract
+            try:
+                pytesseract.get_tesseract_version()
+            except Exception as tess_err:
+                logger.error(f"Tesseract Error: {tess_err}")
+                if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
+                     msg = "Статус: деградированный режим. Tesseract OCR не найден. Извлечение цен и спецификаций может быть неточным."
+                     if platform.system() == "Windows":
+                         msg += " Установите Tesseract OCR и убедитесь, что он в PATH."
+                     return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
+                raise tess_err
+
+            # Выполняем OCR (первые 20 страниц для баланса)
+            images = convert_from_path(file_path, first_page=1, last_page=20)
             ocr_text = []
             for i, image in enumerate(images):
-                try:
-                    text = pytesseract.image_to_string(image, lang='rus+eng')
-                    ocr_text.append(f"--- Page {i+1} ---\n{text}")
-                except Exception as tess_err:
-                    logger.error(f"Tesseract Error on page {i}: {tess_err}")
-                    if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
-                         msg = "Tesseract OCR не найден."
-                         if platform.system() == "Windows":
-                             msg += " Установите Tesseract OCR и убедитесь, что он в PATH."
-                         return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
+                text = pytesseract.image_to_string(image, lang='rus+eng')
+                ocr_text.append(f"--- Page {i+1} ---\n{text}")
             
             if ocr_text:
                 logger.info(f"OCR successful. Extracted {len(''.join(ocr_text))} characters.")
                 return "\n".join(ocr_text)
             else:
                 logger.warning("OCR ran but found no text.")
-                return f"{existing_text}\n\n[INFO] OCR отработал, но текст не найден."
+                return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. OCR отработал, но текст не найден."
 
         except Exception as e:
             logger.error(f"OCR Global Error: {e}")
-            return f"{existing_text}\n\n[OCR ERROR] Не удалось выполнить распознавание: {str(e)}"
+            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Не удалось выполнить распознавание: {str(e)}. Извлечение цен и спецификаций может быть неточным."
 
     def _extract_text_from_doc(self, file_path: str) -> str:
         """

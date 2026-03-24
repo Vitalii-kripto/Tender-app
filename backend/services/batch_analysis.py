@@ -7,7 +7,7 @@ from .legal_analysis_service import LegalAnalysisService
 from backend.config import DOCUMENTS_ROOT
 from .job_service import job_service
 
-logger = logging.getLogger("BatchAnalysis")
+from backend.logger import logger
 
 def analyze_tenders_batch_job(
     job_id: str, 
@@ -68,6 +68,9 @@ def analyze_tenders_batch_job(
         file_statuses = []
         available_files = os.listdir(tender_dir)
         
+        logger.info(f"--- [STARTING TEXT EXTRACTION FOR TENDER {tid}] ---")
+        logger.info(f"Requested files: {requested_files}")
+        
         # Дедупликация: если есть и .doc и .docx с одним именем, берем только .docx
         docx_bases = {os.path.splitext(f)[0] for f in requested_files if f.lower().endswith('.docx')}
         filtered_files = []
@@ -78,6 +81,8 @@ def analyze_tenders_batch_job(
                 continue
             filtered_files.append(f)
         
+        logger.info(f"Filtered files to process: {filtered_files}")
+        
         for filename in filtered_files:
             if filename not in available_files:
                 logger.warning(f"File {filename} not found in {tender_dir}")
@@ -85,12 +90,20 @@ def analyze_tenders_batch_job(
                 continue
                 
             filepath = os.path.join(tender_dir, filename)
+            logger.info(f"Processing file: {filename}")
             try:
                 text = doc_service.extract_text(filepath)
                 if text and len(text.strip()) > 0:
+                    char_count = len(text)
+                    logger.info(f"Successfully extracted {char_count} chars from {filename}")
+                    
+                    if "[SYSTEM INFO]" in text:
+                        logger.warning(f"File {filename} processed with SYSTEM INFO (possibly DEGRADED).")
+                    
                     files_data.append({"filename": filename, "text": text})
                     file_statuses.append({"filename": filename, "status": "ok", "message": "Текст успешно извлечен"})
                 else:
+                    logger.warning(f"File {filename} is empty or no text extracted.")
                     file_statuses.append({"filename": filename, "status": "warning", "message": "Файл пуст или текст не извлечен"})
             except Exception as e:
                 logger.error(f"Failed to extract text from {filename}: {e}")
