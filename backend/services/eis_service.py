@@ -257,6 +257,10 @@ def guess_extension_from_content_type(ct: str) -> str:
         return ".docx"
     if "msword" in ct:
         return ".doc"
+    if "spreadsheetml" in ct:
+        return ".xlsx"
+    if "excel" in ct:
+        return ".xls"
     if "zip" in ct:
         return ".zip"
     if "rar" in ct:

@@ -72,6 +72,10 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
 
         job_service.update_tender_stage(job_id, tid, "Извлечение текста", 20)
 
+        # Метаданные для логирования
+        excel_files_info = []
+        all_filenames = target_files
+
         for filename in target_files:
             filepath = os.path.join(tender_dir, filename)
             if not os.path.isfile(filepath):
@@ -81,6 +85,14 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
                 text = doc_service.extract_text(filepath)
                 files_data.append({"filename": filename, "text": text})
                 file_statuses.append({"filename": filename, "status": "ok", "message": "Текст успешно извлечен"})
+                
+                # Собираем инфо об Excel
+                ext = os.path.splitext(filename)[1].lower()
+                if ext in ['.xlsx', '.xls']:
+                    excel_files_info.append({
+                        "filename": filename,
+                        "char_count": len(text)
+                    })
             except Exception as e:
                 logger.error(f"Failed to extract text from {filename}: {e}")
                 file_statuses.append({"filename": filename, "status": "extract_error", "message": str(e)})
@@ -102,18 +114,46 @@ def analyze_tenders_batch_job(job_id: str, tender_ids: List[str], doc_service: D
             def stage_callback(stage, progress, status="running"):
                 job_service.update_tender_stage(job_id, tid, stage, progress, status)
 
-            analysis_result = legal_service.analyze_tender(files_data, tender_id=tid, callback=stage_callback)
+            analysis_result = legal_service.analyze_tender(
+                files_data, 
+                tender_id=tid, 
+                callback=stage_callback,
+                metadata={
+                    "all_filenames": all_filenames,
+                    "excel_files_info": excel_files_info
+                }
+            )
             
             # Добавляем инфо о пропущенных файлах в final_report_markdown
             final_markdown = analysis_result.get('final_report_markdown', '')
             if missing_files:
                 final_markdown = f"**ВНИМАНИЕ: Следующие выбранные файлы отсутствуют в системе: {', '.join(missing_files)}**\n\n" + final_markdown
 
+            # Генерируем Word-отчет и сохраняем его на диск для логов
+            report_path = "N/A"
+            try:
+                from docx import Document
+                from backend.markdown_parser import add_markdown_to_docx
+                from backend.services.eis_service import OUT_DIR
+                
+                doc = Document()
+                add_markdown_to_docx(doc, final_markdown)
+                
+                tender_dir = os.path.join(OUT_DIR, str(tid))
+                os.makedirs(tender_dir, exist_ok=True)
+                report_path = os.path.abspath(os.path.join(tender_dir, f"report_{tid}.docx"))
+                doc.save(report_path)
+                logger.info(f"5. Path to Word report: {report_path}")
+                logger.info(f"--- [END TENDER ANALYSIS: {tid}] ---")
+            except Exception as e:
+                logger.error(f"Error generating Word report for tender {tid}: {e}")
+
             job_service.complete_tender(job_id, tid, {
                 "status": analysis_result.get('status', 'success'),
                 "final_report_markdown": final_markdown,
                 "file_statuses": file_statuses,
-                "selected_files_count": selected_count
+                "selected_files_count": selected_count,
+                "report_path": report_path
             })
         except Exception as e:
             logger.error(f"Analysis failed for tender {tid}: {e}")

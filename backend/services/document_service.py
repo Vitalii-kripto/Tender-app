@@ -130,6 +130,64 @@ class DocumentService:
                 logger.error(f"DOCX Error: {e}")
                 return f"[DOCX ERROR] Не удалось прочитать файл: {str(e)}"
         
+        elif ext == '.xlsx':
+            try:
+                import openpyxl
+                wb = openpyxl.load_workbook(file_path, data_only=True)
+                sheets_text = []
+                
+                for sheet in wb.worksheets:
+                    sheet_data = []
+                    for row in sheet.iter_rows(values_only=True):
+                        # Сохраняем строки и столбцы, числовые значения, текстовые примечания
+                        row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                        if row_text.strip().replace("|", "").strip():
+                            sheet_data.append(row_text)
+                    
+                    if sheet_data:
+                        sheets_text.append(f"=== ЛИСТ: {sheet.title} ===\n" + "\n".join(sheet_data))
+                
+                full_text = "\n\n".join(sheets_text)
+                logger.info(f"Format: .xlsx, Sheets: {len(wb.worksheets)}, Extracted characters: {len(full_text)}, Status: успешно прочитан")
+                return full_text
+            except ImportError:
+                logger.warning("openpyxl is not installed. Cannot read XLSX.")
+                return "[SYSTEM INFO] Библиотека openpyxl не установлена. Чтение XLSX невозможно."
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"XLSX Error: {error_msg}")
+                logger.info(f"Format: .xlsx, Status: ошибка - {error_msg}")
+                return f"[XLSX ERROR] Ошибка при чтении Excel (.xlsx): {error_msg}. Проверьте, не поврежден ли файл и не защищен ли он паролем."
+        
+        elif ext == '.xls':
+            try:
+                import xlrd
+                wb = xlrd.open_workbook(file_path)
+                sheets_text = []
+                
+                for sheet in wb.sheets():
+                    sheet_data = []
+                    for row_idx in range(sheet.nrows):
+                        row = sheet.row_values(row_idx)
+                        row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
+                        if row_text.strip().replace("|", "").strip():
+                            sheet_data.append(row_text)
+                    
+                    if sheet_data:
+                        sheets_text.append(f"=== ЛИСТ: {sheet.name} ===\n" + "\n".join(sheet_data))
+                
+                full_text = "\n\n".join(sheets_text)
+                logger.info(f"Format: .xls, Sheets: {len(wb.sheets())}, Extracted characters: {len(full_text)}, Status: успешно прочитан")
+                return full_text
+            except ImportError:
+                logger.warning("xlrd is not installed. Cannot read XLS.")
+                return "[SYSTEM INFO] Библиотека xlrd не установлена. Чтение XLS невозможно."
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"XLS Error: {error_msg}")
+                logger.info(f"Format: .xls, Status: ошибка - {error_msg}")
+                return f"[XLS ERROR] Ошибка при чтении старого Excel (.xls): {error_msg}. Попробуйте пересохранить файл в формате .xlsx."
+        
         elif ext == '.doc':
             logger.info(f"Legacy .doc format detected: {file_path}. Attempting extraction...")
             return self._extract_text_from_doc(file_path)

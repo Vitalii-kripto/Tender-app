@@ -5,7 +5,7 @@ import remarkGfm from 'remark-gfm';
 import { MOCK_CATALOG } from './ProductCatalog';
 import { findProductEquivalent, startBatchAnalysisJob, getJobStatus, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
 import { AnalysisResult, Tender, LegalAnalysisResult } from '../types';
-import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare, Printer, ShieldAlert, Layout, ChevronDown, Table } from 'lucide-react';
+import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare, ShieldAlert, Layout, ChevronDown, Table } from 'lucide-react';
 
 const Analysis = () => {
   const navigate = useNavigate();
@@ -268,10 +268,6 @@ const Analysis = () => {
     }
   };
 
-  const exportToPDF = () => {
-    window.print();
-  };
-
   const formatCurrency = (amount: number | string) => {
       const num = typeof amount === 'string' ? parseFloat(amount) : amount;
       if (isNaN(num)) return amount;
@@ -501,7 +497,7 @@ const Analysis = () => {
                             className="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg text-sm font-bold transition-colors shadow-sm"
                         >
                             <FileDown size={16} />
-                            Экспорт всех в Word
+                            Скачать отчет Word
                         </button>
                     </div>
                 </div>
@@ -572,11 +568,6 @@ const Analysis = () => {
                                                  </div>
                                                  <h4 className="text-2xl font-black text-slate-900 tracking-tight">Юридический отчет по тендеру</h4>
                                              </div>
-                                             <div className="flex gap-2">
-                                                 <button onClick={exportToPDF} className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-bold text-slate-700 hover:bg-slate-50 transition-all shadow-sm">
-                                                     <Printer size={16} /> Печать / PDF
-                                                 </button>
-                                             </div>
                                          </div>
                                          <div className="markdown-body prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-table:border prose-table:border-slate-200 prose-th:bg-slate-50 prose-th:px-4 prose-th:py-2 prose-td:px-4 prose-td:py-2">
                                              <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -610,10 +601,7 @@ const Analysis = () => {
                                 {result.status === 'success' && (
                                     <div className="bg-slate-50 p-4 border-t border-slate-100 flex justify-end gap-6">
                                         <button onClick={() => exportToWord([result])} className="text-[10px] text-blue-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
-                                            <FileDown size={14} /> Полный Word
-                                        </button>
-                                        <button onClick={exportToPDF} className="text-[10px] text-slate-600 font-black hover:underline flex items-center gap-1.5 uppercase tracking-wider">
-                                            <Printer size={14} /> Печать / PDF
+                                            <FileDown size={14} /> Скачать отчет Word
                                         </button>
                                     </div>
                                 )}

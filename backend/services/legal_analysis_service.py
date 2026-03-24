@@ -210,12 +210,54 @@ class LegalAnalysisService:
             
         return "\n\n".join(full_context)
 
-    def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
+    def _check_section_7_completeness(self, markdown: str) -> bool:
+        """
+        Проверяет полноту раздела 7 в отчете.
+        """
+        if not markdown:
+            return False
+            
+        # Ищем раздел 7
+        # Обычно он начинается с "## 7)" или "7)"
+        section_7_match = re.search(r'(?:##\s*)?7\)\s*Полный перечень документов.*?(?=(?:##\s*)?8\)|$)', markdown, re.DOTALL | re.IGNORECASE)
+        if not section_7_match:
+            logger.warning("Раздел 7 не найден в отчете.")
+            return False
+            
+        section_content = section_7_match.group(0)
+        
+        # Проверка наличия подблоков
+        has_application_docs = "В составе заявки" in section_content
+        has_delivery_docs = "При поставке" in section_content
+        
+        # Проверка на "Информация не найдена"
+        not_found_phrase = "Информация по данному разделу не найдена"
+        is_not_found = not_found_phrase in section_content
+        
+        # Проверка длины (список должен быть хотя бы несколько строк)
+        # Если там только заголовки и "Информация не найдена", то длина будет небольшой.
+        is_too_short = len(section_content.strip()) < 150
+        
+        if not has_application_docs or not has_delivery_docs or (is_not_found and is_too_short):
+            logger.warning(f"Раздел 7 признан неполным: has_app={has_application_docs}, has_del={has_delivery_docs}, is_not_found={is_not_found}, len={len(section_content)}")
+            return False
+            
+        return True
+
+    def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Основной метод анализа полного пакета документов.
         """
+        metadata = metadata or {}
         logger.info(f"--- STARTING FULL PACKAGE ANALYSIS FOR TENDER: {tender_id} ---")
         
+        # Логирование метаданных из входных параметров
+        logger.info(f"Tender Files List: {metadata.get('all_filenames', 'N/A')}")
+        excel_info = metadata.get('excel_files_info', [])
+        logger.info(f"Excel Files Found: {[f['filename'] for f in excel_info]}")
+        for f in excel_info:
+            logger.info(f"Excel File '{f['filename']}': extracted {f['char_count']} characters")
+
         self._log_progress("Сбор и очистка документов", 10, callback=callback)
         
         filenames = [f.get('filename', 'unknown') for f in files]
@@ -226,7 +268,8 @@ class LegalAnalysisService:
         # 2. Подготовка полного контекста (основной вход для модели)
         logger.info(f"Preparing full context from {len(files)} files...")
         full_context = self._prepare_full_context(files)
-        logger.info(f"Full context size: {len(full_context)} characters")
+        cleaned_context_len = len(full_context)
+        logger.info(f"Full cleaned context size: {cleaned_context_len} characters")
         
         logger.info("--- [ASSEMBLED FULL CLEANED CONTEXT START] ---")
         logger.info(full_context)
@@ -239,11 +282,44 @@ class LegalAnalysisService:
             res = {"final_report_markdown": "Ошибка формирования текста промпта для ИИ-анализа."}
         else:
             res = self._call_ai_with_retry(assembled_prompt, prompt_type="full", tender_id=tender_id, filenames=filenames)
+            
+            # Проверка полноты раздела 7
+            final_report_markdown = res.get('final_report_markdown') or ""
+            if not self._check_section_7_completeness(final_report_markdown):
+                logger.info(f"Section 7 is incomplete for tender {tender_id}. Triggering one-time retry with enhanced prompt.")
+                
+                enhanced_prompt = assembled_prompt + "\n\n" + (
+                    "ВНИМАНИЕ: Предыдущий анализ раздела 7 был признан неполным. "
+                    "ОБЯЗАТЕЛЬНО найди и перечисли ВСЕ документы, требуемые в составе заявки и при поставке. "
+                    "Проверь весь текст документации, включая технические задания, проекты контрактов и инструкции. "
+                    "Раздели их на два четких списка: 'В составе заявки' и 'При поставке'. "
+                    "Если документов много, перечисли их все. Не сокращай список. "
+                    "Собери документы из всех частей документации, даже если они разбросаны по разным страницам."
+                )
+                
+                res_retry = self._call_ai_with_retry(enhanced_prompt, prompt_type="full_retry", tender_id=tender_id, filenames=filenames)
+                
+                # Сравниваем результаты или просто берем второй, если он не пустой
+                retry_markdown = res_retry.get('final_report_markdown') or ""
+                if retry_markdown and len(retry_markdown) > 100:
+                    logger.info("Using retry result as it is likely more complete.")
+                    res = res_retry
         
         final_report_markdown = res.get('final_report_markdown') or ""
+        final_report_len = len(final_report_markdown)
         
-        logger.info(f"AI response: markdown length: {len(final_report_markdown)}")
+        logger.info(f"AI response: markdown length: {final_report_len}")
         
+        # Финальное логирование всех требуемых метрик
+        logger.info(f"--- [TENDER ANALYSIS SUMMARY: {tender_id}] ---")
+        logger.info(f"1. Files analyzed: {filenames}")
+        logger.info(f"2. Excel files: {[f['filename'] for f in excel_info]}")
+        for f in excel_info:
+            logger.info(f"   - Excel '{f['filename']}': {f['char_count']} chars")
+        logger.info(f"3. Cleaned context length: {cleaned_context_len} chars")
+        logger.info(f"4. Final markdown report length: {final_report_len} chars")
+        logger.info(f"---------------------------------------------")
+
         logger.info("--- [FINAL REPORT MARKDOWN START] ---")
         logger.info(final_report_markdown)
         logger.info("--- [FINAL REPORT MARKDOWN END] ---")
@@ -260,7 +336,7 @@ class LegalAnalysisService:
         }
         
         logger.info(f"--- ANALYSIS COMPLETED FOR TENDER: {tender_id} ---")
-        logger.info(f"Final result summary: markdown length={len(final_report_markdown)}")
+        logger.info(f"Final result summary: markdown length={final_report_len}")
         
         logger.info("--- [FINAL JSON RESULT] ---")
         logger.info(json.dumps(result, ensure_ascii=False, indent=2))
@@ -268,9 +344,9 @@ class LegalAnalysisService:
             
         return result
 
-    def analyze_tender(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
+    def analyze_tender(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Legacy wrapper for analyze_full_package.
         """
-        return self.analyze_full_package(files, tender_id=tender_id, callback=callback)
+        return self.analyze_full_package(files, tender_id=tender_id, callback=callback, metadata=metadata)
 
