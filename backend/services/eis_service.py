@@ -1,6 +1,5 @@
 import os
 import re
-import csv
 import sqlite3
 import time
 import random
