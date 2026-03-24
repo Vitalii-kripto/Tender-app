@@ -26,6 +26,8 @@ if sys.platform == 'win32':
 
 from backend.services.auto_ssh import RfProxyTunnelConfig, RfProxyHttpClient
 
+from backend.config import DOCUMENTS_ROOT, DATA_DIR
+
 # =========================
 # НАСТРОЙКИ
 # =========================
@@ -33,10 +35,6 @@ BASE = "https://zakupki.gov.ru"
 SEARCH_URL = f"{BASE}/epz/order/extendedsearch/results.html"
 
 # --- PATHS (Relative to project root) ---
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-
-OUT_DIR = os.path.join(DATA_DIR, "eis_docs")
 DB_PATH = os.path.join(DATA_DIR, "seen.sqlite")
 CSV_LOG_PATH = os.path.join(DATA_DIR, "notices_okpd2_log.csv")
 STATE_PATH = os.path.join(DATA_DIR, "pw_state.json")
@@ -430,7 +428,7 @@ class EisService:
                             results.append({"reg": n.reg, "status": "skip", "reason": "no_files_found", "docs_url": d_url, "files": []})
                             continue
 
-                        reg_dir = os.path.join(OUT_DIR, n.reg)
+                        reg_dir = os.path.join(DOCUMENTS_ROOT, n.reg)
                         ensure_dir(reg_dir)
 
                         downloaded_files = []

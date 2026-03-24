@@ -99,72 +99,60 @@ class DocumentService:
         Умное извлечение текста с защитой от сбоев.
         Поддерживает PDF, DOCX, XLSX, XLS, DOC.
         """
-        full_text = ""
-        logger.info(f"Extracting text from: {file_path}")
-        
         ext = os.path.splitext(file_path)[1].lower()
+        logger.info(f"--- [START EXTRACTION] ---")
+        logger.info(f"File path: {file_path}")
+        logger.info(f"Extension: {ext}")
+        
+        full_text = ""
+        handler = "None"
 
-        # Автоматическая конвертация .doc -> .docx
-        if ext == '.doc':
-            logger.info(f"Legacy .doc detected. Attempting auto-conversion to .docx...")
-            new_path = self._convert_doc_to_docx(file_path)
-            if new_path.endswith('.docx'):
-                file_path = new_path
-                ext = '.docx'
-                logger.info(f"Switched to converted file: {file_path}")
-            else:
-                # Если конвертация не удалась, используем старый метод извлечения напрямую
-                return self._extract_text_from_doc(file_path)
+        try:
+            # 1. Обработка .doc (с попыткой конвертации)
+            if ext == '.doc':
+                logger.info(f"Handler: .doc legacy converter/antiword")
+                handler = "doc_converter"
+                new_path = self._convert_doc_to_docx(file_path)
+                if new_path.endswith('.docx'):
+                    logger.info(f"Successfully converted .doc to .docx: {new_path}")
+                    file_path = new_path
+                    ext = '.docx'
+                    # Продолжаем как .docx ниже
+                else:
+                    logger.info(f"Conversion failed or not applicable, using fallback extraction for .doc")
+                    full_text = self._extract_text_from_doc(file_path)
+                    logger.info(f"Extraction complete. Handler: {handler}. Characters: {len(full_text)}")
+                    return full_text
 
-        if ext == '.docx':
-            try:
+            # 2. Обработка .docx
+            if ext == '.docx':
+                handler = "python-docx"
                 import docx
                 doc = docx.Document(file_path)
                 full_text = "\n".join([para.text for para in doc.paragraphs])
-                logger.info(f"DOCX extracted {len(full_text)} characters.")
-                return full_text
-            except ImportError:
-                logger.warning("python-docx is not installed. Cannot read DOCX.")
-                return "[SYSTEM INFO] python-docx не установлен."
-            except Exception as e:
-                logger.error(f"DOCX Error: {e}")
-                return f"[DOCX ERROR] Не удалось прочитать файл: {str(e)}"
-        
-        elif ext == '.xlsx':
-            try:
+            
+            # 3. Обработка .xlsx
+            elif ext == '.xlsx':
+                handler = "openpyxl"
                 import openpyxl
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 sheets_text = []
-                
                 for sheet in wb.worksheets:
                     sheet_data = []
                     for row in sheet.iter_rows(values_only=True):
-                        # Сохраняем строки и столбцы, числовые значения, текстовые примечания
                         row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
                         if row_text.strip().replace("|", "").strip():
                             sheet_data.append(row_text)
-                    
                     if sheet_data:
                         sheets_text.append(f"=== ЛИСТ: {sheet.title} ===\n" + "\n".join(sheet_data))
-                
                 full_text = "\n\n".join(sheets_text)
-                logger.info(f"Format: .xlsx, Sheets: {len(wb.worksheets)}, Extracted characters: {len(full_text)}, Status: успешно прочитан")
-                return full_text
-            except ImportError:
-                logger.warning("openpyxl is not installed. Cannot read XLSX.")
-                return "[SYSTEM INFO] Библиотека openpyxl не установлена. Чтение XLSX невозможно."
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"XLSX Error: {error_msg}")
-                logger.info(f"Format: .xlsx, Status: ошибка - {error_msg}")
-                return f"[XLSX ERROR] Ошибка при чтении Excel (.xlsx): {error_msg}. Проверьте, не поврежден ли файл и не защищен ли он паролем."
-        
-        elif ext == '.xls':
-            try:
+            
+            # 4. Обработка .xls
+            elif ext == '.xls':
+                handler = "xlrd"
                 import xlrd
                 wb = xlrd.open_workbook(file_path)
                 sheets_text = []
-                
                 for sheet in wb.sheets():
                     sheet_data = []
                     for row_idx in range(sheet.nrows):
@@ -172,91 +160,83 @@ class DocumentService:
                         row_text = " | ".join([str(cell) if cell is not None else "" for cell in row])
                         if row_text.strip().replace("|", "").strip():
                             sheet_data.append(row_text)
-                    
                     if sheet_data:
                         sheets_text.append(f"=== ЛИСТ: {sheet.name} ===\n" + "\n".join(sheet_data))
-                
                 full_text = "\n\n".join(sheets_text)
-                logger.info(f"Format: .xls, Sheets: {len(wb.sheets())}, Extracted characters: {len(full_text)}, Status: успешно прочитан")
-                return full_text
-            except ImportError:
-                logger.warning("xlrd is not installed. Cannot read XLS.")
-                return "[SYSTEM INFO] Библиотека xlrd не установлена. Чтение XLS невозможно."
-            except Exception as e:
-                error_msg = str(e)
-                logger.error(f"XLS Error: {error_msg}")
-                logger.info(f"Format: .xls, Status: ошибка - {error_msg}")
-                return f"[XLS ERROR] Ошибка при чтении старого Excel (.xls): {error_msg}. Попробуйте пересохранить файл в формате .xlsx."
-        
-        elif ext == '.doc':
-            logger.info(f"Legacy .doc format detected: {file_path}. Attempting extraction...")
-            return self._extract_text_from_doc(file_path)
-
-        elif ext != '.pdf':
-            logger.warning(f"Unsupported file format: {ext}. Skipping.")
-            return f"[SYSTEM INFO] Формат {ext} не поддерживается."
-
-        # Шаг 1: Быстрое чтение (текстовый слой) для PDF
-        try:
-            reader = PdfReader(file_path)
-            text_pages = []
-            for page in reader.pages:
-                extracted = page.extract_text()
-                if extracted:
-                    text_pages.append(extracted)
-            full_text = "\n".join(text_pages)
-            logger.info(f"PyPDF extracted {len(full_text)} characters.")
-        except Exception as e:
-            logger.error(f"PyPDF Error: {e}")
-
-        # Шаг 2: Проверка на скан и OCR
-        if len(full_text.strip()) < 50:
-            logger.info("Detected scanned document or empty text layer. Attempting OCR...")
             
-            if not pytesseract:
-                logger.warning("OCR requested but Pytesseract is not available.")
-                return f"{full_text}\n\n[SYSTEM INFO] Текст не распознан: требуется библиотека Pytesseract."
-
-            try:
-                # Попытка проверки Poppler (нужен для pdf2image)
-                try:
-                    images = convert_from_path(file_path, first_page=1, last_page=5) # Ограничим 5 страницами для скорости
-                except Exception as poppler_error:
-                    error_str = str(poppler_error).lower()
-                    if "poppler" in error_str or "not found" in error_str:
-                         logger.error("Poppler not found.")
-                         msg = "Для распознавания сканов (OCR) необходимо установить Poppler."
-                         if platform.system() == "Windows":
-                             msg += " Скачайте Poppler для Windows (например, с GitHub @oschwartz10612), распакуйте и добавьте папку 'bin' в системную переменную PATH."
-                         return f"{full_text}\n\n[SYSTEM INFO] {msg}"
-                    raise poppler_error
-
-                ocr_text = []
-                for i, image in enumerate(images):
-                    # Пытаемся распознать
-                    try:
-                        text = pytesseract.image_to_string(image, lang='rus+eng')
-                        ocr_text.append(f"--- Page {i+1} ---\n{text}")
-                    except Exception as tess_err:
-                        logger.error(f"Tesseract Error on page {i}: {tess_err}")
-                        if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
-                             msg = "Tesseract OCR не найден."
-                             if platform.system() == "Windows":
-                                 msg += " Установите Tesseract OCR (например, от UB Mannheim) и убедитесь, что он находится в C:\\Program Files\\Tesseract-OCR или добавлен в PATH."
-                             return f"{full_text}\n\n[SYSTEM INFO] {msg}"
+            # 5. Обработка .pdf
+            elif ext == '.pdf':
+                handler = "pypdf"
+                reader = PdfReader(file_path)
+                text_pages = []
+                for page in reader.pages:
+                    extracted = page.extract_text()
+                    if extracted:
+                        text_pages.append(extracted)
+                full_text = "\n".join(text_pages)
                 
-                if ocr_text:
-                    full_text = "\n".join(ocr_text)
-                    logger.info("OCR successful.")
-                else:
-                    logger.warning("OCR ran but found no text.")
-                    full_text += "\n\n[INFO] OCR отработал, но текст не найден (возможно, качество изображения низкое)."
+                # OCR fallback
+                if len(full_text.strip()) < 50:
+                    logger.info("PDF text layer is empty or too short. Attempting OCR...")
+                    handler = "pypdf + pytesseract"
+                    full_text = self._perform_ocr(file_path, full_text)
 
-            except Exception as e:
-                logger.error(f"OCR Global Error: {e}", exc_info=True)
-                return f"{full_text}\n\n[OCR ERROR] Не удалось выполнить распознавание: {str(e)}"
+            # 6. Неподдерживаемый формат
+            else:
+                logger.warning(f"Unsupported file format: {ext} for file {file_path}")
+                return f"[SYSTEM INFO] Формат {ext} не поддерживается."
 
-        return full_text
+            char_count = len(full_text)
+            logger.info(f"Extraction complete. Handler: {handler}. Characters: {char_count}")
+            return full_text
+
+        except Exception as e:
+            logger.error(f"Extraction failed for {file_path} using {handler}. Error: {str(e)}", exc_info=True)
+            return f"[ERROR] Ошибка при чтении {ext} ({handler}): {str(e)}"
+
+    def _perform_ocr(self, file_path: str, existing_text: str) -> str:
+        """Вспомогательный метод для OCR распознавания"""
+        if not pytesseract:
+            logger.warning("OCR requested but Pytesseract is not available.")
+            return f"{existing_text}\n\n[SYSTEM INFO] Текст не распознан: требуется библиотека Pytesseract."
+
+        try:
+            # Попытка проверки Poppler (нужен для pdf2image)
+            try:
+                images = convert_from_path(file_path, first_page=1, last_page=5) # Ограничим 5 страницами для скорости
+            except Exception as poppler_error:
+                error_str = str(poppler_error).lower()
+                if "poppler" in error_str or "not found" in error_str:
+                     logger.error("Poppler not found.")
+                     msg = "Для распознавания сканов (OCR) необходимо установить Poppler."
+                     if platform.system() == "Windows":
+                         msg += " Скачайте Poppler для Windows (например, с GitHub @oschwartz10612), распакуйте и добавьте папку 'bin' в системную переменную PATH."
+                     return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
+                raise poppler_error
+
+            ocr_text = []
+            for i, image in enumerate(images):
+                try:
+                    text = pytesseract.image_to_string(image, lang='rus+eng')
+                    ocr_text.append(f"--- Page {i+1} ---\n{text}")
+                except Exception as tess_err:
+                    logger.error(f"Tesseract Error on page {i}: {tess_err}")
+                    if "tesseract is not installed" in str(tess_err).lower() or "not found" in str(tess_err).lower():
+                         msg = "Tesseract OCR не найден."
+                         if platform.system() == "Windows":
+                             msg += " Установите Tesseract OCR и убедитесь, что он в PATH."
+                         return f"{existing_text}\n\n[SYSTEM INFO] {msg}"
+            
+            if ocr_text:
+                logger.info(f"OCR successful. Extracted {len(''.join(ocr_text))} characters.")
+                return "\n".join(ocr_text)
+            else:
+                logger.warning("OCR ran but found no text.")
+                return f"{existing_text}\n\n[INFO] OCR отработал, но текст не найден."
+
+        except Exception as e:
+            logger.error(f"OCR Global Error: {e}")
+            return f"{existing_text}\n\n[OCR ERROR] Не удалось выполнить распознавание: {str(e)}"
 
     def _extract_text_from_doc(self, file_path: str) -> str:
         """

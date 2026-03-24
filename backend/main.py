@@ -24,7 +24,8 @@ if sys.platform == 'win32':
 
 from .database import engine, Base, get_db
 from .models import TenderModel, ProductModel
-from .services.eis_service import EisService, Notice, mark_seen, csv_append_row, OUT_DIR
+from .services.eis_service import EisService, Notice, mark_seen, csv_append_row
+from backend.config import DOCUMENTS_ROOT
 from .services.parser import GidroizolParser
 from .services.document_service import DocumentService
 from .services.ai_service import AiService
@@ -484,7 +485,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 def get_tender_files(tender_id: str):
     """Получить список скачанных файлов для тендера"""
     logger.info(f"Fetching files for tender {tender_id}")
-    tender_dir = os.path.join(OUT_DIR, tender_id)
+    tender_dir = os.path.join(DOCUMENTS_ROOT, tender_id)
     if not os.path.exists(tender_dir):
         return []
     
@@ -619,6 +620,7 @@ async def api_export_risks_word(data: dict = Body(...)):
             tid = str(tender.get('id', 'N/A'))
             desc = tender.get('description', 'Нет описания')
             final_report_markdown = tender.get('final_report_markdown') or ""
+            summary_notes = tender.get('summary_notes') or ""
             file_statuses = tender.get('file_statuses', [])
             
             doc = Document()
@@ -633,6 +635,10 @@ async def api_export_risks_word(data: dict = Body(...)):
             p = doc.add_paragraph()
             p.add_run('Описание: ').bold = True
             p.add_run(desc)
+            
+            if summary_notes:
+                doc.add_heading('Краткое резюме:', level=2)
+                doc.add_paragraph(summary_notes)
             
             if file_statuses:
                 doc.add_heading('Обработанные документы:', level=2)
@@ -658,6 +664,7 @@ async def api_export_risks_word(data: dict = Body(...)):
                     tid = str(tender.get('id', 'N/A'))
                     desc = tender.get('description', 'Нет описания')
                     final_report_markdown = tender.get('final_report_markdown') or ""
+                    summary_notes = tender.get('summary_notes') or ""
                     file_statuses = tender.get('file_statuses', [])
                     
                     doc = Document()
@@ -672,6 +679,10 @@ async def api_export_risks_word(data: dict = Body(...)):
                     p = doc.add_paragraph()
                     p.add_run('Описание: ').bold = True
                     p.add_run(desc)
+                    
+                    if summary_notes:
+                        doc.add_heading('Краткое резюме:', level=2)
+                        doc.add_paragraph(summary_notes)
                     
                     if file_statuses:
                         doc.add_heading('Обработанные документы:', level=2)

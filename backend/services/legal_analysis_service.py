@@ -244,20 +244,30 @@ class LegalAnalysisService:
             
         return True
 
-    def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+    def _extract_summary(self, markdown: str) -> str:
+        """
+        Извлекает раздел 0 (Summary) из отчета.
+        """
+        if not markdown:
+            return ""
+            
+        # Ищем раздел 0
+        summary_match = re.search(r'(?:##\s*)?0\)\s*Краткое резюме.*?(?=(?:##\s*)?1\)|$)', markdown, re.DOTALL | re.IGNORECASE)
+        if not summary_match:
+            # Если раздел 0 не найден, попробуем взять первые 300 символов
+            return markdown[:300] + "..." if len(markdown) > 300 else markdown
+            
+        summary_content = summary_match.group(0)
+        # Убираем заголовок
+        summary_content = re.sub(r'(?:##\s*)?0\)\s*Краткое резюме.*?\n', '', summary_content, count=1, flags=re.IGNORECASE)
+        return summary_content.strip()
+
+    def analyze_full_package(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
         Основной метод анализа полного пакета документов.
         """
-        metadata = metadata or {}
         logger.info(f"--- STARTING FULL PACKAGE ANALYSIS FOR TENDER: {tender_id} ---")
         
-        # Логирование метаданных из входных параметров
-        logger.info(f"Tender Files List: {metadata.get('all_filenames', 'N/A')}")
-        excel_info = metadata.get('excel_files_info', [])
-        logger.info(f"Excel Files Found: {[f['filename'] for f in excel_info]}")
-        for f in excel_info:
-            logger.info(f"Excel File '{f['filename']}': extracted {f['char_count']} characters")
-
         self._log_progress("Сбор и очистка документов", 10, callback=callback)
         
         filenames = [f.get('filename', 'unknown') for f in files]
@@ -307,17 +317,15 @@ class LegalAnalysisService:
         
         final_report_markdown = res.get('final_report_markdown') or ""
         final_report_len = len(final_report_markdown)
+        summary_notes = self._extract_summary(final_report_markdown)
         
         logger.info(f"AI response: markdown length: {final_report_len}")
         
         # Финальное логирование всех требуемых метрик
         logger.info(f"--- [TENDER ANALYSIS SUMMARY: {tender_id}] ---")
         logger.info(f"1. Files analyzed: {filenames}")
-        logger.info(f"2. Excel files: {[f['filename'] for f in excel_info]}")
-        for f in excel_info:
-            logger.info(f"   - Excel '{f['filename']}': {f['char_count']} chars")
-        logger.info(f"3. Cleaned context length: {cleaned_context_len} chars")
-        logger.info(f"4. Final markdown report length: {final_report_len} chars")
+        logger.info(f"2. Cleaned context length: {cleaned_context_len} chars")
+        logger.info(f"3. Final markdown report length: {final_report_len} chars")
         logger.info(f"---------------------------------------------")
 
         logger.info("--- [FINAL REPORT MARKDOWN START] ---")
@@ -330,6 +338,7 @@ class LegalAnalysisService:
             "tender_id": tender_id,
             "file_statuses": file_statuses,
             "final_report_markdown": final_report_markdown,
+            "summary_notes": summary_notes,
             "status": "success" if final_report_markdown else "partial",
             "stage": "Готово",
             "progress": 100
@@ -344,9 +353,9 @@ class LegalAnalysisService:
             
         return result
 
-    def analyze_tender(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+    def analyze_tender(self, files: List[Dict[str, str]], tender_id: str = "unknown", callback=None) -> Dict[str, Any]:
         """
         Legacy wrapper for analyze_full_package.
         """
-        return self.analyze_full_package(files, tender_id=tender_id, callback=callback, metadata=metadata)
+        return self.analyze_full_package(files, tender_id=tender_id, callback=callback)
 
