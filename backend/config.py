@@ -13,3 +13,4 @@ os.makedirs(DOCUMENTS_ROOT, exist_ok=True)
 
 # AI Model Configuration
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
+GEMINI_FALLBACK_MODEL = os.getenv("GEMINI_FALLBACK_MODEL", "gemini-3.1-flash-lite-preview")

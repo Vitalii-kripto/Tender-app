@@ -8,27 +8,21 @@ from google.genai import types
 from .legal_prompts import PROMPT_FULL_PACKAGE
 from backend.config import GEMINI_MODEL
 from backend.logger import logger
+from .ai_service import AiService
 
 class LegalAnalysisService:
     """
     Сервис для проведения юридического анализа тендерной документации с использованием ИИ.
-    Использует клиент из AiService.
+    Использует AiService для вызовов ИИ.
     """
 
-    def __init__(self, client: Optional[genai.Client] = None):
-        self.client = client
-        # Если клиент не передан, попробуем создать свой (хотя обычно он передается из main.py)
-        if not self.client:
-            api_key = os.getenv("API_KEY")
-            if api_key:
-                self.client = genai.Client(api_key=api_key)
-                logger.info("LegalAnalysisService: New Gemini Client initialized.")
-            else:
-                logger.error("LegalAnalysisService: No API_KEY found and no client provided!")
+    def __init__(self, ai_service: Optional[AiService] = None):
+        self.ai_service = ai_service
+        # Если сервис не передан, создаем свой
+        if not self.ai_service:
+            self.ai_service = AiService()
         
-        # Модель для анализа
-        self.model_name = GEMINI_MODEL
-        logger.info(f"LegalAnalysisService initialized with model: {self.model_name}")
+        logger.info(f"LegalAnalysisService initialized.")
 
     def analyze_tender(
         self, 
@@ -149,36 +143,17 @@ class LegalAnalysisService:
         """
         return PROMPT_FULL_PACKAGE.replace("__TEXT__", context)
 
-    def _call_ai_with_retry(self, prompt: str, retries: int = 3):
+    def _call_ai_with_retry(self, prompt: str):
         """
-        Вызов API Gemini с повторными попытками при ошибках.
+        Вызов API Gemini через AiService с унифицированной обработкой ошибок.
         """
-        if not self.client:
+        if not self.ai_service or not self.ai_service.client:
             raise Exception("Gemini Client not initialized")
 
-        logger.info(f"--- [AI PROMPT START] ---")
-        logger.info(prompt)
-        logger.info(f"--- [AI PROMPT END] ---")
-
-        for i in range(retries + 1):
-            try:
-                response = self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt
-                )
-                if response:
-                    logger.info(f"--- [AI RESPONSE START] ---")
-                    logger.info(response.text)
-                    logger.info(f"--- [AI RESPONSE END] ---")
-                    return response
-                else:
-                    raise Exception("Empty response from AI")
-            except Exception as e:
-                logger.warning(f"AI Call attempt {i} failed: {e}")
-                if i == retries:
-                    raise e
-                time.sleep(2 ** i) # Exponential backoff
-        return None
+        return self.ai_service._call_ai_with_retry(
+            self.ai_service.client.models.generate_content,
+            contents=prompt
+        )
 
     def _extract_summary(self, markdown: str) -> str:
         """

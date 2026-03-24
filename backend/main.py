@@ -144,7 +144,15 @@ try:
     parser_service = GidroizolParser()
     doc_service = DocumentService()
     ai_service = AiService()
-    legal_analysis_service = LegalAnalysisService(ai_service.client)
+    
+    # Выполняем тестовый запрос к ИИ при старте
+    active_model = ai_service.test_model_availability()
+    if not active_model:
+        logger.critical("AI Service is UNAVAILABLE. Backend will start in degraded mode (analysis blocked).")
+    else:
+        logger.info(f"AI Service is READY. Working model: {active_model}")
+        
+    legal_analysis_service = LegalAnalysisService(ai_service)
     logger.info("Services initialized.")
 except Exception as e:
     logger.error(f"Service initialization error: {e}", exc_info=True)

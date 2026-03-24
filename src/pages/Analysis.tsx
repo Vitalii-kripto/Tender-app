@@ -143,7 +143,7 @@ const Analysis = () => {
                 }
                 setAnalysisStages(prev => ({ ...prev, ...newStages }));
                 
-                if (job.status === 'completed') {
+                if (job.status === 'completed' || job.status === 'error' || job.status === 'failed') {
                     clearInterval(pollInterval);
                     const newResults: Record<string, LegalAnalysisResult> = { ...batchResults };
                     for (const tid in job.tenders) {
@@ -155,6 +155,10 @@ const Analysis = () => {
                     setBatchResults(newResults);
                     setLoading(false);
                     setStatusText("");
+                    
+                    if (job.status === 'error' || job.status === 'failed') {
+                        setAnalysisError(job.error_message || 'Анализ завершился с ошибкой.');
+                    }
                 }
             } catch (e) {
                 console.error("Error polling job status", e);

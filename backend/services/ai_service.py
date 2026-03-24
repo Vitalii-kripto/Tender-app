@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 import json
 import re
 import logging
-from backend.config import GEMINI_MODEL
+from backend.config import GEMINI_MODEL, GEMINI_FALLBACK_MODEL
 from backend.logger import logger
 
 # --- LOGGING SETUP ---
@@ -24,86 +24,135 @@ class AiService:
     """
     def __init__(self):
         self.api_key = os.getenv("API_KEY")
+        self.model_name = GEMINI_MODEL
+        self.fallback_model_name = GEMINI_FALLBACK_MODEL
+        self.active_model = self.model_name
         
-        # Определяем источник значения модели
-        env_model = os.getenv("GEMINI_MODEL")
-        if env_model:
-            self.model_name = env_model
-            model_source = "environment variable GEMINI_MODEL"
-        else:
-            self.model_name = "gemini-3-flash-preview"
-            model_source = "default value"
-            
         if not self.api_key:
             logger.warning("API_KEY not found in environment variables. AI analysis will be unavailable.")
             self.client = None
         else:
             try:
                 self.client = genai.Client(api_key=self.api_key)
-                logger.info(f"Gemini Client initialized. Model: {self.model_name} (Source: {model_source})")
-                
-                # Безопасная проверка доступности модели совместимым способом
-                try:
-                    # Используем метод get для проверки существования и доступности модели
-                    self.client.models.get(model=self.model_name)
-                    logger.info(f"Model check: {self.model_name} is verified and available.")
-                except Exception as model_err:
-                    # Логируем как информацию/предупреждение, не блокируя запуск, 
-                    # так как модель может заработать при фактическом вызове
-                    logger.info(f"Model check result (non-critical): {model_err}")
-                    
+                logger.info(f"Gemini Client initialized. Primary: {self.model_name}, Fallback: {self.fallback_model_name}")
             except Exception as e:
                 logger.error(f"Failed to initialize Gemini Client: {e}")
                 self.client = None
 
-    def _call_ai_with_retry(self, method, **kwargs):
-        retries = 3
-        start_time = time.time()
-        model_name = kwargs.get('model', 'unknown')
-        
-        # Логирование перед вызовом
-        logger.info(f"===== [AI REQUEST START] =====")
-        logger.info(f"Method: {method.__name__}")
-        logger.info(f"Model: {model_name}")
-        
-        prompt_to_log = kwargs.get('contents', 'No contents')
-        logger.info("--- [FULL ASSEMBLED PROMPT] ---")
-        logger.info(prompt_to_log)
-        logger.info("--- [END OF PROMPT] ---")
-        
-        logger.info(f"===== [AI REQUEST END] =====")
+    def test_model_availability(self) -> str:
+        """
+        Тестовый запрос к моделям при старте для выбора рабочей модели.
+        Возвращает имя выбранной модели или пустую строку, если ни одна не доступна.
+        """
+        if not self.client:
+            logger.error("Startup check: Client not initialized (no API_KEY).")
+            return ""
 
-        for attempt in range(retries + 1):
+        test_prompt = "Hello, this is a startup connectivity test. Reply with 'OK'."
+        
+        # 1. Тест основной модели
+        logger.info(f"Startup check: Testing primary model {self.model_name}...")
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=test_prompt
+            )
+            if response and response.text:
+                logger.info(f"Startup check: Primary model {self.model_name} is ONLINE. Selected as active.")
+                self.active_model = self.model_name
+                return self.active_model
+        except Exception as e:
+            logger.warning(f"Startup check: Primary model {self.model_name} is OFFLINE: {e}")
+
+        # 2. Тест fallback модели
+        logger.info(f"Startup check: Testing fallback model {self.fallback_model_name}...")
+        try:
+            response = self.client.models.generate_content(
+                model=self.fallback_model_name,
+                contents=test_prompt
+            )
+            if response and response.text:
+                logger.info(f"Startup check: Fallback model {self.fallback_model_name} is ONLINE. Selected as active.")
+                self.active_model = self.fallback_model_name
+                return self.active_model
+        except Exception as e:
+            logger.error(f"Startup check: Fallback model {self.fallback_model_name} is also OFFLINE: {e}")
+
+        logger.critical("Startup check: CRITICAL - No AI models are available! Analysis will be blocked.")
+        self.active_model = ""
+        return ""
+
+    def _is_transient_error(self, error: Exception) -> bool:
+        """Определяет, является ли ошибка временной (429, 503, 504, timeout)."""
+        err_str = str(error).lower()
+        # Коды ошибок и типичные сообщения
+        transient_indicators = [
+            "429", "too many requests", 
+            "503", "service unavailable", 
+            "504", "gateway timeout",
+            "deadline exceeded", "timeout",
+            "transport error", "connection reset", "socket error"
+        ]
+        return any(indicator in err_str for indicator in transient_indicators)
+
+    def _call_ai_with_retry(self, method, **kwargs):
+        """
+        Унифицированный вызов ИИ с логированием, повторами и переключением на fallback.
+        """
+        if not self.client:
+            raise Exception("Gemini Client not initialized")
+        
+        if not self.active_model:
+            raise Exception("Внешний AI-сервис временно недоступен, анализ не завершен")
+
+        max_retries = 4
+        current_model = self.active_model
+        start_overall = time.time()
+        
+        # Если модель не передана в kwargs, используем активную
+        if 'model' not in kwargs:
+            kwargs['model'] = current_model
+
+        for attempt in range(1, max_retries + 1):
+            attempt_start = time.time()
             try:
+                # Логируем попытку
+                logger.info(f"AI Call Attempt {attempt}/{max_retries} | Model: {kwargs['model']}")
+                
                 response = method(**kwargs)
                 
-                end_time = time.time()
-                duration = end_time - start_time
-                
-                # Логирование ответа
-                logger.info(f"===== [AI RESPONSE START] =====")
-                logger.info(f"Duration: {duration:.2f} seconds")
-                logger.info(f"Attempt: {attempt}")
-                
-                if response:
-                    text = response.text
-                    logger.info("--- [FULL RAW RESPONSE] ---")
-                    logger.info(text)
-                    logger.info("--- [END OF RAW RESPONSE] ---")
-                else:
-                    logger.warning("AI returned empty response.")
-                
-                logger.info(f"===== [AI RESPONSE END] =====")
+                duration = time.time() - attempt_start
+                logger.info(f"AI Call Success | Attempt: {attempt} | Duration: {duration:.2f}s")
                 
                 return response
+
             except Exception as e:
-                logger.error(f"AI Error on attempt {attempt}: {e}")
-                if attempt < retries:
-                    wait_time = (2 ** attempt) + 1
-                    logger.info(f"Retrying in {wait_time} seconds...")
-                    time.sleep(wait_time)
-                else:
-                    raise e
+                duration = time.time() - attempt_start
+                is_transient = self._is_transient_error(e)
+                
+                # Логируем ошибку
+                error_type = "TRANSIENT" if is_transient else "FATAL"
+                logger.warning(
+                    f"AI Call Failed ({error_type}) | Attempt: {attempt} | "
+                    f"Model: {kwargs['model']} | Duration: {duration:.2f}s | Error: {e}"
+                )
+
+                if not is_transient or attempt == max_retries:
+                    # Если ошибка не временная или попытки исчерпаны
+                    if is_transient:
+                        logger.error(f"AI Call: All {max_retries} attempts exhausted for transient errors.")
+                    raise Exception("Внешний AI-сервис временно недоступен, анализ не завершен") from e
+
+                # Переключение на fallback после половины попыток
+                if attempt == max_retries // 2 and kwargs['model'] == self.model_name:
+                    logger.warning(f"Switching to fallback model: {self.fallback_model_name}")
+                    kwargs['model'] = self.fallback_model_name
+
+                # Пауза с экспоненциальным бэк-оффом
+                wait_time = (2 ** attempt) + 1
+                logger.info(f"Waiting {wait_time}s before next retry...")
+                time.sleep(wait_time)
+
         return None
 
     def _parse_json_response(self, text: str):
@@ -150,7 +199,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -193,7 +241,6 @@ class AiService:
             # Используем Google Search Tool
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -231,7 +278,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())]
@@ -274,7 +320,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -336,7 +381,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     tools=[types.Tool(google_search=types.GoogleSearch())],
@@ -368,7 +412,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
@@ -414,7 +457,6 @@ class AiService:
         try:
             response = self._call_ai_with_retry(
                 self.client.models.generate_content,
-                model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json"
