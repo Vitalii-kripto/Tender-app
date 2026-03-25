@@ -562,6 +562,67 @@ const Analysis = () => {
                                     </div>
                                 </div>
 
+                                 {/* 1.5 Structured Data */}
+                                 {result.status === 'success' && result.structured_data && Object.keys(result.structured_data).length > 0 && (
+                                     <div className="px-6 py-6 bg-slate-50 border-b border-slate-100">
+                                         <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2">
+                                             <Table size={16} className="text-blue-600" />
+                                             Извлеченные данные (ИИ)
+                                         </h4>
+                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                                             {result.structured_data.customer && (
+                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
+                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Заказчик</div>
+                                                     <div className="text-slate-600"><span className="text-slate-400">Название:</span> {result.structured_data.customer.name || '—'}</div>
+                                                     <div className="text-slate-600"><span className="text-slate-400">ИНН:</span> {result.structured_data.customer.inn || '—'}</div>
+                                                     <div className="text-slate-600"><span className="text-slate-400">Контакты:</span> {result.structured_data.customer.contact_person || '—'} {result.structured_data.customer.phone || ''}</div>
+                                                 </div>
+                                             )}
+                                             {result.structured_data.nmcc && (
+                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
+                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">НМЦК</div>
+                                                     <div className="text-slate-900 font-mono text-lg">{formatCurrency(result.structured_data.nmcc.total)}</div>
+                                                 </div>
+                                             )}
+                                             {result.structured_data.delivery_terms && (
+                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm md:col-span-2">
+                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Сроки и условия поставки</div>
+                                                     <div className="text-slate-600 mb-1"><span className="text-slate-400">Сроки:</span> {result.structured_data.delivery_terms}</div>
+                                                     {result.structured_data.logistics && <div className="text-slate-600 mb-1"><span className="text-slate-400">Логистика:</span> {result.structured_data.logistics}</div>}
+                                                     {result.structured_data.restrictions && <div className="text-slate-600"><span className="text-slate-400">Ограничения:</span> {result.structured_data.restrictions}</div>}
+                                                 </div>
+                                             )}
+                                             {result.structured_data.items && result.structured_data.items.length > 0 && (
+                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm md:col-span-2">
+                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Позиции ({result.structured_data.items.length})</div>
+                                                     <div className="overflow-x-auto">
+                                                         <table className="w-full text-left text-xs">
+                                                             <thead>
+                                                                 <tr className="text-slate-400 border-b">
+                                                                     <th className="pb-2 font-medium">Наименование</th>
+                                                                     <th className="pb-2 font-medium">Кол-во</th>
+                                                                     <th className="pb-2 font-medium">Цена за ед.</th>
+                                                                     <th className="pb-2 font-medium">Характеристики</th>
+                                                                 </tr>
+                                                             </thead>
+                                                             <tbody className="divide-y divide-slate-100">
+                                                                 {result.structured_data.items.map((item: any, idx: number) => (
+                                                                     <tr key={idx} className="text-slate-600">
+                                                                         <td className="py-2 pr-2 font-medium text-slate-800">{item.name}</td>
+                                                                         <td className="py-2 pr-2 whitespace-nowrap">{item.quantity} {item.unit}</td>
+                                                                         <td className="py-2 pr-2 whitespace-nowrap">{item.price_per_unit ? formatCurrency(item.price_per_unit) : '—'}</td>
+                                                                         <td className="py-2 text-[10px] text-slate-500">{item.characteristics}</td>
+                                                                     </tr>
+                                                                 ))}
+                                                             </tbody>
+                                                         </table>
+                                                     </div>
+                                                 </div>
+                                             )}
+                                         </div>
+                                     </div>
+                                 )}
+
                                  {/* 1. Main Legal Report (Markdown) - PRIMARY OUTPUT */}
                                  {result.status === 'success' && result.final_report_markdown && (
                                      <div className="px-6 py-10 bg-white border-b border-slate-100">

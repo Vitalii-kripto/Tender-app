@@ -64,6 +64,7 @@ export interface LegalAnalysisResult {
   stage?: string;
   progress?: number;
   selected_files_count?: number;
+  structured_data?: any;
 }
 
 export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';

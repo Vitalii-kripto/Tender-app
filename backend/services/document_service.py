@@ -10,18 +10,8 @@ import logging
 
 from backend.logger import logger
 
-# Безопасный импорт pypdfium2 и paddleocr
-try:
-    import pypdfium2 as pdfium
-except ImportError:
-    pdfium = None
-    logger.warning("pypdfium2 library not installed.")
-
-try:
-    from paddleocr import PaddleOCR
-except ImportError:
-    PaddleOCR = None
-    logger.warning("paddleocr library not installed.")
+import pypdfium2 as pdfium
+from paddleocr import PaddleOCR
 
 class DocumentService:
     """
@@ -32,14 +22,13 @@ class DocumentService:
 
     def __init__(self):
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
-        self.ocr_engine = None
-        if PaddleOCR:
-            try:
-                # Инициализация PaddleOCR (модели скачиваются при первом запуске)
-                self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru', show_log=False)
-                logger.info("PaddleOCR engine initialized successfully.")
-            except Exception as e:
-                logger.error(f"Failed to initialize PaddleOCR: {e}")
+        try:
+            # Инициализация PaddleOCR (модели скачиваются при первом запуске)
+            self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru', show_log=False)
+            logger.info("PaddleOCR engine initialized successfully.")
+        except Exception as e:
+            logger.error(f"Failed to initialize PaddleOCR: {e}")
+            raise RuntimeError(f"OCR Configuration Error: Failed to initialize PaddleOCR: {e}")
 
     async def save_file(self, file: UploadFile) -> str:
         """Сохраняет загруженный файл"""
@@ -196,25 +185,20 @@ class DocumentService:
                 is_quality_good = self._is_text_quality_good(full_text)
                 char_count = len(full_text)
                 
+                logger.info(f"--- [PDF SPECIFIC LOGS] ---")
+                logger.info(f"Text Layer Quality: {'GOOD' if is_quality_good else 'POOR'}")
+                logger.info(f"OCR Triggered: {'Yes' if not is_quality_good else 'No'}")
+                
                 if not is_quality_good:
                     logger.info(f"PDF text quality is POOR (Chars: {char_count}). Triggering OCR fallback...")
-                    ocr_result = self._perform_ocr(file_path, full_text)
+                    ocr_result = self._perform_ocr(file_path)
                     
-                    # Если OCR вернул системную инфу об ошибке, значит он не отработал полноценно
-                    if "[SYSTEM INFO]" in ocr_result or "[OCR ERROR]" in ocr_result:
-                        if "деградированный" in ocr_result.lower():
-                            logger.warning("PDF marked as DEGRADED: OCR tools missing.")
-                            handler = "pypdf (degraded, OCR unavailable)"
-                        else:
-                            logger.warning("OCR fallback failed. Using low-quality PyPDF text.")
-                            handler = "pypdf (degraded, OCR failed)"
-                        full_text = ocr_result
-                    else:
-                        logger.info("OCR fallback successful.")
-                        handler = "pypdf + pypdfium2 + PaddleOCR (OCR)"
-                        full_text = ocr_result
+                    logger.info(f"OCR fallback successful. Text obtained after OCR: {len(ocr_result)} chars")
+                    handler = "pypdf + pypdfium2 + PaddleOCR (OCR)"
+                    full_text = ocr_result
                 else:
                     logger.info(f"PDF text quality is GOOD (Chars: {char_count}). Using native text layer.")
+                logger.info(f"---------------------------")
 
             # 6. Неподдерживаемый формат
             else:
@@ -222,7 +206,16 @@ class DocumentService:
                 return f"[SYSTEM INFO] Формат {ext} не поддерживается."
 
             char_count = len(full_text)
-            logger.info(f"Extraction complete. Handler: {handler}. Characters: {char_count}")
+            ocr_used = handler.endswith("(OCR)")
+            
+            logger.info(f"--- [EXTRACTION SUMMARY] ---")
+            logger.info(f"File Name: {os.path.basename(file_path)}")
+            logger.info(f"File Type: {ext}")
+            logger.info(f"Handler Used: {handler}")
+            logger.info(f"Characters Extracted: {char_count}")
+            logger.info(f"OCR Used: {'Yes' if ocr_used else 'No'}")
+            logger.info(f"----------------------------")
+            
             return full_text
 
         except Exception as e:
@@ -284,60 +277,51 @@ class DocumentService:
 
         return True
 
-    def _perform_ocr(self, file_path: str, existing_text: str) -> str:
+    def _perform_ocr(self, file_path: str) -> str:
         """Вспомогательный метод для OCR распознавания через pypdfium2 и PaddleOCR"""
-        if not pdfium or not self.ocr_engine:
-            logger.warning("OCR requested but pypdfium2 or PaddleOCR is not available.")
-            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Текст не распознан: требуются библиотеки pypdfium2 и paddleocr. Извлечение цен и спецификаций может быть неточным."
-
-        try:
-            logger.info(f"Starting OCR for {file_path} using pypdfium2 + PaddleOCR")
+        logger.info(f"Starting OCR for {file_path} using pypdfium2 + PaddleOCR")
+        
+        # Открываем PDF через pypdfium2
+        pdf = pdfium.PdfDocument(file_path)
+        num_pages = len(pdf)
+        # Ограничиваем количество страниц для OCR (первые 20 для баланса скорости и качества)
+        pages_to_process = min(num_pages, 20)
+        
+        ocr_text_pages = []
+        
+        for i in range(pages_to_process):
+            logger.info(f"Processing page {i+1}/{pages_to_process}...")
+            page = pdf[i]
             
-            # Открываем PDF через pypdfium2
-            pdf = pdfium.PdfDocument(file_path)
-            num_pages = len(pdf)
-            # Ограничиваем количество страниц для OCR (первые 20 для баланса скорости и качества)
-            pages_to_process = min(num_pages, 20)
+            # Рендерим страницу в изображение (scale=2 для 144 DPI, scale=3 для 216 DPI)
+            # PaddleOCR хорошо работает на 144-200 DPI
+            bitmap = page.render(scale=2)
+            pil_image = bitmap.to_pil()
             
-            ocr_text_pages = []
+            # Конвертируем PIL Image в numpy array для PaddleOCR
+            img_array = np.array(pil_image)
             
-            for i in range(pages_to_process):
-                logger.info(f"Processing page {i+1}/{pages_to_process}...")
-                page = pdf[i]
-                
-                # Рендерим страницу в изображение (scale=2 для 144 DPI, scale=3 для 216 DPI)
-                # PaddleOCR хорошо работает на 144-200 DPI
-                bitmap = page.render(scale=2)
-                pil_image = bitmap.to_pil()
-                
-                # Конвертируем PIL Image в numpy array для PaddleOCR
-                img_array = np.array(pil_image)
-                
-                # Выполняем OCR
-                result = self.ocr_engine.ocr(img_array, cls=True)
-                
-                page_text = []
-                if result and result[0]:
-                    for line in result[0]:
-                        # line[1][0] - это текст, line[1][1] - это уверенность (confidence)
-                        text_line = line[1][0]
-                        page_text.append(text_line)
-                
-                ocr_text_pages.append(f"--- Page {i+1} ---\n" + "\n".join(page_text))
+            # Выполняем OCR
+            result = self.ocr_engine.ocr(img_array, cls=True)
             
-            pdf.close()
+            page_text = []
+            if result and result[0]:
+                for line in result[0]:
+                    # line[1][0] - это текст, line[1][1] - это уверенность (confidence)
+                    text_line = line[1][0]
+                    page_text.append(text_line)
             
-            if ocr_text_pages:
-                full_ocr_text = "\n\n".join(ocr_text_pages)
-                logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages.")
-                return full_ocr_text
-            else:
-                logger.warning("OCR ran but found no text.")
-                return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. OCR отработал, но текст не найден."
-
-        except Exception as e:
-            logger.error(f"OCR Global Error using PaddleOCR: {e}", exc_info=True)
-            return f"{existing_text}\n\n[SYSTEM INFO] Статус: деградированный режим. Не удалось выполнить распознавание (PaddleOCR): {str(e)}. Извлечение цен и спецификаций может быть неточным."
+            ocr_text_pages.append(f"--- Page {i+1} ---\n" + "\n".join(page_text))
+        
+        pdf.close()
+        
+        if ocr_text_pages:
+            full_ocr_text = "\n\n".join(ocr_text_pages)
+            logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages.")
+            return full_ocr_text
+        else:
+            logger.warning("OCR ran but found no text.")
+            return "[OCR WARNING] OCR отработал, но текст не найден."
 
     def _extract_text_from_doc(self, file_path: str) -> str:
         """

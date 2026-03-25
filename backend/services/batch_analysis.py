@@ -135,6 +135,7 @@ def analyze_tenders_batch_job(
             summary_notes = analysis_result.get('summary_notes', '')
             cleaned_context_len = analysis_result.get('cleaned_context_len', 0)
             final_report_len = analysis_result.get('final_report_len', 0)
+            structured_data = analysis_result.get('structured_data', {})
             
             # 5. Генерация Word-отчета
             report_path = "N/A"
@@ -185,7 +186,8 @@ def analyze_tenders_batch_job(
                 "summary_notes": summary_notes,
                 "file_statuses": file_statuses,
                 "report_path": report_path,
-                "export_available": export_available
+                "export_available": export_available,
+                "structured_data": structured_data
             })
             logger.info(f"--- [END TENDER ANALYSIS: {tid}] ---")
             
@@ -196,7 +198,8 @@ def analyze_tenders_batch_job(
                 "final_report_markdown": f"Критическая ошибка анализа: {str(e)}",
                 "summary_notes": "Ошибка анализа.",
                 "file_statuses": file_statuses,
-                "export_available": False
+                "export_available": False,
+                "structured_data": {}
             })
             
     # 8. Создание ZIP-архива для пакета (если больше 1 тендера)
