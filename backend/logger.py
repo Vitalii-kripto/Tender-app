@@ -1,11 +1,14 @@
 import os
 import logging
 import sys
+import json
+from datetime import datetime
 
 # Путь к общему лог-файлу
 LOG_DIR = os.path.join(os.getcwd(), 'backend', 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, 'legal_ai.log')
+DEBUG_LOG_FILE = os.path.join(LOG_DIR, 'legal_ai_debug.jsonl')
 
 def setup_unified_logger():
     """
@@ -38,6 +41,17 @@ def setup_unified_logger():
     
     logger.info("--- [UNIFIED LOGGER INITIALIZED] ---")
     return logger
+
+def log_debug_event(event_data: dict):
+    """
+    Пишет структурированное событие в debug-лог (JSONL).
+    """
+    event_data['timestamp'] = datetime.utcnow().isoformat() + "Z"
+    try:
+        with open(DEBUG_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(event_data, ensure_ascii=False) + '\n')
+    except Exception as e:
+        logger.error(f"Failed to write to debug log: {e}")
 
 # Создаем экземпляр логгера для импорта
 logger = setup_unified_logger()

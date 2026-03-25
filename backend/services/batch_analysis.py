@@ -1,6 +1,7 @@
 import os
 import logging
 import zipfile
+import time
 from typing import List, Dict, Any
 from .document_service import DocumentService
 from .legal_analysis_service import LegalAnalysisService
@@ -83,6 +84,7 @@ def analyze_tenders_batch_job(
         
         logger.info(f"Filtered files to process: {filtered_files}")
         
+        extraction_start_time = time.time()
         for filename in filtered_files:
             if filename not in available_files:
                 logger.warning(f"File {filename} not found in {tender_dir}")
@@ -92,7 +94,8 @@ def analyze_tenders_batch_job(
             filepath = os.path.join(tender_dir, filename)
             logger.info(f"Processing file: {filename}")
             try:
-                text = doc_service.extract_text(filepath)
+                doc_data = doc_service.extract_document_data(filepath)
+                text = doc_data.get("text", "")
                 if text and len(text.strip()) > 0:
                     char_count = len(text)
                     logger.info(f"Successfully extracted {char_count} chars from {filename}")
@@ -100,14 +103,16 @@ def analyze_tenders_batch_job(
                     if "[SYSTEM INFO]" in text:
                         logger.warning(f"File {filename} processed with SYSTEM INFO (possibly DEGRADED).")
                     
-                    files_data.append({"filename": filename, "text": text})
-                    file_statuses.append({"filename": filename, "status": "ok", "message": "Текст успешно извлечен"})
+                    files_data.append(doc_data)
+                    file_statuses.append({"filename": filename, "status": doc_data.get("status", "ok"), "message": doc_data.get("error_message", "Текст успешно извлечен")})
                 else:
                     logger.warning(f"File {filename} is empty or no text extracted.")
                     file_statuses.append({"filename": filename, "status": "warning", "message": "Файл пуст или текст не извлечен"})
             except Exception as e:
                 logger.error(f"Failed to extract text from {filename}: {e}")
                 file_statuses.append({"filename": filename, "status": "error", "message": f"Ошибка извлечения: {str(e)}"})
+        extraction_end_time = time.time()
+        extraction_time = extraction_end_time - extraction_start_time
 
         if not files_data:
             logger.error(f"No text extracted from any of the selected files for tender {tid}")
@@ -125,23 +130,28 @@ def analyze_tenders_batch_job(
             def stage_callback(stage, progress, status="running"):
                 job_service.update_tender_stage(job_id, tid, stage, progress, status)
 
+            analysis_start_time = time.time()
             analysis_result = legal_service.analyze_tender(
                 files_data, 
                 tender_id=tid, 
                 callback=stage_callback
             )
+            analysis_end_time = time.time()
             
             final_markdown = analysis_result.get('final_report_markdown', '')
             summary_notes = analysis_result.get('summary_notes', '')
             cleaned_context_len = analysis_result.get('cleaned_context_len', 0)
             final_report_len = analysis_result.get('final_report_len', 0)
             structured_data = analysis_result.get('structured_data', {})
+            merged_facts = analysis_result.get('merged_facts', {})
+            extracted_facts = analysis_result.get('extracted_facts', [])
             
             # 5. Генерация Word-отчета
             report_path = "N/A"
             export_available = False
             
-            if analysis_result.get('status') == 'success':
+            # Экспорт в Word только если статус success и отчет не пустой
+            if analysis_result.get('status') == 'success' and final_markdown and len(final_markdown.strip()) > 50:
                 try:
                     from docx import Document
                     from backend.markdown_parser import add_markdown_to_docx
@@ -155,10 +165,7 @@ def analyze_tenders_batch_job(
                     
                     doc.add_heading(f'Юридическое заключение по тендеру {tid}', 0)
                     
-                    if final_markdown:
-                        add_markdown_to_docx(doc, final_markdown)
-                    else:
-                        doc.add_paragraph("Отчет пуст.")
+                    add_markdown_to_docx(doc, final_markdown)
                     
                     os.makedirs(tender_dir, exist_ok=True)
                     report_filename = f"report_{tid}.docx"
@@ -169,10 +176,14 @@ def analyze_tenders_batch_job(
                 except Exception as e:
                     logger.error(f"Error generating Word report for tender {tid}: {e}")
             else:
-                logger.warning(f"Skipping Word report for tender {tid} due to analysis status: {analysis_result.get('status')}")
+                logger.warning(f"Skipping Word report for tender {tid} due to analysis status: {analysis_result.get('status')} or empty report")
+                if analysis_result.get('status') == 'success':
+                    analysis_result['status'] = 'partial' # Если отчет пустой, но статус success, меняем на partial
 
             # 6. Финальное логирование требуемых метрик
             logger.info(f"--- [ANALYSIS LOGS FOR TENDER {tid}] ---")
+            logger.info(f"- Extraction time: {extraction_time:.2f}s")
+            logger.info(f"- AI Analysis time: {analysis_end_time - analysis_start_time:.2f}s")
             logger.info(f"- Cleaned context length: {cleaned_context_len} chars")
             logger.info(f"- Final markdown report length: {final_report_len} chars")
             logger.info(f"- Word report path: {report_path}")
@@ -187,7 +198,9 @@ def analyze_tenders_batch_job(
                 "file_statuses": file_statuses,
                 "report_path": report_path,
                 "export_available": export_available,
-                "structured_data": structured_data
+                "structured_data": structured_data,
+                "merged_facts": merged_facts,
+                "extracted_facts": extracted_facts
             })
             logger.info(f"--- [END TENDER ANALYSIS: {tid}] ---")
             

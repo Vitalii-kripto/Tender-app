@@ -90,52 +90,64 @@ class DocumentService:
 
         return doc_path
 
-    def extract_text(self, file_path: str) -> str:
+    def extract_document_data(self, file_path: str) -> Dict[str, Any]:
         """
-        Умное извлечение текста с защитой от сбоев.
-        Поддерживает PDF, DOCX, XLSX, XLS, DOC.
+        Извлечение структурированных данных из документа (страницы, листы, статус).
         """
         ext = os.path.splitext(file_path)[1].lower()
-        logger.info(f"--- [START EXTRACTION] ---")
+        filename = os.path.basename(file_path)
+        logger.info(f"--- [START STRUCTURED EXTRACTION] ---")
         logger.info(f"File path: {file_path}")
         logger.info(f"Extension: {ext}")
         
-        full_text = ""
-        handler = "None"
+        result = {
+            "filename": filename,
+            "text": "",
+            "pages": [],
+            "status": "ok",
+            "error_message": ""
+        }
 
         try:
-            # 1. Обработка .doc (с попыткой конвертации и дедупликации)
             if ext == '.doc':
                 docx_path = file_path + "x"
                 if os.path.exists(docx_path):
-                    logger.info(f"Skipping .doc extraction because .docx already exists: {docx_path}")
                     file_path = docx_path
                     ext = '.docx'
                 else:
-                    logger.info(f"Handler: .doc legacy converter/antiword")
-                    handler = "doc_converter"
                     new_path = self._convert_doc_to_docx(file_path)
                     if new_path.endswith('.docx'):
-                        logger.info(f"Successfully converted .doc to .docx: {new_path}")
                         file_path = new_path
                         ext = '.docx'
-                        # Продолжаем как .docx ниже
                     else:
-                        logger.info(f"Conversion failed or not applicable, using fallback extraction for .doc")
                         full_text = self._extract_text_from_doc(file_path)
-                        logger.info(f"Extraction complete. Handler: {handler}. Characters: {len(full_text)}")
-                        return full_text
+                        result["text"] = full_text
+                        result["pages"] = [{"page_num": 1, "text": full_text}]
+                        if not full_text.strip() or full_text.startswith("[ОШИБКА"):
+                            result["status"] = "error"
+                            result["error_message"] = full_text
+                        return result
 
-            # 2. Обработка .docx
             if ext == '.docx':
-                handler = "python-docx"
                 import docx
                 doc = docx.Document(file_path)
                 full_text = "\n".join([para.text for para in doc.paragraphs])
+                result["text"] = full_text
+                result["pages"] = [{"page_num": 1, "text": full_text}]
+                
+                tables_data = []
+                for table in doc.tables:
+                    table_content = []
+                    for row in table.rows:
+                        row_data = [cell.text.strip() for cell in row.cells]
+                        table_content.append(" | ".join(row_data))
+                    tables_data.append("\n".join(table_content))
+                
+                if tables_data:
+                    result["pages"][0]["tables"] = tables_data
+                    result["text"] += "\n\n--- ТАБЛИЦЫ ---\n" + "\n\n".join(tables_data)
             
-            # 3. Обработка .xlsx
             elif ext == '.xlsx':
-                handler = "openpyxl"
                 import openpyxl
                 wb = openpyxl.load_workbook(file_path, data_only=True)
                 sheets_text = []
@@ -146,12 +158,12 @@ class DocumentService:
                         if row_text.strip().replace("|", "").strip():
                             sheet_data.append(row_text)
                     if sheet_data:
-                        sheets_text.append(f"=== ЛИСТ: {sheet.title} ===\n" + "\n".join(sheet_data))
-                full_text = "\n\n".join(sheets_text)
+                        sheet_text = f"=== ЛИСТ: {sheet.title} ===\n" + "\n".join(sheet_data)
+                        sheets_text.append(sheet_text)
+                        result["pages"].append({"page_num": sheet.title, "text": sheet_text, "is_sheet": True})
+                result["text"] = "\n\n".join(sheets_text)
             
-            # 4. Обработка .xls
             elif ext == '.xls':
-                handler = "xlrd"
                 import xlrd
                 wb = xlrd.open_workbook(file_path)
                 sheets_text = []
@@ -163,64 +175,63 @@ class DocumentService:
                         if row_text.strip().replace("|", "").strip():
                             sheet_data.append(row_text)
                     if sheet_data:
-                        sheets_text.append(f"=== ЛИСТ: {sheet.name} ===\n" + "\n".join(sheet_data))
-                full_text = "\n\n".join(sheets_text)
+                        sheet_text = f"=== ЛИСТ: {sheet.name} ===\n" + "\n".join(sheet_data)
+                        sheets_text.append(sheet_text)
+                        result["pages"].append({"page_num": sheet.name, "text": sheet_text, "is_sheet": True})
+                result["text"] = "\n\n".join(sheets_text)
             
-            # 5. Обработка .pdf
             elif ext == '.pdf':
-                handler = "pypdf"
                 reader = PdfReader(file_path)
                 text_pages = []
-                for page in reader.pages:
+                for i, page in enumerate(reader.pages):
                     try:
                         extracted = page.extract_text()
                         if extracted:
                             text_pages.append(extracted)
+                            result["pages"].append({"page_num": i + 1, "text": extracted})
                     except Exception as e:
-                        logger.warning(f"Failed to extract text from a PDF page: {e}")
+                        logger.warning(f"Failed to extract text from a PDF page {i+1}: {e}")
                 
                 full_text = "\n".join(text_pages)
-                
-                # Оценка качества извлеченного текста
                 is_quality_good = self._is_text_quality_good(full_text)
-                char_count = len(full_text)
-                
-                logger.info(f"--- [PDF SPECIFIC LOGS] ---")
-                logger.info(f"Text Layer Quality: {'GOOD' if is_quality_good else 'POOR'}")
-                logger.info(f"OCR Triggered: {'Yes' if not is_quality_good else 'No'}")
                 
                 if not is_quality_good:
-                    logger.info(f"PDF text quality is POOR (Chars: {char_count}). Triggering OCR fallback...")
-                    ocr_result = self._perform_ocr(file_path)
-                    
-                    logger.info(f"OCR fallback successful. Text obtained after OCR: {len(ocr_result)} chars")
-                    handler = "pypdf + pypdfium2 + PaddleOCR (OCR)"
-                    full_text = ocr_result
+                    logger.info(f"PDF text quality is POOR. Triggering OCR fallback...")
+                    try:
+                        ocr_result = self._perform_ocr(file_path)
+                        result["text"] = ocr_result
+                        result["pages"] = [{"page_num": 1, "text": ocr_result}]
+                    except Exception as e:
+                        logger.error(f"OCR failed: {e}")
+                        result["status"] = "ocr_failed"
+                        result["error_message"] = f"OCR failed: {str(e)}"
+                        result["text"] = full_text
                 else:
-                    logger.info(f"PDF text quality is GOOD (Chars: {char_count}). Using native text layer.")
-                logger.info(f"---------------------------")
+                    result["text"] = full_text
 
-            # 6. Неподдерживаемый формат
             else:
-                logger.warning(f"Unsupported file format: {ext} for file {file_path}")
-                return f"[SYSTEM INFO] Формат {ext} не поддерживается."
+                result["status"] = "error"
+                result["error_message"] = f"Unsupported file extension: {ext}"
 
-            char_count = len(full_text)
-            ocr_used = handler.endswith("(OCR)")
-            
-            logger.info(f"--- [EXTRACTION SUMMARY] ---")
-            logger.info(f"File Name: {os.path.basename(file_path)}")
-            logger.info(f"File Type: {ext}")
-            logger.info(f"Handler Used: {handler}")
-            logger.info(f"Characters Extracted: {char_count}")
-            logger.info(f"OCR Used: {'Yes' if ocr_used else 'No'}")
-            logger.info(f"----------------------------")
-            
-            return full_text
+            if not result["text"].strip() and result["status"] == "ok":
+                result["status"] = "empty"
+                result["error_message"] = "Файл пуст или текст не извлечен"
 
         except Exception as e:
-            logger.error(f"Extraction failed for {file_path} using {handler}. Error: {str(e)}", exc_info=True)
-            return f"[ERROR] Ошибка при чтении {ext} ({handler}): {str(e)}"
+            logger.error(f"Extraction error for {file_path}: {e}", exc_info=True)
+            result["status"] = "error"
+            result["error_message"] = str(e)
+
+        return result
+
+    def extract_text(self, file_path: str) -> str:
+        """
+        Обертка для обратной совместимости.
+        """
+        data = self.extract_document_data(file_path)
+        if data["status"] in ["error", "ocr_failed", "empty"]:
+            logger.warning(f"Extraction issue: {data['status']} - {data['error_message']}")
+        return data.get("text", "")
 
     def _is_text_quality_good(self, text: str) -> bool:
         """
@@ -279,6 +290,8 @@ class DocumentService:
 
     def _perform_ocr(self, file_path: str) -> str:
         """Вспомогательный метод для OCR распознавания через pypdfium2 и PaddleOCR"""
+        import time
+        start_time = time.time()
         logger.info(f"Starting OCR for {file_path} using pypdfium2 + PaddleOCR")
         
         # Открываем PDF через pypdfium2
@@ -315,12 +328,14 @@ class DocumentService:
         
         pdf.close()
         
+        end_time = time.time()
+        
         if ocr_text_pages:
             full_ocr_text = "\n\n".join(ocr_text_pages)
-            logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages.")
+            logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages in {end_time - start_time:.2f}s.")
             return full_ocr_text
         else:
-            logger.warning("OCR ran but found no text.")
+            logger.warning(f"OCR ran but found no text in {end_time - start_time:.2f}s.")
             return "[OCR WARNING] OCR отработал, но текст не найден."
 
     def _extract_text_from_doc(self, file_path: str) -> str:
