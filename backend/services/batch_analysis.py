@@ -105,6 +105,9 @@ def analyze_tenders_batch_job(
                     
                     files_data.append(doc_data)
                     file_statuses.append({"filename": filename, "status": doc_data.get("status", "ok"), "message": doc_data.get("error_message", "Текст успешно извлечен")})
+                    
+                    if doc_data.get("critical_for_analysis"):
+                        logger.warning(f"Critical document degraded for tender {tid}: {filename}")
                 else:
                     logger.warning(f"File {filename} is empty or no text extracted.")
                     file_statuses.append({"filename": filename, "status": "warning", "message": "Файл пуст или текст не извлечен"})
@@ -113,6 +116,10 @@ def analyze_tenders_batch_job(
                 file_statuses.append({"filename": filename, "status": "error", "message": f"Ошибка извлечения: {str(e)}"})
         extraction_end_time = time.time()
         extraction_time = extraction_end_time - extraction_start_time
+
+        has_critical_degraded_file = any(
+            f.get("critical_for_analysis") is True for f in files_data
+        )
 
         if not files_data:
             logger.error(f"No text extracted from any of the selected files for tender {tid}")
@@ -139,6 +146,15 @@ def analyze_tenders_batch_job(
             )
             analysis_end_time = time.time()
             
+            if has_critical_degraded_file and analysis_result.get("status") == "success":
+                analysis_result["status"] = "partial"
+                if analysis_result.get("final_report_markdown"):
+                    analysis_result["final_report_markdown"] += (
+                        "\n\n## Ограничение полноты анализа\n"
+                        "В составе тендера есть критичный PDF-файл, по которому OCR отработал с ошибкой или неполно. "
+                        "Выводы по НМЦК / сметным данным могут быть неполными."
+                    )
+
             final_markdown = analysis_result.get('final_report_markdown', '')
             summary_notes = analysis_result.get('summary_notes', '')
             

@@ -213,10 +213,12 @@ class DocumentService:
                         ocr_pages = self._perform_ocr(file_path)
                         result["pages"] = ocr_pages
                         result["text"] = "\n\n".join([f"--- Page {p['page_num']} ---\n{p['text']}" for p in ocr_pages])
+                        result["ocr_used"] = True
+
                         if not result["text"].strip() or "[OCR WARNING]" in result["text"]:
                             result["status"] = "ocr_failed"
                             result["error_message"] = "OCR отработал, но текст не найден или найден только мусор"
-                            result["text"] = full_text # fallback to native text
+                            result["text"] = full_text
                             result["pages"] = [{"page_num": i + 1, "text": p} for i, p in enumerate(text_pages)]
                     except Exception as e:
                         logger.error(f"OCR failed: {e}")
@@ -224,8 +226,15 @@ class DocumentService:
                         result["error_message"] = f"OCR failed: {str(e)}"
                         result["text"] = full_text
                         result["pages"] = [{"page_num": i + 1, "text": p} for i, p in enumerate(text_pages)]
+                        result["ocr_used"] = True
                 else:
                     result["text"] = full_text
+
+                filename_lower = filename.lower()
+                if result.get("status") == "ocr_failed" and any(x in filename_lower for x in ["нмцк", "обоснование", "смет"]):
+                    result["critical_for_analysis"] = True
+                else:
+                    result["critical_for_analysis"] = False
 
             else:
                 result["status"] = "error"

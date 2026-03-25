@@ -1,8 +1,10 @@
 import re
+from docx.shared import Pt
+
 
 def add_markdown_to_docx(doc, md_text):
-    md_text = _preprocess_markdown(md_text)
-    lines = md_text.split("\n")
+    md_text = normalize_markdown_tables(md_text or "")
+    lines = md_text.replace('\r\n', '\n').split('\n')
 
     i = 0
     while i < len(lines):
@@ -13,132 +15,128 @@ def add_markdown_to_docx(doc, md_text):
             i += 1
             continue
 
-        # headings
-        if stripped.startswith("# "):
+        if '|' in stripped and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if re.match(r'^\|?[\s\-\|:]+\|?$', next_line) and '|' in next_line:
+                table_rows = [stripped, next_line]
+                i += 2
+                while i < len(lines):
+                    candidate = lines[i].strip()
+                    if not candidate or '|' not in candidate:
+                        break
+                    table_rows.append(candidate)
+                    i += 1
+                _render_table(doc, table_rows)
+                continue
+
+        if stripped.startswith('# '):
             doc.add_heading(stripped[2:].strip(), level=1)
-            i += 1
-            continue
-        if stripped.startswith("## "):
+        elif stripped.startswith('## '):
             doc.add_heading(stripped[3:].strip(), level=2)
-            i += 1
-            continue
-        if stripped.startswith("### "):
+        elif stripped.startswith('### '):
             doc.add_heading(stripped[4:].strip(), level=3)
-            i += 1
-            continue
-        if stripped.startswith("#### "):
+        elif stripped.startswith('#### '):
             doc.add_heading(stripped[5:].strip(), level=4)
-            i += 1
-            continue
-
-        # table block: at least 2 consecutive pipe-lines
-        if _looks_like_table_line(stripped):
-            table_lines = [stripped]
-            j = i + 1
-            while j < len(lines) and _looks_like_table_line(lines[j].strip()):
-                table_lines.append(lines[j].strip())
-                j += 1
-
-            _render_table(doc, table_lines)
-            i = j
-            continue
-
-        # bulleted list
-        if stripped.startswith("- ") or stripped.startswith("* ") or stripped.startswith("+ "):
-            p = doc.add_paragraph(style="List Bullet")
+        elif stripped.startswith('- ') or stripped.startswith('* ') or stripped.startswith('+ '):
+            p = doc.add_paragraph(style='List Bullet')
             _parse_inline_formatting(p, stripped[2:].strip())
-            i += 1
-            continue
-
-        # numbered list
-        if re.match(r'^\d+[\.\)]\s+', stripped):
-            p = doc.add_paragraph(style="List Number")
+        elif re.match(r'^\d+[\.\)]\s', stripped):
+            p = doc.add_paragraph(style='List Number')
             clean_line = re.sub(r'^\d+[\.\)]\s+', '', stripped).strip()
             _parse_inline_formatting(p, clean_line)
-            i += 1
-            continue
+        else:
+            p = doc.add_paragraph()
+            _parse_inline_formatting(p, stripped)
 
-        # normal paragraph
-        p = doc.add_paragraph()
-        _parse_inline_formatting(p, stripped)
         i += 1
 
 
-def _preprocess_markdown(text: str) -> str:
-    text = (text or "").replace("\r\n", "\n")
+def normalize_markdown_tables(md_text: str) -> str:
+    lines = md_text.replace('\r\n', '\n').split('\n')
+    normalized = []
+    i = 0
 
-    # force headings onto new lines
-    text = re.sub(r'(?<!\n)(##\s+\d)', r'\n\1', text)
-    text = re.sub(r'(?<!\n)(##\s+0\.)', r'\n\1', text)
-    text = re.sub(r'(?<!\n)(#\s+Юридическое заключение по тендеру)', r'\n\1', text)
-
-    # split heading glued to table header
-    fixed_lines = []
-    for line in text.split("\n"):
+    while i < len(lines):
+        line = lines[i]
         stripped = line.strip()
-        if stripped.startswith("## ") and "|" in stripped:
-            left, right = stripped.split("|", 1)
-            fixed_lines.append(left.strip())
-            fixed_lines.append("|" + right)
-        else:
-            fixed_lines.append(line)
 
-    text = "\n".join(fixed_lines)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+        if '|' in stripped and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if re.match(r'^\|?[\s\-\|:]+\|?$', next_line) and '|' in next_line:
+                block = [stripped, next_line]
+                i += 2
+                while i < len(lines):
+                    candidate = lines[i].strip()
+                    if not candidate or '|' not in candidate:
+                        break
+                    block.append(candidate)
+                    i += 1
+                normalized.extend(_normalize_table_block(block))
+                continue
+
+        normalized.append(line)
+        i += 1
+
+    return '\n'.join(normalized)
 
 
-def _looks_like_table_line(line: str) -> bool:
-    if "|" not in line:
-        return False
-    return line.count("|") >= 2
+def _normalize_table_block(table_rows):
+    parsed_rows = []
+    max_cols = 0
 
-
-def _normalize_table_lines(table_lines):
-    cleaned = []
-    for line in table_lines:
-        line = line.strip()
-        if not line:
+    for row in table_rows:
+        if re.match(r'^\|?[\s\-\|:]+\|?$', row) and '|' in row:
             continue
-        if not line.startswith("|"):
-            line = "| " + line.lstrip("| ").rstrip() + " |"
-        if not line.endswith("|"):
-            line = line.rstrip(" |") + " |"
+        content = row.strip()
+        if content.startswith('|'):
+            content = content[1:]
+        if content.endswith('|'):
+            content = content[:-1]
+        cols = [c.strip() for c in content.split('|')]
+        parsed_rows.append(cols)
+        max_cols = max(max_cols, len(cols))
 
-        parts = [p.strip() for p in line.strip("|").split("|")]
-        if not any(parts):
+    if not parsed_rows or max_cols == 0:
+        return table_rows
+
+    fixed_rows = []
+    header = parsed_rows[0] + [''] * (max_cols - len(parsed_rows[0]))
+    fixed_rows.append('| ' + ' | '.join(header) + ' |')
+    fixed_rows.append('| ' + ' | '.join(['---'] * max_cols) + ' |')
+
+    for row in parsed_rows[1:]:
+        row = row + [''] * (max_cols - len(row))
+        fixed_rows.append('| ' + ' | '.join(row) + ' |')
+
+    return fixed_rows
+
+
+def _render_table(doc, table_rows):
+    parsed_rows = []
+    for row in table_rows:
+        if re.match(r'^\|?[\s\-\|:]+\|?$', row) and '|' in row:
             continue
-        cleaned.append(parts)
+        content = row.strip()
+        if content.startswith('|'):
+            content = content[1:]
+        if content.endswith('|'):
+            content = content[:-1]
+        cols = [col.strip() for col in content.split('|')]
+        if any(c for c in cols):
+            parsed_rows.append(cols)
 
-    if not cleaned:
-        return []
-
-    # if second line is separator-like, drop it from content
-    if len(cleaned) >= 2:
-        joined = "|".join(cleaned[1])
-        if re.fullmatch(r'[\s:\-]+(?:\|[\s:\-]+)*', joined):
-            cleaned.pop(1)
-
-    return cleaned
-
-
-def _render_table(doc, table_lines):
-    rows = _normalize_table_lines(table_lines)
-    if not rows:
+    if not parsed_rows:
         return
 
-    num_cols = max(len(r) for r in rows)
-    if num_cols == 0:
-        return
+    num_cols = max(len(r) for r in parsed_rows)
+    table = doc.add_table(rows=len(parsed_rows), cols=num_cols)
+    table.style = 'Table Grid'
 
-    table = doc.add_table(rows=len(rows), cols=num_cols)
-    table.style = "Table Grid"
-
-    for i, row in enumerate(rows):
-        padded = row + [""] * (num_cols - len(row))
-        for j, col_text in enumerate(padded):
+    for i, row in enumerate(parsed_rows):
+        row = row + [''] * (num_cols - len(row))
+        for j, col_text in enumerate(row):
             cell = table.cell(i, j)
-            cell.text = ""
+            cell.text = ''
             p = cell.paragraphs[0]
             _parse_inline_formatting(p, col_text)
             if i == 0:
@@ -153,7 +151,6 @@ def _parse_inline_formatting(paragraph, text):
     for token in tokens:
         if not token:
             continue
-
         if (token.startswith('***') and token.endswith('***')) or (token.startswith('___') and token.endswith('___')):
             run = paragraph.add_run(token[3:-3])
             run.bold = True
