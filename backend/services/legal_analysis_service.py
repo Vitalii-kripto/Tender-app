@@ -52,7 +52,7 @@ class LegalAnalysisService:
             if callback:
                 callback("Финальная проверка отчета", 85, "running")
 
-            final_status = self._calculate_status(validation, final_report_markdown)
+            final_status = self._calculate_status(final_report_markdown, validation)
             summary = self._extract_summary(final_report_markdown)
             end_time = time.time()
 
@@ -214,6 +214,7 @@ class LegalAnalysisService:
     def _insert_newlines_before_headings(self, text: str) -> str:
         text = re.sub(r'(?<!\n)(##\s+\d)', r'\n\1', text)
         text = re.sub(r'(?<!\n)(##\s+0\.)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(##\s+Краткое резюме)', r'\n\1', text)
         text = re.sub(r'(?<!\n)(#\s+Юридическое заключение по тендеру)', r'\n\1', text)
         return text
 
@@ -312,56 +313,46 @@ class LegalAnalysisService:
     def _extract_summary(self, markdown: str) -> str:
         if not markdown:
             return ""
-        match = re.search(r"##\s*1\.\s*Краткое резюме(.*?)(?=\n##\s*2\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
+        match = re.search(r"##\s*Краткое резюме(.*?)(?=\n##\s*1\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
         if not match:
             return ""
         content = match.group(1).strip()
         content = re.sub(r"\|.*", "", content).strip()
         return content[:1200]
 
-    def _validate_report(self, report_markdown: str) -> Dict[str, Any]:
-        missing_headers = [header for header in REQUIRED_REPORT_HEADERS if header not in report_markdown]
+    def _validate_report(self, report: str) -> Dict[str, bool]:
+        """
+        Проверка наличия всех обязательных разделов и таблиц.
+        """
+        validation = {}
+        for header in REQUIRED_REPORT_HEADERS:
+            validation[header] = header in report
 
-        has_tables = "|" in report_markdown and "---" in report_markdown
-        report_len = len(report_markdown)
+        # Проверка наличия критических таблиц
+        validation["table_customer"] = "## 0. Карточка Заказчика" in report and "|" in report.split("## 0. Карточка Заказчика")[1].split("##")[0]
+        validation["table_goods"] = "## 0.1. Сводная таблица товаров" in report and "|" in report.split("## 0.1. Сводная таблица товаров")[1].split("##")[0]
+        validation["table_equivalents"] = "## 3.1. Возможность поставки эквивалентов" in report and "|" in report.split("## 3.1. Возможность поставки эквивалентов")[1].split("##")[0]
 
-        lower_text = report_markdown.lower()
+        # Проверка на "Не найдено"
+        not_found_count = report.count("Не найдено в ТД")
+        validation["has_content"] = not_found_count < (len(REQUIRED_REPORT_HEADERS) * 0.8)
 
-        critical_markers = {
-            "has_customer_card": "## 0. Карточка закупки" in report_markdown,
-            "has_goods_table": "## 0.1. Сводная таблица товаров / предмета поставки" in report_markdown,
-            "mentions_customer": ("заказчик" in lower_text),
-            "mentions_goods": ("наименование товара" in lower_text or "предмет закупки" in lower_text or "товар" in lower_text),
-            "has_bid_docs_section": "## 8. Полный перечень документов, которые должны входить в состав заявки" in report_markdown,
-            "has_delivery_docs_section": "## 9. Отдельный перечень документов, предоставляемых при поставке" in report_markdown,
-            "has_payment_section": "## 6. Условия оплаты" in report_markdown,
-            "has_delivery_acceptance_section": "## 5. Условия поставки и приёмки" in report_markdown,
-            "has_liability_section": "## 7. Ответственность сторон" in report_markdown,
-            "mentions_unloading": ("разгруз" in lower_text),
-        }
+        return validation
 
-        return {
-            "missing_headers": missing_headers,
-            "missing_headers_count": len(missing_headers),
-            "has_tables": has_tables,
-            "report_length": report_len,
-            "critical_markers": critical_markers,
-        }
-
-    def _calculate_status(self, validation: Dict[str, Any], report_markdown: str) -> str:
-        if validation["report_length"] < 3500:
+    def _calculate_status(self, report: str, validation: Dict[str, bool]) -> str:
+        """
+        Определение статуса анализа.
+        """
+        if len(report) < 500:
             return "error"
 
-        if not validation["has_tables"]:
+        missing_headers = [h for h, found in validation.items() if h.startswith("##") and not found]
+        
+        # Если нет самых важных таблиц
+        if not validation.get("table_customer") or not validation.get("table_goods") or not validation.get("table_equivalents"):
             return "partial"
 
-        if validation["missing_headers_count"] >= 2:
-            return "partial"
-
-        critical = validation["critical_markers"]
-        critical_false_count = sum(1 for _, value in critical.items() if not value)
-
-        if critical_false_count >= 1:
+        if len(missing_headers) > 2 or not validation["has_content"]:
             return "partial"
 
         return "success"
