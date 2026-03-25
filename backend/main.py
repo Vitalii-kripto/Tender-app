@@ -138,24 +138,51 @@ app.add_middleware(
 )
 
 # Services
+eis_service = None
+parser_service = None
+doc_service = None
+ai_service = None
+legal_analysis_service = None
+
+logger.info("Initializing Services...")
+
 try:
-    logger.info("Initializing Services...")
     eis_service = EisService()
+    logger.info("[OK] EisService initialized.")
+except Exception as e:
+    logger.error(f"[FAILED] EisService initialization error: {e}")
+
+try:
     parser_service = GidroizolParser()
+    logger.info("[OK] GidroizolParser initialized.")
+except Exception as e:
+    logger.error(f"[FAILED] GidroizolParser initialization error: {e}")
+
+try:
     doc_service = DocumentService()
+    logger.info("[OK] DocumentService initialized.")
+except Exception as e:
+    logger.error(f"[FAILED] DocumentService initialization error: {e}")
+
+try:
     ai_service = AiService()
-    
     # Выполняем тестовый запрос к ИИ при старте
     active_model = ai_service.test_model_availability()
     if not active_model:
-        logger.critical("AI Service is UNAVAILABLE. Backend will start in degraded mode (analysis blocked).")
+        logger.critical("[WARNING] AI Service is UNAVAILABLE. Backend will start in degraded mode.")
     else:
-        logger.info(f"AI Service is READY. Working model: {active_model}")
+        logger.info(f"[OK] AI Service is READY. Working model: {active_model}")
         
-    legal_analysis_service = LegalAnalysisService(ai_service)
-    logger.info("Services initialized.")
+    try:
+        legal_analysis_service = LegalAnalysisService(ai_service)
+        logger.info("[OK] LegalAnalysisService initialized.")
+    except Exception as e:
+        logger.error(f"[FAILED] LegalAnalysisService initialization error: {e}")
+        
 except Exception as e:
-    logger.error(f"Service initialization error: {e}", exc_info=True)
+    logger.error(f"[FAILED] AiService initialization error: {e}")
+
+logger.info("Service initialization phase completed.")
 
 # --- ENDPOINTS ---
 
@@ -463,6 +490,11 @@ def get_tender_files(tender_id: str):
 @app.post("/api/ai/analyze-tenders-batch")
 async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...)):
     logger.info("Batch AI Analysis request received.")
+    
+    if doc_service is None or legal_analysis_service is None:
+        logger.error("Attempted to run batch analysis, but required services are not initialized.")
+        raise HTTPException(status_code=503, detail="Required AI or Document services are not initialized. Please check backend logs.")
+        
     tender_ids = data.get('tender_ids', [])
     selected_files = data.get('selected_files', {}) # {tender_id: [filenames]}
     
@@ -537,6 +569,11 @@ async def api_check_compliance(data: dict = Body(...)):
 @app.post("/api/tenders/upload")
 async def upload_file(file: UploadFile = File(...)):
     logger.info(f"File upload request: {file.filename}")
+    
+    if doc_service is None:
+        logger.error("Attempted to upload file, but DocumentService is not initialized.")
+        raise HTTPException(status_code=503, detail="Document service is not initialized. Please check backend logs.")
+        
     try:
         file_path = await doc_service.save_file(file)
         # Запускаем OCR или извлечение текста

@@ -24,7 +24,7 @@ class DocumentService:
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
         try:
             # Инициализация PaddleOCR (модели скачиваются при первом запуске)
-            self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru', show_log=False)
+            self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru')
             logger.info("PaddleOCR engine initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize PaddleOCR: {e}")
