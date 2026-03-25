@@ -151,8 +151,8 @@ def analyze_tenders_batch_job(
             report_path = "N/A"
             export_available = False
             
-            # Экспорт в Word только если статус success и отчет не пустой
-            if analysis_result.get('status') == 'success' and final_markdown and len(final_markdown.strip()) > 50:
+            # Экспорт в Word разрешен для success и partial, если отчет содержательный
+            if analysis_result.get('status') in ('success', 'partial') and final_markdown and len(final_markdown.strip()) > 300:
                 try:
                     from docx import Document
                     from backend.markdown_parser import add_markdown_to_docx
@@ -177,9 +177,12 @@ def analyze_tenders_batch_job(
                 except Exception as e:
                     logger.error(f"Error generating Word report for tender {tid}: {e}")
             else:
-                logger.warning(f"Skipping Word report for tender {tid} due to analysis status: {analysis_result.get('status')} or empty report")
+                logger.warning(
+                    f"Skipping Word report for tender {tid} due to analysis status: "
+                    f"{analysis_result.get('status')} or insufficient report content"
+                )
                 if analysis_result.get('status') == 'success':
-                    analysis_result['status'] = 'partial' # Если отчет пустой, но статус success, меняем на partial
+                    analysis_result['status'] = 'partial'
 
             # 6. Финальное логирование требуемых метрик
             logger.info(f"--- [ANALYSIS LOGS FOR TENDER {tid}] ---")

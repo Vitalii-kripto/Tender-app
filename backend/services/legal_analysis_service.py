@@ -1,27 +1,24 @@
-import json
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backend.logger import logger, log_debug_event
 from .ai_service import AiService
-from .fact_extraction_service import FactExtractionService
-from .legal_prompts import PROMPT_GENERATE_REPORT
+from .legal_prompts import PROMPT_UNIFIED_LEGAL_ANALYSIS, REQUIRED_REPORT_HEADERS
 
 
 class LegalAnalysisService:
     """
     Новый режим анализа:
-    1) детерминированные факты кодом
-    2) один AI-вызов на извлечение всех тем сразу
-    3) merge
-    4) один AI-вызов на итоговый отчет
+    - один основной юридический промт на весь пакет документов;
+    - никакого JSON-фактоизвлечения по темам;
+    - никакого merge_facts в основном контуре;
+    - цель: максимальная полнота извлечения по составу заявки, поставке, оплате, ответственности и ограничениям.
     """
 
     def __init__(self, ai_service: Optional[AiService] = None):
         self.ai_service = ai_service or AiService()
-        self.fact_service = FactExtractionService(self.ai_service)
-        logger.info("LegalAnalysisService initialized.")
+        logger.info("LegalAnalysisService initialized (unified prompt mode).")
 
     def analyze_tender(
         self,
@@ -30,140 +27,84 @@ class LegalAnalysisService:
         job_id: str = "N/A",
         callback: Optional[Callable[[str, int, str], None]] = None,
     ) -> Dict[str, Any]:
-        logger.info(f"Starting compact AI analysis for tender {tender_id} (Job: {job_id})")
+        logger.info(f"Starting unified legal analysis for tender {tender_id} (Job: {job_id})")
 
         if callback:
-            callback("Подготовка контекста", 15, "running")
-
-        cleaned_context_len = sum(len(self._clean_text(f.get("text", "") or "")) for f in files_data)
+            callback("Подготовка полного контекста документов", 20, "running")
 
         try:
             start_time = time.time()
 
-            if callback:
-                callback("Детерминированное извлечение", 25, "running")
-
-            deterministic_start = time.time()
-            deterministic_facts = self.fact_service.extract_deterministic_facts(files_data)
-            deterministic_end = time.time()
+            documents_block, context_meta = self._build_documents_block(files_data)
+            prompt = PROMPT_UNIFIED_LEGAL_ANALYSIS.replace("__DOCUMENTS__", documents_block)
 
             if callback:
-                callback("Единый AI-вызов: сбор фактов", 45, "running")
+                callback("Единый юридический анализ ИИ", 55, "running")
 
-            ai_extract_start = time.time()
-            all_facts = self.fact_service.extract_thematic_facts_ai(
-                files_data,
-                deterministic_facts,
-                tender_id=tender_id,
-                job_id=job_id,
-            )
-            ai_extract_end = time.time()
-
-            facts_data = [fact.to_dict() for fact in all_facts]
-
-            if callback:
-                callback("Сверка фактов", 60, "running")
-
-            merge_start = time.time()
-            merged_facts = self.fact_service.merge_facts(all_facts, tender_id=tender_id)
-            merge_end = time.time()
-
-            if callback:
-                callback("Генерация итогового отчета", 80, "running")
-
-            report_prompt = PROMPT_GENERATE_REPORT.replace(
-                "__FACTS__",
-                json.dumps(merged_facts, ensure_ascii=False, indent=2),
-            )
-
-            report_start = time.time()
-            report_response = self.ai_service._call_ai_with_retry(
+            ai_start = time.time()
+            response = self.ai_service._call_ai_with_retry(
                 self.ai_service.client.models.generate_content,
-                contents=report_prompt,
+                contents=prompt,
             )
-            report_end = time.time()
+            ai_end = time.time()
 
-            response_text = report_response.text if report_response else ""
-            response_text = re.sub(
-                r"^#\s*Юридическое заключение по тендеру\s*\n",
-                "",
-                response_text,
-                flags=re.IGNORECASE,
-            )
-            final_report_markdown = f"# Юридическое заключение по тендеру\n\n{response_text.strip()}".strip()
-            final_report_len = len(final_report_markdown)
+            raw_text = response.text if response else ""
+            final_report_markdown = self._normalize_report(raw_text)
+            validation = self._validate_report(final_report_markdown)
 
-            final_status = self._calculate_final_status(merged_facts, final_report_markdown)
+            if callback:
+                callback("Финальная проверка отчета", 85, "running")
 
+            final_status = self._calculate_status(validation, final_report_markdown)
             summary = self._extract_summary(final_report_markdown)
             end_time = time.time()
 
-            log_debug_event(
-                {
-                    "stage": "report_generation",
-                    "job_id": job_id,
-                    "tender_id": tender_id,
-                    "report_generation_prompt_size": len(report_prompt),
-                    "raw_report_response": response_text,
-                    "final_status": final_status,
-                    "validation_result": {
-                        "report_length": final_report_len,
-                        "key_topic_summary": self._build_key_topic_summary(merged_facts),
-                    },
-                }
-            )
-
-            log_debug_event(
-                {
-                    "stage": "full_analysis",
-                    "job_id": job_id,
-                    "tender_id": tender_id,
-                    "model_name": "compact-two-call-mode",
-                    "extracted_facts": facts_data,
-                    "merged_facts": merged_facts,
-                    "final_decision": final_status,
-                    "duration": end_time - start_time,
-                    "timing": {
-                        "deterministic_extraction": deterministic_end - deterministic_start,
-                        "ai_single_fact_extraction": ai_extract_end - ai_extract_start,
-                        "merge": merge_end - merge_start,
-                        "report_generation": report_end - report_start,
-                    },
-                }
-            )
+            log_debug_event({
+                "stage": "unified_prompt_analysis",
+                "job_id": job_id,
+                "tender_id": tender_id,
+                "model_name": "unified-legal-prompt-mode",
+                "prompt_size": len(prompt),
+                "documents_count": context_meta["documents_count"],
+                "included_files": context_meta["included_files"],
+                "skipped_files": context_meta["skipped_files"],
+                "documents_block_size": len(documents_block),
+                "raw_model_response": raw_text,
+                "final_status": final_status,
+                "validation": validation,
+                "duration": end_time - start_time,
+                "ai_duration": ai_end - ai_start,
+            })
 
             logger.info(
-                f"Compact AI analysis finished for tender {tender_id} "
-                f"in {end_time - start_time:.2f}s, status={final_status}, report_len={final_report_len}"
+                f"Unified legal analysis finished for tender {tender_id} "
+                f"in {end_time - start_time:.2f}s, status={final_status}, report_len={len(final_report_markdown)}"
             )
 
             return {
                 "status": final_status,
                 "final_report_markdown": final_report_markdown,
                 "summary_notes": summary,
-                "cleaned_context_len": cleaned_context_len,
-                "final_report_len": final_report_len,
+                "cleaned_context_len": len(documents_block),
+                "final_report_len": len(final_report_markdown),
                 "structured_data": {},
-                "extracted_facts": facts_data,
-                "merged_facts": merged_facts,
+                "extracted_facts": [],
+                "merged_facts": {},
             }
 
         except Exception as e:
-            logger.error(f"Compact AI analysis error for tender {tender_id}: {e}", exc_info=True)
-            log_debug_event(
-                {
-                    "stage": "full_analysis",
-                    "job_id": job_id,
-                    "tender_id": tender_id,
-                    "final_decision": "error",
-                    "validation_errors": str(e),
-                }
-            )
+            logger.error(f"Unified legal analysis error for tender {tender_id}: {e}", exc_info=True)
+            log_debug_event({
+                "stage": "unified_prompt_analysis_error",
+                "job_id": job_id,
+                "tender_id": tender_id,
+                "error": str(e),
+            })
             return {
                 "status": "error",
                 "final_report_markdown": f"# Ошибка анализа\n\nПроизошла ошибка при обработке тендера: {str(e)}",
                 "summary_notes": "Ошибка анализа.",
-                "cleaned_context_len": cleaned_context_len,
+                "cleaned_context_len": 0,
                 "final_report_len": 0,
                 "structured_data": {},
                 "extracted_facts": [],
@@ -171,83 +112,161 @@ class LegalAnalysisService:
                 "error_message": str(e),
             }
 
+    def _document_priority(self, filename: str) -> Tuple[int, str]:
+        name = (filename or "").lower()
+
+        if "заявк" in name or "инструкц" in name or "состав" in name:
+            return (1, name)
+        if "проект" in name or "контракт" in name or "договор" in name or "пгк" in name:
+            return (2, name)
+        if "извещ" in name:
+            return (3, name)
+        if "описан" in name or "объект" in name or "тех" in name or "тз" in name:
+            return (4, name)
+        if "нмцк" in name or "обоснован" in name or "смет" in name:
+            return (5, name)
+        if name.endswith(".xls") or name.endswith(".xlsx"):
+            return (6, name)
+        return (10, name)
+
     def _clean_text(self, text: str) -> str:
         if not text:
             return ""
-        text = re.sub(r"\s+", " ", text)
-        text = re.sub(r"[^\x20-\x7E\u0400-\u04FF\n\t\.,!?;:()\"\"''\-\+=\[\]/\\<>@#\$%\^&\*«»№]", "", text)
+        text = re.sub(r"\s+\n", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
         return text.strip()
+
+    def _render_pages(self, file_data: Dict[str, Any]) -> str:
+        filename = file_data.get("filename", "Unknown")
+        status = file_data.get("status", "ok")
+        error_message = file_data.get("error_message", "")
+        pages = file_data.get("pages", []) or []
+        text = file_data.get("text", "") or ""
+
+        header = f"=== ФАЙЛ: {filename} | STATUS: {status} ===\n"
+
+        if status != "ok":
+            fallback_text = self._clean_text(text)
+            return (
+                header
+                + f"ПРЕДУПРЕЖДЕНИЕ ПО ФАЙЛУ: {error_message or status}\n\n"
+                + fallback_text
+                + "\n"
+            )
+
+        if not pages:
+            return header + self._clean_text(text) + "\n"
+
+        blocks: List[str] = [header]
+        for page in pages:
+            page_num = page.get("page_num", "")
+            page_text = self._clean_text(page.get("text", "") or "")
+            tables = page.get("tables", []) or []
+
+            page_header = f"--- СТРАНИЦА/ЛИСТ: {page_num} ---"
+            blocks.append(page_header)
+
+            if page_text:
+                blocks.append(page_text)
+
+            if tables:
+                blocks.append("--- ТАБЛИЦЫ ---")
+                for idx, table_text in enumerate(tables, start=1):
+                    table_clean = self._clean_text(table_text or "")
+                    if table_clean:
+                        blocks.append(f"[ТАБЛИЦА {idx}]")
+                        blocks.append(table_clean)
+
+        return "\n\n".join(blocks).strip() + "\n"
+
+    def _build_documents_block(self, files_data: List[Dict[str, Any]], max_total_chars: int = 180000) -> Tuple[str, Dict[str, Any]]:
+        sorted_files = sorted(files_data, key=lambda f: self._document_priority(f.get("filename", "")))
+
+        included_files: List[str] = []
+        skipped_files: List[Dict[str, Any]] = []
+        rendered_parts: List[str] = []
+        total_chars = 0
+
+        for file_data in sorted_files:
+            filename = file_data.get("filename", "Unknown")
+            rendered = self._render_pages(file_data)
+            if not rendered.strip():
+                skipped_files.append({"filename": filename, "reason": "empty_render"})
+                continue
+
+            if total_chars + len(rendered) > max_total_chars:
+                skipped_files.append({"filename": filename, "reason": "max_total_chars_exceeded"})
+                continue
+
+            rendered_parts.append(rendered)
+            included_files.append(filename)
+            total_chars += len(rendered)
+
+        block = "\n\n".join(rendered_parts).strip()
+
+        meta = {
+            "documents_count": len(included_files),
+            "included_files": included_files,
+            "skipped_files": skipped_files,
+            "total_chars": total_chars,
+        }
+        return block, meta
+
+    def _normalize_report(self, report_text: str) -> str:
+        text = (report_text or "").strip()
+        if not text:
+            return "# Юридическое заключение по тендеру\n\nОтчет не сформирован."
+        if not text.startswith("# Юридическое заключение по тендеру"):
+            text = "# Юридическое заключение по тендеру\n\n" + text
+        return text
 
     def _extract_summary(self, markdown: str) -> str:
         if not markdown:
             return ""
-        match = re.search(r"##\s*Краткое резюме.*?(\n##|$)", markdown, re.DOTALL | re.IGNORECASE)
-        if not match:
-            return "Резюме не найдено в отчете."
-        content = match.group(0)
-        content = re.sub(r"##\s*Краткое резюме.*?\n", "", content, count=1, flags=re.IGNORECASE)
-        content = re.sub(r"\n##$", "", content).strip()
-        return content or "Резюме не найдено в отчете."
+        match = re.search(r"##\s*1\..*?(?=\n##\s*2\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
+        if match:
+            return match.group(0)[:1000]
+        return "Краткое резюме не выделено отдельно."
 
-    def _topic_has_reliable_data(self, topic_data: Dict[str, Any]) -> bool:
-        if not topic_data:
-            return False
+    def _validate_report(self, report_markdown: str) -> Dict[str, Any]:
+        missing_headers = [header for header in REQUIRED_REPORT_HEADERS if header not in report_markdown]
 
-        final_value = topic_data.get("final_value")
+        has_tables = "|" in report_markdown and "---" in report_markdown
+        report_len = len(report_markdown)
 
-        if final_value in (None, "not_found", "conflict", "", [], {}):
-            return False
+        critical_markers = {
+            "has_bid_docs_section": "## 7. Полный перечень документов, которые должны входить в состав заявки" in report_markdown,
+            "has_delivery_docs_section": "## 8. Отдельный перечень документов, предоставляемых при поставке" in report_markdown,
+            "has_payment_section": "## 5. Условия оплаты" in report_markdown,
+            "has_delivery_acceptance_section": "## 4. Условия поставки и приёмки" in report_markdown,
+            "has_liability_section": "## 6. Ответственность сторон" in report_markdown,
+            "mentions_unloading": ("разгруз" in report_markdown.lower()),
+            "mentions_application_docs": ("заявк" in report_markdown.lower()),
+        }
 
-        if isinstance(final_value, list):
-            return len(final_value) > 0
+        return {
+            "missing_headers": missing_headers,
+            "missing_headers_count": len(missing_headers),
+            "has_tables": has_tables,
+            "report_length": report_len,
+            "critical_markers": critical_markers,
+        }
 
-        if isinstance(final_value, dict):
-            return len(final_value) > 0
-
-        if isinstance(final_value, str):
-            return bool(final_value.strip())
-
-        return True
-
-    def _topic_is_hard_conflict(self, topic_data: Dict[str, Any]) -> bool:
-        if not topic_data:
-            return False
-        return bool(topic_data.get("conflict_flag")) and topic_data.get("merge_mode") == "select"
-
-    def _build_key_topic_summary(self, merged_facts: Dict[str, Any]) -> Dict[str, Any]:
-        key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
-        out = {}
-        for topic in key_topics:
-            topic_data = merged_facts.get(topic, {})
-            out[topic] = {
-                "has_data": self._topic_has_reliable_data(topic_data),
-                "hard_conflict": self._topic_is_hard_conflict(topic_data),
-                "merge_mode": topic_data.get("merge_mode"),
-            }
-        return out
-
-    def _calculate_final_status(self, merged_facts: Dict[str, Any], report_markdown: str) -> str:
-        key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
-
-        missing_count = 0
-        hard_conflict_count = 0
-
-        for topic in key_topics:
-            topic_data = merged_facts.get(topic, {})
-            if not self._topic_has_reliable_data(topic_data):
-                missing_count += 1
-            if self._topic_is_hard_conflict(topic_data):
-                hard_conflict_count += 1
-
-        report_len = len(report_markdown or "")
-
-        if report_len < 400:
+    def _calculate_status(self, validation: Dict[str, Any], report_markdown: str) -> str:
+        if validation["report_length"] < 2500:
             return "error"
 
-        if missing_count >= 4:
-            return "error"
+        if not validation["has_tables"]:
+            return "partial"
 
-        if missing_count >= 2 or hard_conflict_count >= 1:
+        if validation["missing_headers_count"] >= 3:
+            return "partial"
+
+        critical = validation["critical_markers"]
+        critical_false_count = sum(1 for _, value in critical.items() if not value)
+
+        if critical_false_count >= 2:
             return "partial"
 
         return "success"
