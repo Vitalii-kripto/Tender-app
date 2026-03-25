@@ -1,162 +1,141 @@
-import os
-import re
 import json
-import logging
+import re
 import time
-from typing import List, Dict, Any, Optional, Callable
-from google import genai
-from google.genai import types
-from .legal_prompts import PROMPT_EXTRACT_FACTS, PROMPT_GENERATE_REPORT
-from backend.logger import logger
+from typing import Any, Callable, Dict, List, Optional
+
+from backend.logger import logger, log_debug_event
 from .ai_service import AiService
-from .fact_extraction_service import FactExtractionService, Fact
+from .fact_extraction_service import FactExtractionService
+from .legal_prompts import PROMPT_GENERATE_REPORT
+
 
 class LegalAnalysisService:
     """
-    Сервис для проведения юридического анализа тендерной документации с использованием ИИ.
-    Реализует двухэтапный анализ:
-    1. Извлечение фактов по темам (JSON).
-    2. Генерация итогового отчета на основе фактов (Markdown).
+    Новый режим анализа:
+    1) детерминированные факты кодом
+    2) один AI-вызов на извлечение всех тем сразу
+    3) merge
+    4) один AI-вызов на итоговый отчет
     """
 
     def __init__(self, ai_service: Optional[AiService] = None):
-        self.ai_service = ai_service
-        if not self.ai_service:
-            self.ai_service = AiService()
+        self.ai_service = ai_service or AiService()
         self.fact_service = FactExtractionService(self.ai_service)
-        
-        logger.info(f"LegalAnalysisService initialized.")
+        logger.info("LegalAnalysisService initialized.")
 
     def analyze_tender(
-        self, 
-        files_data: List[Dict[str, str]], 
+        self,
+        files_data: List[Dict[str, Any]],
         tender_id: str = "N/A",
         job_id: str = "N/A",
-        callback: Optional[Callable[[str, int, str], None]] = None
+        callback: Optional[Callable[[str, int, str], None]] = None,
     ) -> Dict[str, Any]:
-        """
-        Выполняет полный анализ тендера по всем документам (2 этапа).
-        """
-        logger.info(f"Starting full AI analysis for tender {tender_id} (Job: {job_id})")
-        
-        if callback:
-            callback("Подготовка контекста", 20, "running")
-
-        # 1. Сбор и очистка контекста
-        full_context = ""
-        for file in files_data:
-            filename = file.get('filename', 'Unknown')
-            text = file.get('text', '')
-            cleaned_text = self._clean_text(text)
-            full_context += f"\n\n--- ФАЙЛ: {filename} ---\n{cleaned_text}\n"
-
-        cleaned_context_len = len(full_context)
-        logger.info(f"Cleaned context length: {cleaned_context_len} chars")
+        logger.info(f"Starting compact AI analysis for tender {tender_id} (Job: {job_id})")
 
         if callback:
-            callback("Извлечение фактов по темам", 40, "running")
+            callback("Подготовка контекста", 15, "running")
+
+        cleaned_context_len = sum(len(self._clean_text(f.get("text", "") or "")) for f in files_data)
 
         try:
             start_time = time.time()
-            
-            # ЭТАП 1: Извлечение фактов
-            logger.info("Extracting deterministic facts...")
-            deterministic_start_time = time.time()
-            deterministic_facts = self.fact_service.extract_deterministic_facts(files_data)
-            deterministic_end_time = time.time()
-            
-            logger.info("Extracting thematic facts via AI...")
-            ai_extraction_start_time = time.time()
-            all_facts = self.fact_service.extract_thematic_facts_ai(files_data, deterministic_facts, tender_id=tender_id, job_id=job_id)
-            ai_extraction_end_time = time.time()
-            
-            facts_data = [fact.to_dict() for fact in all_facts]
-            
-            # ЭТАП 2: Сверка и объединение фактов
-            logger.info("Merging and reconciling facts...")
-            merge_start_time = time.time()
-            merged_facts = self.fact_service.merge_facts(all_facts, tender_id=tender_id)
-            merge_end_time = time.time()
-            merged_facts_json_str = json.dumps(merged_facts, ensure_ascii=False, indent=2)
-            
-            logger.info("Facts successfully extracted, merged and parsed.")
 
             if callback:
-                callback("Генерация итогового отчета", 75, "running")
+                callback("Детерминированное извлечение", 25, "running")
 
-            # ЭТАП 3: Генерация отчета
-            report_prompt = PROMPT_GENERATE_REPORT.replace("__FACTS__", merged_facts_json_str)
-            
-            logger.info("Calling AI for Report Generation (Markdown)...")
-            report_start_time = time.time()
+            deterministic_start = time.time()
+            deterministic_facts = self.fact_service.extract_deterministic_facts(files_data)
+            deterministic_end = time.time()
+
+            if callback:
+                callback("Единый AI-вызов: сбор фактов", 45, "running")
+
+            ai_extract_start = time.time()
+            all_facts = self.fact_service.extract_thematic_facts_ai(
+                files_data,
+                deterministic_facts,
+                tender_id=tender_id,
+                job_id=job_id,
+            )
+            ai_extract_end = time.time()
+
+            facts_data = [fact.to_dict() for fact in all_facts]
+
+            if callback:
+                callback("Сверка фактов", 60, "running")
+
+            merge_start = time.time()
+            merged_facts = self.fact_service.merge_facts(all_facts, tender_id=tender_id)
+            merge_end = time.time()
+
+            if callback:
+                callback("Генерация итогового отчета", 80, "running")
+
+            report_prompt = PROMPT_GENERATE_REPORT.replace(
+                "__FACTS__",
+                json.dumps(merged_facts, ensure_ascii=False, indent=2),
+            )
+
+            report_start = time.time()
             report_response = self.ai_service._call_ai_with_retry(
                 self.ai_service.client.models.generate_content,
-                contents=report_prompt
+                contents=report_prompt,
             )
-            report_end_time = time.time()
-            
+            report_end = time.time()
+
             response_text = report_response.text if report_response else ""
-            
-            end_time = time.time()
-            
-            # Сборка финального отчета
-            response_text = re.sub(r'^#\s*Юридическое заключение по тендеру\s*\n', '', response_text, flags=re.IGNORECASE)
-            final_report_markdown = f"# Юридическое заключение по тендеру\n\n{response_text.strip()}"
-            
+            response_text = re.sub(
+                r"^#\s*Юридическое заключение по тендеру\s*\n",
+                "",
+                response_text,
+                flags=re.IGNORECASE,
+            )
+            final_report_markdown = f"# Юридическое заключение по тендеру\n\n{response_text.strip()}".strip()
             final_report_len = len(final_report_markdown)
-            logger.info(f"AI Analysis finished in {end_time - start_time:.2f}s. Final length: {final_report_len} chars")
-            
-            # Извлечение Summary
+
+            final_status = self._calculate_final_status(merged_facts, final_report_markdown)
+
             summary = self._extract_summary(final_report_markdown)
+            end_time = time.time()
 
-            # Определение статуса на основе ключевых фактов
-            key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
-            missing_or_conflict_count = 0
-            for topic in key_topics:
-                fact_info = merged_facts.get(topic, {})
-                if fact_info.get("final_value") == "not_found" or fact_info.get("conflict_flag") is True:
-                    missing_or_conflict_count += 1
-            
-            final_status = "success"
-            if missing_or_conflict_count == len(key_topics):
-                final_status = "error"
-            elif missing_or_conflict_count >= 2:
-                final_status = "partial"
-                
-            if final_report_len < 200:
-                final_status = "error"
-
-            # Логирование в debug-лог
-            from backend.logger import log_debug_event
-            log_debug_event({
-                "stage": "report_generation",
-                "job_id": job_id,
-                "tender_id": tender_id,
-                "report_generation_prompt_size": len(report_prompt),
-                "raw_report_response": response_text,
-                "final_status": final_status,
-                "validation_result": {
-                    "missing_or_conflict_count": missing_or_conflict_count,
-                    "report_length": final_report_len
+            log_debug_event(
+                {
+                    "stage": "report_generation",
+                    "job_id": job_id,
+                    "tender_id": tender_id,
+                    "report_generation_prompt_size": len(report_prompt),
+                    "raw_report_response": response_text,
+                    "final_status": final_status,
+                    "validation_result": {
+                        "report_length": final_report_len,
+                        "key_topic_summary": self._build_key_topic_summary(merged_facts),
+                    },
                 }
-            })
+            )
 
-            log_debug_event({
-                "stage": "full_analysis",
-                "job_id": job_id,
-                "tender_id": tender_id,
-                "model_name": "gemini-3.1-pro-preview",
-                "extracted_facts": facts_data,
-                "merged_facts": merged_facts,
-                "final_decision": final_status,
-                "duration": end_time - start_time,
-                "timing": {
-                    "deterministic_extraction": deterministic_end_time - deterministic_start_time,
-                    "ai_extraction": ai_extraction_end_time - ai_extraction_start_time,
-                    "merge": merge_end_time - merge_start_time,
-                    "report_generation": report_end_time - report_start_time
+            log_debug_event(
+                {
+                    "stage": "full_analysis",
+                    "job_id": job_id,
+                    "tender_id": tender_id,
+                    "model_name": "compact-two-call-mode",
+                    "extracted_facts": facts_data,
+                    "merged_facts": merged_facts,
+                    "final_decision": final_status,
+                    "duration": end_time - start_time,
+                    "timing": {
+                        "deterministic_extraction": deterministic_end - deterministic_start,
+                        "ai_single_fact_extraction": ai_extract_end - ai_extract_start,
+                        "merge": merge_end - merge_start,
+                        "report_generation": report_end - report_start,
+                    },
                 }
-            })
+            )
+
+            logger.info(
+                f"Compact AI analysis finished for tender {tender_id} "
+                f"in {end_time - start_time:.2f}s, status={final_status}, report_len={final_report_len}"
+            )
 
             return {
                 "status": final_status,
@@ -164,41 +143,111 @@ class LegalAnalysisService:
                 "summary_notes": summary,
                 "cleaned_context_len": cleaned_context_len,
                 "final_report_len": final_report_len,
+                "structured_data": {},
                 "extracted_facts": facts_data,
-                "merged_facts": merged_facts
+                "merged_facts": merged_facts,
             }
 
         except Exception as e:
-            error_msg = f"Ошибка при вызове ИИ: {str(e)}"
-            logger.error(f"AI Analysis error: {e}", exc_info=True)
-            from backend.logger import log_debug_event
-            log_debug_event({
-                "stage": "full_analysis",
-                "final_decision": "error",
-                "validation_errors": str(e)
-            })
+            logger.error(f"Compact AI analysis error for tender {tender_id}: {e}", exc_info=True)
+            log_debug_event(
+                {
+                    "stage": "full_analysis",
+                    "job_id": job_id,
+                    "tender_id": tender_id,
+                    "final_decision": "error",
+                    "validation_errors": str(e),
+                }
+            )
             return {
                 "status": "error",
                 "final_report_markdown": f"# Ошибка анализа\n\nПроизошла ошибка при обработке тендера: {str(e)}",
-                "summary_notes": "Ошибка",
+                "summary_notes": "Ошибка анализа.",
                 "cleaned_context_len": cleaned_context_len,
-                "final_report_len": 0
+                "final_report_len": 0,
+                "structured_data": {},
+                "extracted_facts": [],
+                "merged_facts": {},
+                "error_message": str(e),
             }
 
     def _clean_text(self, text: str) -> str:
         if not text:
             return ""
-        text = re.sub(r'\s+', ' ', text)
-        text = re.sub(r'[^\x20-\x7E\u0400-\u04FF\n\t\.,!?;:()""\'\'\-\+=\[\]/\\<>@#\$%\^&\*«»№]', '', text)
+        text = re.sub(r"\s+", " ", text)
+        text = re.sub(r"[^\x20-\x7E\u0400-\u04FF\n\t\.,!?;:()\"\"''\-\+=\[\]/\\<>@#\$%\^&\*«»№]", "", text)
         return text.strip()
 
     def _extract_summary(self, markdown: str) -> str:
         if not markdown:
             return ""
-        summary_match = re.search(r'##\s*Краткое резюме.*?(\n##|$)', markdown, re.DOTALL | re.IGNORECASE)
-        if summary_match:
-            content = summary_match.group(0)
-            content = re.sub(r'##\s*Краткое резюме.*?\n', '', content, count=1, flags=re.IGNORECASE)
-            content = re.sub(r'\n##$', '', content).strip()
-            return content
-        return "Резюме не найдено в отчете."
+        match = re.search(r"##\s*Краткое резюме.*?(\n##|$)", markdown, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return "Резюме не найдено в отчете."
+        content = match.group(0)
+        content = re.sub(r"##\s*Краткое резюме.*?\n", "", content, count=1, flags=re.IGNORECASE)
+        content = re.sub(r"\n##$", "", content).strip()
+        return content or "Резюме не найдено в отчете."
+
+    def _topic_has_reliable_data(self, topic_data: Dict[str, Any]) -> bool:
+        if not topic_data:
+            return False
+
+        final_value = topic_data.get("final_value")
+
+        if final_value in (None, "not_found", "conflict", "", [], {}):
+            return False
+
+        if isinstance(final_value, list):
+            return len(final_value) > 0
+
+        if isinstance(final_value, dict):
+            return len(final_value) > 0
+
+        if isinstance(final_value, str):
+            return bool(final_value.strip())
+
+        return True
+
+    def _topic_is_hard_conflict(self, topic_data: Dict[str, Any]) -> bool:
+        if not topic_data:
+            return False
+        return bool(topic_data.get("conflict_flag")) and topic_data.get("merge_mode") == "select"
+
+    def _build_key_topic_summary(self, merged_facts: Dict[str, Any]) -> Dict[str, Any]:
+        key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
+        out = {}
+        for topic in key_topics:
+            topic_data = merged_facts.get(topic, {})
+            out[topic] = {
+                "has_data": self._topic_has_reliable_data(topic_data),
+                "hard_conflict": self._topic_is_hard_conflict(topic_data),
+                "merge_mode": topic_data.get("merge_mode"),
+            }
+        return out
+
+    def _calculate_final_status(self, merged_facts: Dict[str, Any], report_markdown: str) -> str:
+        key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
+
+        missing_count = 0
+        hard_conflict_count = 0
+
+        for topic in key_topics:
+            topic_data = merged_facts.get(topic, {})
+            if not self._topic_has_reliable_data(topic_data):
+                missing_count += 1
+            if self._topic_is_hard_conflict(topic_data):
+                hard_conflict_count += 1
+
+        report_len = len(report_markdown or "")
+
+        if report_len < 400:
+            return "error"
+
+        if missing_count >= 4:
+            return "error"
+
+        if missing_count >= 2 or hard_conflict_count >= 1:
+            return "partial"
+
+        return "success"
