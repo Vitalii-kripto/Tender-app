@@ -9,16 +9,13 @@ from .legal_prompts import PROMPT_UNIFIED_LEGAL_ANALYSIS, REQUIRED_REPORT_HEADER
 
 class LegalAnalysisService:
     """
-    Новый режим анализа:
-    - один основной юридический промт на весь пакет документов;
-    - никакого JSON-фактоизвлечения по темам;
-    - никакого merge_facts в основном контуре;
-    - цель: максимальная полнота извлечения по составу заявки, поставке, оплате, ответственности и ограничениям.
+    Unified prompt mode with mandatory customer + goods blocks
+    and markdown table normalization before export.
     """
 
     def __init__(self, ai_service: Optional[AiService] = None):
         self.ai_service = ai_service or AiService()
-        logger.info("LegalAnalysisService initialized (unified prompt mode).")
+        logger.info("LegalAnalysisService initialized (unified prompt mode, customer+goods required).")
 
     def analyze_tender(
         self,
@@ -63,13 +60,14 @@ class LegalAnalysisService:
                 "stage": "unified_prompt_analysis",
                 "job_id": job_id,
                 "tender_id": tender_id,
-                "model_name": "unified-legal-prompt-mode",
+                "model_name": "unified-legal-prompt-mode-v2",
                 "prompt_size": len(prompt),
                 "documents_count": context_meta["documents_count"],
                 "included_files": context_meta["included_files"],
                 "skipped_files": context_meta["skipped_files"],
                 "documents_block_size": len(documents_block),
                 "raw_model_response": raw_text,
+                "normalized_report_preview": final_report_markdown[:4000],
                 "final_status": final_status,
                 "validation": validation,
                 "duration": end_time - start_time,
@@ -213,21 +211,113 @@ class LegalAnalysisService:
         }
         return block, meta
 
+    def _insert_newlines_before_headings(self, text: str) -> str:
+        text = re.sub(r'(?<!\n)(##\s+\d)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(##\s+0\.)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(#\s+Юридическое заключение по тендеру)', r'\n\1', text)
+        return text
+
+    def _dedupe_main_heading(self, text: str) -> str:
+        heading = "# Юридическое заключение по тендеру"
+        occurrences = [m.start() for m in re.finditer(re.escape(heading), text)]
+        if len(occurrences) <= 1:
+            return text
+        first = occurrences[0]
+        tail = text[first:]
+        tail = re.sub(r'(?:\n|^)\# Юридическое заключение по тендеру(?:\n+)?', '\n', tail, count=0)
+        return heading + "\n\n" + tail.strip()
+
+    def _normalize_table_block(self, lines: List[str]) -> List[str]:
+        cleaned = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                continue
+            # normalize double pipes and spacing
+            line = re.sub(r'\|\|+', '|', line)
+            if not line.startswith("|"):
+                line = "| " + line.lstrip("| ").rstrip() + " |"
+            if not line.endswith("|"):
+                line = line.rstrip(" |") + " |"
+            parts = [p.strip() for p in line.strip("|").split("|")]
+            line = "| " + " | ".join(parts) + " |"
+            cleaned.append(line)
+
+        if not cleaned:
+            return []
+
+        # Ensure second line is separator
+        if len(cleaned) == 1:
+            col_count = len([p for p in cleaned[0].strip("|").split("|")])
+            sep = "| " + " | ".join(["---"] * col_count) + " |"
+            cleaned.append(sep)
+        else:
+            second = cleaned[1]
+            if not re.match(r'^\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|$', second):
+                col_count = len([p for p in cleaned[0].strip("|").split("|")])
+                sep = "| " + " | ".join(["---"] * col_count) + " |"
+                cleaned.insert(1, sep)
+
+        return cleaned
+
+    def _normalize_markdown_tables(self, text: str) -> str:
+        raw_lines = text.split("\n")
+        out_lines: List[str] = []
+        table_buf: List[str] = []
+
+        def flush_table():
+            nonlocal table_buf, out_lines
+            if table_buf:
+                out_lines.extend(self._normalize_table_block(table_buf))
+                table_buf = []
+
+        for raw in raw_lines:
+            line = raw.rstrip()
+
+            if " | " in line or line.strip().startswith("|") or ("|" in line and line.count("|") >= 2):
+                # split heading glued to table header
+                if line.strip().startswith("## ") and "|" in line:
+                    heading_part, table_part = line.split("|", 1)
+                    flush_table()
+                    out_lines.append(heading_part.strip())
+                    table_buf.append("|" + table_part)
+                else:
+                    table_buf.append(line)
+                continue
+
+            flush_table()
+            out_lines.append(line)
+
+        flush_table()
+        return "\n".join(out_lines)
+
     def _normalize_report(self, report_text: str) -> str:
         text = (report_text or "").strip()
         if not text:
             return "# Юридическое заключение по тендеру\n\nОтчет не сформирован."
-        if not text.startswith("# Юридическое заключение по тендеру"):
-            text = "# Юридическое заключение по тендеру\n\n" + text
+
+        text = text.replace("\r\n", "\n")
+        text = self._insert_newlines_before_headings(text)
+        text = self._dedupe_main_heading(text)
+
+        if not text.lstrip().startswith("# Юридическое заключение по тендеру"):
+            text = "# Юридическое заключение по тендеру\n\n" + text.strip()
+
+        text = self._normalize_markdown_tables(text)
+        text = re.sub(r'\n{3,}', '\n\n', text).strip()
         return text
 
     def _extract_summary(self, markdown: str) -> str:
         if not markdown:
             return ""
-        match = re.search(r"##\s*1\..*?(?=\n##\s*2\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
-        if match:
-            return match.group(0)[:1000]
-        return "Краткое резюме не выделено отдельно."
+        match = re.search(r"##\s*1\.\s*Краткое резюме(.*?)(?=\n##\s*2\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return ""
+        content = match.group(1).strip()
+        content = re.sub(r"\|.*", "", content).strip()
+        return content[:1200]
 
     def _validate_report(self, report_markdown: str) -> Dict[str, Any]:
         missing_headers = [header for header in REQUIRED_REPORT_HEADERS if header not in report_markdown]
@@ -235,14 +325,19 @@ class LegalAnalysisService:
         has_tables = "|" in report_markdown and "---" in report_markdown
         report_len = len(report_markdown)
 
+        lower_text = report_markdown.lower()
+
         critical_markers = {
-            "has_bid_docs_section": "## 7. Полный перечень документов, которые должны входить в состав заявки" in report_markdown,
-            "has_delivery_docs_section": "## 8. Отдельный перечень документов, предоставляемых при поставке" in report_markdown,
-            "has_payment_section": "## 5. Условия оплаты" in report_markdown,
-            "has_delivery_acceptance_section": "## 4. Условия поставки и приёмки" in report_markdown,
-            "has_liability_section": "## 6. Ответственность сторон" in report_markdown,
-            "mentions_unloading": ("разгруз" in report_markdown.lower()),
-            "mentions_application_docs": ("заявк" in report_markdown.lower()),
+            "has_customer_card": "## 0. Карточка закупки" in report_markdown,
+            "has_goods_table": "## 0.1. Сводная таблица товаров / предмета поставки" in report_markdown,
+            "mentions_customer": ("заказчик" in lower_text),
+            "mentions_goods": ("наименование товара" in lower_text or "предмет закупки" in lower_text or "товар" in lower_text),
+            "has_bid_docs_section": "## 8. Полный перечень документов, которые должны входить в состав заявки" in report_markdown,
+            "has_delivery_docs_section": "## 9. Отдельный перечень документов, предоставляемых при поставке" in report_markdown,
+            "has_payment_section": "## 6. Условия оплаты" in report_markdown,
+            "has_delivery_acceptance_section": "## 5. Условия поставки и приёмки" in report_markdown,
+            "has_liability_section": "## 7. Ответственность сторон" in report_markdown,
+            "mentions_unloading": ("разгруз" in lower_text),
         }
 
         return {
@@ -254,19 +349,19 @@ class LegalAnalysisService:
         }
 
     def _calculate_status(self, validation: Dict[str, Any], report_markdown: str) -> str:
-        if validation["report_length"] < 2500:
+        if validation["report_length"] < 3500:
             return "error"
 
         if not validation["has_tables"]:
             return "partial"
 
-        if validation["missing_headers_count"] >= 3:
+        if validation["missing_headers_count"] >= 2:
             return "partial"
 
         critical = validation["critical_markers"]
         critical_false_count = sum(1 for _, value in critical.items() if not value)
 
-        if critical_false_count >= 2:
+        if critical_false_count >= 1:
             return "partial"
 
         return "success"

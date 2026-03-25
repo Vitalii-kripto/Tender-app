@@ -141,6 +141,11 @@ def analyze_tenders_batch_job(
             
             final_markdown = analysis_result.get('final_report_markdown', '')
             summary_notes = analysis_result.get('summary_notes', '')
+            
+            # Если summary пустое, не дублировать основной отчет в шапке docx
+            if summary_notes and len(summary_notes.strip()) > 1200:
+                summary_notes = summary_notes[:1200].strip()
+
             cleaned_context_len = analysis_result.get('cleaned_context_len', 0)
             final_report_len = analysis_result.get('final_report_len', 0)
             structured_data = analysis_result.get('structured_data', {})
