@@ -167,7 +167,7 @@ const Analysis = () => {
                 setLoading(false);
                 setStatusText("");
             }
-        }, 1500);
+        }, 3000);
         
     } catch (e) {
         console.error("Batch analysis failed", e);

@@ -7,6 +7,7 @@ from fastapi import UploadFile
 import aiofiles
 import platform
 import logging
+from typing import Any, Dict, List, Optional
 
 from backend.logger import logger
 
@@ -22,6 +23,7 @@ class DocumentService:
 
     def __init__(self):
         os.makedirs(self.UPLOAD_DIR, exist_ok=True)
+        self.text_cache = {} # {(file_path, mtime): result_dict}
         try:
             # Инициализация PaddleOCR (модели скачиваются при первом запуске)
             self.ocr_engine = PaddleOCR(use_angle_cls=True, lang='ru')
@@ -90,10 +92,20 @@ class DocumentService:
 
         return doc_path
 
-    def extract_document_data(self, file_path: str) -> Dict[str, Any]:
+    def extract_document_data(self, file_path: str, use_cache: bool = True) -> Dict[str, Any]:
         """
         Извлечение структурированных данных из документа (страницы, листы, статус).
         """
+        if not os.path.exists(file_path):
+            return {"filename": os.path.basename(file_path), "text": "", "status": "error", "error_message": "Файл не найден"}
+            
+        mtime = os.path.getmtime(file_path)
+        cache_key = (file_path, mtime)
+        
+        if use_cache and cache_key in self.text_cache:
+            logger.info(f"Returning cached text for {file_path}")
+            return self.text_cache[cache_key]
+
         ext = os.path.splitext(file_path)[1].lower()
         filename = os.path.basename(file_path)
         logger.info(f"--- [START STRUCTURED EXTRACTION] ---")
@@ -160,7 +172,7 @@ class DocumentService:
                     if sheet_data:
                         sheet_text = f"=== ЛИСТ: {sheet.title} ===\n" + "\n".join(sheet_data)
                         sheets_text.append(sheet_text)
-                        result["pages"].append({"page_num": sheet.title, "text": sheet_text, "is_sheet": True})
+                        result["pages"].append({"page_num": sheet.title, "text": sheet_text, "is_sheet": True, "tables": ["\n".join(sheet_data)]})
                 result["text"] = "\n\n".join(sheets_text)
             
             elif ext == '.xls':
@@ -177,7 +189,7 @@ class DocumentService:
                     if sheet_data:
                         sheet_text = f"=== ЛИСТ: {sheet.name} ===\n" + "\n".join(sheet_data)
                         sheets_text.append(sheet_text)
-                        result["pages"].append({"page_num": sheet.name, "text": sheet_text, "is_sheet": True})
+                        result["pages"].append({"page_num": sheet.name, "text": sheet_text, "is_sheet": True, "tables": ["\n".join(sheet_data)]})
                 result["text"] = "\n\n".join(sheets_text)
             
             elif ext == '.pdf':
@@ -198,14 +210,20 @@ class DocumentService:
                 if not is_quality_good:
                     logger.info(f"PDF text quality is POOR. Triggering OCR fallback...")
                     try:
-                        ocr_result = self._perform_ocr(file_path)
-                        result["text"] = ocr_result
-                        result["pages"] = [{"page_num": 1, "text": ocr_result}]
+                        ocr_pages = self._perform_ocr(file_path)
+                        result["pages"] = ocr_pages
+                        result["text"] = "\n\n".join([f"--- Page {p['page_num']} ---\n{p['text']}" for p in ocr_pages])
+                        if not result["text"].strip() or "[OCR WARNING]" in result["text"]:
+                            result["status"] = "ocr_failed"
+                            result["error_message"] = "OCR отработал, но текст не найден или найден только мусор"
+                            result["text"] = full_text # fallback to native text
+                            result["pages"] = [{"page_num": i + 1, "text": p} for i, p in enumerate(text_pages)]
                     except Exception as e:
                         logger.error(f"OCR failed: {e}")
                         result["status"] = "ocr_failed"
                         result["error_message"] = f"OCR failed: {str(e)}"
                         result["text"] = full_text
+                        result["pages"] = [{"page_num": i + 1, "text": p} for i, p in enumerate(text_pages)]
                 else:
                     result["text"] = full_text
 
@@ -222,6 +240,9 @@ class DocumentService:
             result["status"] = "error"
             result["error_message"] = str(e)
 
+        if result.get("status") == "ok":
+            self.text_cache[cache_key] = result
+            
         return result
 
     def extract_text(self, file_path: str) -> str:
@@ -288,7 +309,7 @@ class DocumentService:
 
         return True
 
-    def _perform_ocr(self, file_path: str) -> str:
+    def _perform_ocr(self, file_path: str) -> List[Dict[str, Any]]:
         """Вспомогательный метод для OCR распознавания через pypdfium2 и PaddleOCR"""
         import time
         start_time = time.time()
@@ -300,7 +321,7 @@ class DocumentService:
         # Ограничиваем количество страниц для OCR (первые 20 для баланса скорости и качества)
         pages_to_process = min(num_pages, 20)
         
-        ocr_text_pages = []
+        ocr_pages = []
         
         for i in range(pages_to_process):
             logger.info(f"Processing page {i+1}/{pages_to_process}...")
@@ -315,7 +336,11 @@ class DocumentService:
             img_array = np.array(pil_image)
             
             # Выполняем OCR
-            result = self.ocr_engine.ocr(img_array, cls=True)
+            try:
+                result = self.ocr_engine.ocr(img_array, cls=True)
+            except Exception as e:
+                logger.warning(f"OCR with cls=True failed ({e}), retrying without cls...")
+                result = self.ocr_engine.ocr(img_array)
             
             page_text = []
             if result and result[0]:
@@ -324,19 +349,20 @@ class DocumentService:
                     text_line = line[1][0]
                     page_text.append(text_line)
             
-            ocr_text_pages.append(f"--- Page {i+1} ---\n" + "\n".join(page_text))
+            page_content = "\n".join(page_text)
+            ocr_pages.append({"page_num": i + 1, "text": page_content})
         
         pdf.close()
         
         end_time = time.time()
         
-        if ocr_text_pages:
-            full_ocr_text = "\n\n".join(ocr_text_pages)
+        full_ocr_text = "\n\n".join([p["text"] for p in ocr_pages])
+        if full_ocr_text.strip():
             logger.info(f"OCR successful. Extracted {len(full_ocr_text)} characters from {pages_to_process} pages in {end_time - start_time:.2f}s.")
-            return full_ocr_text
+            return ocr_pages
         else:
             logger.warning(f"OCR ran but found no text in {end_time - start_time:.2f}s.")
-            return "[OCR WARNING] OCR отработал, но текст не найден."
+            return [{"page_num": 1, "text": "[OCR WARNING] OCR отработал, но текст не найден."}]
 
     def _extract_text_from_doc(self, file_path: str) -> str:
         """

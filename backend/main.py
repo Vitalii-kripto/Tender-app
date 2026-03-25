@@ -184,6 +184,27 @@ except Exception as e:
 
 logger.info("Service initialization phase completed.")
 
+# --- DEGRADED MODE CHECKS ---
+def check_eis_service():
+    if not eis_service:
+        raise HTTPException(status_code=503, detail="EIS Service is not initialized.")
+
+def check_parser_service():
+    if not parser_service:
+        raise HTTPException(status_code=503, detail="Parser Service is not initialized.")
+
+def check_doc_service():
+    if not doc_service:
+        raise HTTPException(status_code=503, detail="Document Service is not initialized.")
+
+def check_ai_service():
+    if not ai_service or not ai_service.client:
+        raise HTTPException(status_code=503, detail="AI Service is not initialized or unavailable.")
+
+def check_legal_service():
+    if not legal_analysis_service:
+        raise HTTPException(status_code=503, detail="Legal Analysis Service is not initialized.")
+
 # --- ENDPOINTS ---
 
 @app.get("/")
@@ -289,7 +310,8 @@ def search_tenders_endpoint(
     fz44: bool = True, 
     fz223: bool = True, 
     only_application_stage: bool = True, 
-    publish_days_back: int = 30
+    publish_days_back: int = 30,
+    _ = Depends(check_eis_service)
 ):
     """Поиск через Playwright"""
     logger.info(f"Search request received: {query}")
@@ -441,7 +463,7 @@ def get_products_endpoint(db: Session = Depends(get_db)):
     return result
 
 @app.get("/api/parse-catalog")
-async def parse_catalog_endpoint(db: Session = Depends(get_db)):
+async def parse_catalog_endpoint(db: Session = Depends(get_db), _ = Depends(check_parser_service)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
     logger.info("Starting catalog parser manually.")
     
@@ -469,7 +491,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db)):
 # --- AI & DOCS ENDPOINTS ---
 
 @app.get("/api/tenders/{tender_id}/files")
-def get_tender_files(tender_id: str):
+def get_tender_files(tender_id: str, _ = Depends(check_doc_service)):
     """Получить список скачанных файлов для тендера"""
     logger.info(f"Fetching files for tender {tender_id}")
     tender_dir = os.path.join(DOCUMENTS_ROOT, tender_id)
@@ -488,13 +510,9 @@ def get_tender_files(tender_id: str):
     return files
 
 @app.post("/api/ai/analyze-tenders-batch")
-async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...)):
+async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...), _ = Depends(check_legal_service)):
     logger.info("Batch AI Analysis request received.")
     
-    if doc_service is None or legal_analysis_service is None:
-        logger.error("Attempted to run batch analysis, but required services are not initialized.")
-        raise HTTPException(status_code=503, detail="Required AI or Document services are not initialized. Please check backend logs.")
-        
     tender_ids = data.get('tender_ids', [])
     selected_files = data.get('selected_files', {}) # {tender_id: [filenames]}
     
@@ -514,21 +532,21 @@ async def get_job_status(job_id: str):
     return job
 
 @app.post("/api/ai/extract-details")
-async def api_extract_details(data: dict = Body(...)):
+async def api_extract_details(data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение данных о тендере из текста"""
     logger.info("AI Extract Details request.")
     text = data.get('text', '')
     return ai_service.extract_tender_details(text)
 
 @app.post("/api/ai/extract-products")
-async def api_extract_products(data: dict = Body(...)):
+async def api_extract_products(data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение списка товаров из сметы/КП"""
     logger.info("AI Extract Products request.")
     text = data.get('text', '')
     return ai_service.extract_products_from_text(text)
 
 @app.post("/api/ai/enrich-specs")
-async def api_enrich_specs(data: dict = Body(...)):
+async def api_enrich_specs(data: dict = Body(...), _ = Depends(check_ai_service)):
     """Поиск характеристик товара в интернете"""
     logger.info("AI Enrich Specs request.")
     product_name = data.get('product_name', '')
@@ -536,7 +554,7 @@ async def api_enrich_specs(data: dict = Body(...)):
     return {"specs": result}
 
 @app.post("/api/ai/match-product")
-async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db)):
+async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db), _ = Depends(check_ai_service)):
     specs = data.get('specs', '')
     mode = data.get('mode', 'database') # 'database' or 'internet'
     logger.info(f"AI Match Product request. Mode: {mode}, Query len: {len(specs)}")
@@ -553,7 +571,7 @@ async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db
         return {"mode": "database", "matches": matches}
 
 @app.post("/api/ai/validate-compliance")
-async def api_validate_compliance(data: dict = Body(...)):
+async def api_validate_compliance(data: dict = Body(...), _ = Depends(check_ai_service)):
     """Валидация ТЗ vs Материал (Complex)"""
     logger.info("AI Compliance Validation request.")
     requirements = data.get('requirements', '')
@@ -561,19 +579,15 @@ async def api_validate_compliance(data: dict = Body(...)):
     return ai_service.compare_requirements_vs_proposal(requirements, proposal)
 
 @app.post("/api/ai/check-compliance")
-async def api_check_compliance(data: dict = Body(...)):
+async def api_check_compliance(data: dict = Body(...), _ = Depends(check_ai_service)):
     """Проверка пакета документов"""
     logger.info("AI Document Package Check request.")
     return ai_service.check_compliance(data['title'], data['description'], data['filenames'])
 
 @app.post("/api/tenders/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), _ = Depends(check_doc_service)):
     logger.info(f"File upload request: {file.filename}")
     
-    if doc_service is None:
-        logger.error("Attempted to upload file, but DocumentService is not initialized.")
-        raise HTTPException(status_code=503, detail="Document service is not initialized. Please check backend logs.")
-        
     try:
         file_path = await doc_service.save_file(file)
         # Запускаем OCR или извлечение текста

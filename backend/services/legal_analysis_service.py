@@ -31,12 +31,13 @@ class LegalAnalysisService:
         self, 
         files_data: List[Dict[str, str]], 
         tender_id: str = "N/A",
+        job_id: str = "N/A",
         callback: Optional[Callable[[str, int, str], None]] = None
     ) -> Dict[str, Any]:
         """
         Выполняет полный анализ тендера по всем документам (2 этапа).
         """
-        logger.info(f"Starting full AI analysis for tender {tender_id}")
+        logger.info(f"Starting full AI analysis for tender {tender_id} (Job: {job_id})")
         
         if callback:
             callback("Подготовка контекста", 20, "running")
@@ -53,18 +54,7 @@ class LegalAnalysisService:
         logger.info(f"Cleaned context length: {cleaned_context_len} chars")
 
         if callback:
-            callback("Структурированное извлечение данных", 30, "running")
-
-        # 1.5 Серверное структурированное извлечение данных (ДО вызова основного ИИ)
-        structured_data = self.ai_service.extract_structured_tender_data(full_context)
-        
-        # 1.6 Серверная проверка на эквиваленты/аналоги
-        structured_data["equivalents"] = self._check_equivalents_in_text(full_context, structured_data)
-        
-        logger.info(f"Structured data extracted: {len(str(structured_data))} chars")
-
-        if callback:
-            callback("Извлечение фактов по темам", 50, "running")
+            callback("Извлечение фактов по темам", 40, "running")
 
         try:
             start_time = time.time()
@@ -76,10 +66,8 @@ class LegalAnalysisService:
             deterministic_end_time = time.time()
             
             logger.info("Extracting thematic facts via AI...")
-            # We can either use the fact_service's AI extraction or the one in this class.
-            # The user requested to use FactExtractionService.
             ai_extraction_start_time = time.time()
-            all_facts = self.fact_service.extract_thematic_facts_ai(files_data, deterministic_facts)
+            all_facts = self.fact_service.extract_thematic_facts_ai(files_data, deterministic_facts, tender_id=tender_id, job_id=job_id)
             ai_extraction_end_time = time.time()
             
             facts_data = [fact.to_dict() for fact in all_facts]
@@ -87,7 +75,7 @@ class LegalAnalysisService:
             # ЭТАП 2: Сверка и объединение фактов
             logger.info("Merging and reconciling facts...")
             merge_start_time = time.time()
-            merged_facts = self.fact_service.merge_facts(all_facts)
+            merged_facts = self.fact_service.merge_facts(all_facts, tender_id=tender_id)
             merge_end_time = time.time()
             merged_facts_json_str = json.dumps(merged_facts, ensure_ascii=False, indent=2)
             
@@ -118,22 +106,49 @@ class LegalAnalysisService:
             final_report_len = len(final_report_markdown)
             logger.info(f"AI Analysis finished in {end_time - start_time:.2f}s. Final length: {final_report_len} chars")
             
-            logger.info(f"--- [TIMING LOGS] ---")
-            logger.info(f"- Deterministic extraction time: {deterministic_end_time - deterministic_start_time:.2f}s")
-            logger.info(f"- AI extraction time: {ai_extraction_end_time - ai_extraction_start_time:.2f}s")
-            logger.info(f"- Merge time: {merge_end_time - merge_start_time:.2f}s")
-            logger.info(f"- Report generation time: {report_end_time - report_start_time:.2f}s")
-            logger.info(f"---------------------")
+            # Извлечение Summary
+            summary = self._extract_summary(final_report_markdown)
+
+            # Определение статуса на основе ключевых фактов
+            key_topics = ["subject", "items_quantities", "nmcc_prices", "delivery_terms", "payment"]
+            missing_or_conflict_count = 0
+            for topic in key_topics:
+                fact_info = merged_facts.get(topic, {})
+                if fact_info.get("final_value") == "not_found" or fact_info.get("conflict_flag") is True:
+                    missing_or_conflict_count += 1
+            
+            final_status = "success"
+            if missing_or_conflict_count == len(key_topics):
+                final_status = "error"
+            elif missing_or_conflict_count >= 2:
+                final_status = "partial"
+                
+            if final_report_len < 200:
+                final_status = "error"
 
             # Логирование в debug-лог
             from backend.logger import log_debug_event
             log_debug_event({
+                "stage": "report_generation",
+                "job_id": job_id,
+                "tender_id": tender_id,
+                "report_generation_prompt_size": len(report_prompt),
+                "raw_report_response": response_text,
+                "final_status": final_status,
+                "validation_result": {
+                    "missing_or_conflict_count": missing_or_conflict_count,
+                    "report_length": final_report_len
+                }
+            })
+
+            log_debug_event({
                 "stage": "full_analysis",
+                "job_id": job_id,
+                "tender_id": tender_id,
                 "model_name": "gemini-3.1-pro-preview",
                 "extracted_facts": facts_data,
                 "merged_facts": merged_facts,
-                "raw_model_response": response_text,
-                "final_decision": "success",
+                "final_decision": final_status,
                 "duration": end_time - start_time,
                 "timing": {
                     "deterministic_extraction": deterministic_end_time - deterministic_start_time,
@@ -143,19 +158,12 @@ class LegalAnalysisService:
                 }
             })
 
-            if callback:
-                callback("Обработка результата", 95, "running")
-
-            # Извлечение Summary
-            summary = self._extract_summary(final_report_markdown)
-
             return {
-                "status": "success",
+                "status": final_status,
                 "final_report_markdown": final_report_markdown,
                 "summary_notes": summary,
                 "cleaned_context_len": cleaned_context_len,
                 "final_report_len": final_report_len,
-                "structured_data": structured_data,
                 "extracted_facts": facts_data,
                 "merged_facts": merged_facts
             }
@@ -171,12 +179,10 @@ class LegalAnalysisService:
             })
             return {
                 "status": "error",
-                "final_report_markdown": "",
-                "error_message": error_msg,
-                "summary_notes": "Ошибка анализа.",
+                "final_report_markdown": f"# Ошибка анализа\n\nПроизошла ошибка при обработке тендера: {str(e)}",
+                "summary_notes": "Ошибка",
                 "cleaned_context_len": cleaned_context_len,
-                "final_report_len": 0,
-                "structured_data": {}
+                "final_report_len": 0
             }
 
     def _clean_text(self, text: str) -> str:
@@ -196,32 +202,3 @@ class LegalAnalysisService:
             content = re.sub(r'\n##$', '', content).strip()
             return content
         return "Резюме не найдено в отчете."
-
-    def _check_equivalents_in_text(self, text: str, structured_data: dict) -> dict:
-        """
-        Серверная проверка на наличие слов 'эквивалент' или 'аналог' в тексте.
-        """
-        text_lower = text.lower()
-        has_equivalent = "эквивалент" in text_lower or "аналог" in text_lower
-        
-        # Проверяем запреты
-        forbidden_phrases = [
-            "эквивалент не допускается", "без эквивалента", "аналоги не допускаются",
-            "поставка эквивалента не предусмотрена", "эквивалент не предусмотрен",
-            "не допускается поставка эквивалента", "не подлежит замене на эквивалент",
-            "поставка аналогов не допускается", "без аналогов", "строго в соответствии"
-        ]
-        
-        is_forbidden = any(phrase in text_lower for phrase in forbidden_phrases)
-        
-        status = "Неизвестно"
-        if is_forbidden:
-            status = "Запрещены"
-        elif has_equivalent:
-            status = "Разрешены"
-            
-        return {
-            "status": status,
-            "has_equivalent_word": has_equivalent,
-            "has_forbidden_phrase": is_forbidden
-        }

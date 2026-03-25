@@ -476,7 +476,7 @@ export const analyzeTendersBatch = async (tenderIds: string[], selectedFiles?: R
                     clearInterval(interval);
                     reject(e);
                 }
-            }, 1000);
+            }, 3000);
         });
     } catch (e) {
         console.error("Error analyzing tenders batch:", e);

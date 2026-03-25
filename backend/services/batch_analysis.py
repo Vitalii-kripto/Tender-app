@@ -134,6 +134,7 @@ def analyze_tenders_batch_job(
             analysis_result = legal_service.analyze_tender(
                 files_data, 
                 tender_id=tid, 
+                job_id=job_id,
                 callback=stage_callback
             )
             analysis_end_time = time.time()
