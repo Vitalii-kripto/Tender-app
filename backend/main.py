@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from dotenv import load_dotenv
 import os
 
+from backend.dependencies import verify_api_key
 from backend.rate_limiter import check_rate_limit
 
 if sys.platform == 'win32':
@@ -226,22 +227,18 @@ def check_legal_service():
 
 @app.get("/")
 def read_root():
-    logger.info("Root endpoint hit.")
+    logger.info("Health check endpoint hit.")
     return {"status": "online", "system": "TenderSmart PRO Backend"}
-
-@app.get("/health")
-def health_check():
-    return {"status": "ok"}
 
 # --- CRM ENDPOINTS (Database Sync) ---
 
-@app.get("/api/crm/tenders")
+@app.get("/api/crm/tenders", dependencies=[Depends(verify_api_key)])
 def get_crm_tenders(db: Session = Depends(get_db)):
     """Получить все тендеры из базы"""
     logger.info("Fetching all CRM tenders.")
     return db.query(TenderModel).all()
 
-@app.post("/api/crm/tenders")
+@app.post("/api/crm/tenders", dependencies=[Depends(verify_api_key)])
 def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...), db: Session = Depends(get_db)):
     """Добавить или обновить тендер в CRM"""
     logger.info(f"Add/Update tender request: {tender.get('id')}")
@@ -306,7 +303,7 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
         logger.error(f"Error saving tender: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/api/crm/tenders/{tender_id}")
+@app.delete("/api/crm/tenders/{tender_id}", dependencies=[Depends(verify_api_key)])
 def delete_tender(tender_id: str, db: Session = Depends(get_db)):
     """Удалить тендер из базы"""
     logger.info(f"Deleting tender: {tender_id}")
@@ -318,14 +315,14 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 
 # --- SEARCH & PARSING ---
 
-@app.post("/api/search-tenders/cancel")
+@app.post("/api/search-tenders/cancel", dependencies=[Depends(verify_api_key)])
 def cancel_search():
     """Отменить текущий поиск"""
     logger.info("Cancel search request received")
     eis_service.cancel_search()
     return {"status": "cancelled"}
 
-@app.get("/api/search-tenders")
+@app.get("/api/search-tenders", dependencies=[Depends(verify_api_key)])
 def search_tenders_endpoint(
     query: str, 
     fz44: bool = True, 
@@ -387,7 +384,7 @@ def search_tenders_endpoint(
         })
     return result
 
-@app.post("/api/search-tenders/process")
+@app.post("/api/search-tenders/process", dependencies=[Depends(verify_api_key)])
 def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
     """Обработать выбранные тендеры"""
     logger.info(f"Processing {len(tenders)} selected tenders")
@@ -453,7 +450,7 @@ def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...)
         logger.error(f"Error processing tenders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/search-tenders/skip")
+@app.post("/api/search-tenders/skip", dependencies=[Depends(verify_api_key)])
 def skip_tender(tender: dict = Body(...)):
     """Пропустить тендер (отметить как просмотренный)"""
     logger.info(f"Skipping tender: {tender.get('id')}")
@@ -464,7 +461,7 @@ def skip_tender(tender: dict = Body(...)):
         logger.error(f"Error skipping tender: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/products")
+@app.get("/api/products", dependencies=[Depends(verify_api_key)])
 def get_products_endpoint(db: Session = Depends(get_db)):
     """Получение сохраненных товаров из БД без запуска парсера"""
     logger.info("Fetching products from DB.")
@@ -483,7 +480,7 @@ def get_products_endpoint(db: Session = Depends(get_db)):
         })
     return result
 
-@app.get("/api/parse-catalog")
+@app.get("/api/parse-catalog", dependencies=[Depends(verify_api_key)])
 async def parse_catalog_endpoint(db: Session = Depends(get_db), _ = Depends(check_parser_service)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
     logger.info("Starting catalog parser manually.")
@@ -511,7 +508,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db), _ = Depends(chec
 
 # --- AI & DOCS ENDPOINTS ---
 
-@app.get("/api/tenders/{tender_id}/files")
+@app.get("/api/tenders/{tender_id}/files", dependencies=[Depends(verify_api_key)])
 def get_tender_files(tender_id: str, _ = Depends(check_doc_service)):
     """Получить список скачанных файлов для тендера"""
     logger.info(f"Fetching files for tender {tender_id}")
@@ -530,7 +527,7 @@ def get_tender_files(tender_id: str, _ = Depends(check_doc_service)):
             })
     return files
 
-@app.post("/api/ai/analyze-tenders-batch")
+@app.post("/api/ai/analyze-tenders-batch", dependencies=[Depends(verify_api_key)])
 async def api_analyze_tenders_batch(request: Request, background_tasks: BackgroundTasks, data: dict = Body(...), _ = Depends(check_legal_service)):
     check_rate_limit(request)
     logger.info("Batch AI Analysis request received.")
@@ -553,7 +550,7 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-@app.post("/api/ai/extract-details")
+@app.post("/api/ai/extract-details", dependencies=[Depends(verify_api_key)])
 async def api_extract_details(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение данных о тендере из текста"""
     check_rate_limit(request)
@@ -561,7 +558,7 @@ async def api_extract_details(request: Request, data: dict = Body(...), _ = Depe
     text = data.get('text', '')
     return ai_service.extract_tender_details(text)
 
-@app.post("/api/ai/extract-products")
+@app.post("/api/ai/extract-products", dependencies=[Depends(verify_api_key)])
 async def api_extract_products(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение списка товаров из сметы/КП"""
     check_rate_limit(request)
@@ -569,7 +566,7 @@ async def api_extract_products(request: Request, data: dict = Body(...), _ = Dep
     text = data.get('text', '')
     return ai_service.extract_products_from_text(text)
 
-@app.post("/api/ai/enrich-specs")
+@app.post("/api/ai/enrich-specs", dependencies=[Depends(verify_api_key)])
 async def api_enrich_specs(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Поиск характеристик товара в интернете"""
     check_rate_limit(request)
@@ -578,7 +575,7 @@ async def api_enrich_specs(request: Request, data: dict = Body(...), _ = Depends
     result = ai_service.enrich_product_specs(product_name)
     return {"specs": result}
 
-@app.post("/api/ai/match-product")
+@app.post("/api/ai/match-product", dependencies=[Depends(verify_api_key)])
 async def api_match_product(request: Request, data: dict = Body(...), db: Session = Depends(get_db), _ = Depends(check_ai_service)):
     check_rate_limit(request)
     specs = data.get('specs', '')
@@ -596,7 +593,7 @@ async def api_match_product(request: Request, data: dict = Body(...), db: Sessio
         matches = ai_service.find_product_equivalent(specs, catalog)
         return {"mode": "database", "matches": matches}
 
-@app.post("/api/ai/validate-compliance")
+@app.post("/api/ai/validate-compliance", dependencies=[Depends(verify_api_key)])
 async def api_validate_compliance(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Валидация ТЗ vs Материал (Complex)"""
     check_rate_limit(request)
@@ -605,14 +602,14 @@ async def api_validate_compliance(request: Request, data: dict = Body(...), _ = 
     proposal = data.get('proposal', '[]')
     return ai_service.compare_requirements_vs_proposal(requirements, proposal)
 
-@app.post("/api/ai/check-compliance")
+@app.post("/api/ai/check-compliance", dependencies=[Depends(verify_api_key)])
 async def api_check_compliance(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Проверка пакета документов"""
     check_rate_limit(request)
     logger.info("AI Document Package Check request.")
     return ai_service.check_compliance(data['title'], data['description'], data['filenames'])
 
-@app.post("/api/tenders/upload")
+@app.post("/api/tenders/upload", dependencies=[Depends(verify_api_key)])
 async def upload_file(file: UploadFile = File(...), _ = Depends(check_doc_service)):
     logger.info(f"File upload request: {file.filename}")
     
@@ -640,10 +637,11 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
         "is_demo": False
     }
 
+from backend.markdown_parser import add_markdown_to_docx
 import zipfile
 import io
 
-@app.post("/api/ai/export-risks-word")
+@app.post("/api/ai/export-risks-word", dependencies=[Depends(verify_api_key)])
 async def api_export_risks_word(data: dict = Body(...)):
     """Экспорт результатов анализа рисков в Word .docx (или ZIP для нескольких)"""
     logger.info("Word export started")
@@ -651,68 +649,43 @@ async def api_export_risks_word(data: dict = Body(...)):
     if not results:
         raise HTTPException(status_code=400, detail="No results to export")
 
-    def build_tender_doc(tender):
-        tid = str(tender.get('id', 'N/A'))
-        desc = tender.get('description', 'Нет описания')
-        summary_notes = tender.get('summary_notes') or ""
-        file_statuses = tender.get('file_statuses', [])
-        rows = tender.get('rows', [])
-        
-        doc = Document()
-        style = doc.styles['Normal']
-        font = style.font
-        font.name = 'Arial'
-        font.size = Pt(11)
-        
-        doc.add_heading('Юридическое заключение по тендеру', 0)
-        doc.add_heading(f'Тендер: {tid}', level=1)
-        
-        p = doc.add_paragraph()
-        p.add_run('Описание: ').bold = True
-        p.add_run(desc)
-        
-        if summary_notes:
-            doc.add_heading('Краткое резюме:', level=2)
-            doc.add_paragraph(summary_notes)
-        
-        if file_statuses:
-            doc.add_heading('Обработанные документы:', level=2)
-            for fs in file_statuses:
-                status_text = "Успешно" if fs.get('status') == 'ok' else "Ошибка"
-                doc.add_paragraph(f"{fs.get('filename')} - {status_text}", style='List Bullet')
-        
-        doc.add_heading('Детальный анализ (Риски и требования):', level=2)
-        if not rows:
-            doc.add_paragraph("Данные анализа отсутствуют.")
-        else:
-            table = doc.add_table(rows=1, cols=4)
-            table.style = 'Table Grid'
-            hdr_cells = table.rows[0].cells
-            hdr_cells[0].text = 'Категория'
-            hdr_cells[1].text = 'Уровень риска'
-            hdr_cells[2].text = 'Описание (Факт)'
-            hdr_cells[3].text = 'Рекомендация'
-            
-            for cell in hdr_cells:
-                for paragraph in cell.paragraphs:
-                    for run in paragraph.runs:
-                        run.bold = True
-            
-            for row in rows:
-                row_cells = table.add_row().cells
-                row_cells[0].text = row.get('category', '')
-                row_cells[1].text = row.get('risk_level', '')
-                row_cells[2].text = row.get('finding', '')
-                row_cells[3].text = row.get('recommendation', '')
-                
-        return doc
-
     try:
         if len(results) == 1:
             # Single file export
             tender = results[0]
             tid = str(tender.get('id', 'N/A'))
-            doc = build_tender_doc(tender)
+            desc = tender.get('description', 'Нет описания')
+            final_report_markdown = tender.get('final_report_markdown') or ""
+            summary_notes = tender.get('summary_notes') or ""
+            file_statuses = tender.get('file_statuses', [])
+            
+            doc = Document()
+            style = doc.styles['Normal']
+            font = style.font
+            font.name = 'Arial'
+            font.size = Pt(11)
+            
+            doc.add_heading('Юридическое заключение по тендеру', 0)
+            doc.add_heading(f'Тендер: {tid}', level=1)
+            
+            p = doc.add_paragraph()
+            p.add_run('Описание: ').bold = True
+            p.add_run(desc)
+            
+            if summary_notes:
+                doc.add_heading('Краткое резюме:', level=2)
+                doc.add_paragraph(summary_notes)
+            
+            if file_statuses:
+                doc.add_heading('Обработанные документы:', level=2)
+                for fs in file_statuses:
+                    status_text = "Успешно" if fs.get('status') == 'ok' else "Ошибка"
+                    doc.add_paragraph(f"{fs.get('filename')} - {status_text}", style='List Bullet')
+            
+            if not final_report_markdown:
+                doc.add_paragraph("Отчет отсутствует.")
+            else:
+                add_markdown_to_docx(doc, final_report_markdown)
                 
             with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
                 doc.save(tmp.name)
@@ -725,7 +698,38 @@ async def api_export_risks_word(data: dict = Body(...)):
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
                 for tender in results:
                     tid = str(tender.get('id', 'N/A'))
-                    doc = build_tender_doc(tender)
+                    desc = tender.get('description', 'Нет описания')
+                    final_report_markdown = tender.get('final_report_markdown') or ""
+                    summary_notes = tender.get('summary_notes') or ""
+                    file_statuses = tender.get('file_statuses', [])
+                    
+                    doc = Document()
+                    style = doc.styles['Normal']
+                    font = style.font
+                    font.name = 'Arial'
+                    font.size = Pt(11)
+                    
+                    doc.add_heading('Юридическое заключение по тендеру', 0)
+                    doc.add_heading(f'Тендер: {tid}', level=1)
+                    
+                    p = doc.add_paragraph()
+                    p.add_run('Описание: ').bold = True
+                    p.add_run(desc)
+                    
+                    if summary_notes:
+                        doc.add_heading('Краткое резюме:', level=2)
+                        doc.add_paragraph(summary_notes)
+                    
+                    if file_statuses:
+                        doc.add_heading('Обработанные документы:', level=2)
+                        for fs in file_statuses:
+                            status_text = "Успешно" if fs.get('status') == 'ok' else "Ошибка"
+                            doc.add_paragraph(f"{fs.get('filename')} - {status_text}", style='List Bullet')
+                    
+                    if not final_report_markdown:
+                        doc.add_paragraph("Отчет отсутствует.")
+                    else:
+                        add_markdown_to_docx(doc, final_report_markdown)
                         
                     doc_buffer = io.BytesIO()
                     doc.save(doc_buffer)

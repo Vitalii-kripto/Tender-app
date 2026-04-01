@@ -1,16 +1,21 @@
-import json
 import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from backend.logger import logger, log_debug_event
 from .ai_service import AiService
-from .legal_prompts import PROMPT_CONTRACT_ANALYSIS, PROMPT_DOCS_ANALYSIS
+from .legal_prompts import PROMPT_UNIFIED_LEGAL_ANALYSIS, REQUIRED_REPORT_HEADERS
+
 
 class LegalAnalysisService:
+    """
+    Unified prompt mode with mandatory customer + goods blocks
+    and markdown table normalization before export.
+    """
+
     def __init__(self, ai_service: Optional[AiService] = None):
         self.ai_service = ai_service or AiService()
-        logger.info("LegalAnalysisService initialized (JSON output mode).")
+        logger.info("LegalAnalysisService initialized (unified prompt mode, customer+goods required).")
 
     def analyze_tender(
         self,
@@ -19,146 +24,108 @@ class LegalAnalysisService:
         job_id: str = "N/A",
         callback: Optional[Callable[[str, int, str], None]] = None,
     ) -> Dict[str, Any]:
-        logger.info(f"Starting legal analysis for tender {tender_id} (Job: {job_id})")
+        logger.info(f"Starting unified legal analysis for tender {tender_id} (Job: {job_id})")
 
         if callback:
-            callback("Классификация документов", 10, "running")
+            callback("Подготовка полного контекста документов", 20, "running")
 
-        contract_files, other_files = self._classify_documents(files_data)
-        has_contract = len(contract_files) > 0
+        try:
+            start_time = time.time()
 
-        all_rows = []
-        
-        if callback:
-            callback("Анализ договора", 30, "running")
-            
-        if contract_files:
-            contract_rows = self._run_analysis_prompt(contract_files, PROMPT_CONTRACT_ANALYSIS, "contract")
-            all_rows.extend(contract_rows)
-            
-        if callback:
-            callback("Анализ остальной документации", 60, "running")
-            
-        if other_files:
-            other_rows = self._run_analysis_prompt(other_files, PROMPT_DOCS_ANALYSIS, "other")
-            all_rows.extend(other_rows)
+            documents_block, context_meta = self._build_documents_block(files_data)
+            prompt = PROMPT_UNIFIED_LEGAL_ANALYSIS.replace("__DOCUMENTS__", documents_block)
 
-        if callback:
-            callback("Формирование отчета", 90, "running")
+            if callback:
+                callback("Единый юридический анализ ИИ", 55, "running")
 
-        # Deduplicate and sort
-        all_rows = self._deduplicate_and_sort(all_rows)
-        
-        # Calculate summary
-        high_risks = sum(1 for r in all_rows if r.get("risk_level") == "High")
-        medium_risks = sum(1 for r in all_rows if r.get("risk_level") == "Medium")
-        low_risks = sum(1 for r in all_rows if r.get("risk_level") == "Low")
-        
-        summary_notes = f"Риски: Высоких - {high_risks}, Средних - {medium_risks}, Низких - {low_risks}. "
-        summary_notes += "Проект договора найден." if has_contract else "Проект договора НЕ найден."
-        
-        # File statuses
-        file_statuses = []
-        unread_count = 0
-        for f in files_data:
-            status = f.get("status", "ok")
-            if status != "ok":
-                unread_count += 1
-            file_statuses.append({
-                "filename": f.get("filename", "Unknown"),
-                "status": status,
-                "message": f.get("error_message", "")
+            ai_start = time.time()
+            response = self.ai_service._call_ai_with_retry(
+                self.ai_service.client.models.generate_content,
+                contents=prompt,
+            )
+            ai_end = time.time()
+
+            raw_text = response.text if response else ""
+            final_report_markdown = self._normalize_report(raw_text)
+            validation = self._validate_report(final_report_markdown)
+
+            if callback:
+                callback("Финальная проверка отчета", 85, "running")
+
+            final_status = self._calculate_status(final_report_markdown, validation)
+            summary = self._extract_summary(final_report_markdown)
+            end_time = time.time()
+
+            log_debug_event({
+                "stage": "unified_prompt_analysis",
+                "job_id": job_id,
+                "tender_id": tender_id,
+                "model_name": "unified-legal-prompt-mode-v2",
+                "prompt_size": len(prompt),
+                "documents_count": context_meta["documents_count"],
+                "included_files": context_meta["included_files"],
+                "skipped_files": context_meta["skipped_files"],
+                "documents_block_size": len(documents_block),
+                "raw_model_response": raw_text,
+                "normalized_report_preview": final_report_markdown[:4000],
+                "final_status": final_status,
+                "validation": validation,
+                "duration": end_time - start_time,
+                "ai_duration": ai_end - ai_start,
             })
 
-        if unread_count > 0:
-            summary_notes += f" Проблемных файлов: {unread_count}."
+            logger.info(
+                f"Unified legal analysis finished for tender {tender_id} "
+                f"in {end_time - start_time:.2f}s, status={final_status}, report_len={len(final_report_markdown)}"
+            )
 
-        return {
-            "status": "success" if all_rows else "error",
-            "summary_notes": summary_notes,
-            "rows": all_rows,
-            "has_contract": has_contract,
-            "file_statuses": file_statuses,
-            "unread_files_count": unread_count
-        }
+            return {
+                "status": final_status,
+                "final_report_markdown": final_report_markdown,
+                "summary_notes": summary,
+                "cleaned_context_len": len(documents_block),
+                "final_report_len": len(final_report_markdown),
+                "structured_data": {},
+                "extracted_facts": [],
+                "merged_facts": {},
+            }
 
-    def _classify_documents(self, files_data: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        contract_files = []
-        other_files = []
-        
-        contract_keywords = ["проект контракта", "проект договора", "контракт", "договор", "приложение к договору", "спецификация", "график поставки", "условия поставки"]
-        
-        for f in files_data:
-            filename = (f.get("filename", "")).lower()
-            text = (f.get("text", "")).lower()[:1000] # Check first 1000 chars
-            
-            is_contract = False
-            for kw in contract_keywords:
-                if kw in filename or kw in text:
-                    is_contract = True
-                    break
-            
-            if is_contract:
-                contract_files.append(f)
-            else:
-                other_files.append(f)
-                
-        return contract_files, other_files
+        except Exception as e:
+            logger.error(f"Unified legal analysis error for tender {tender_id}: {e}", exc_info=True)
+            log_debug_event({
+                "stage": "unified_prompt_analysis_error",
+                "job_id": job_id,
+                "tender_id": tender_id,
+                "error": str(e),
+            })
+            return {
+                "status": "error",
+                "final_report_markdown": f"# Ошибка анализа\n\nПроизошла ошибка при обработке тендера: {str(e)}",
+                "summary_notes": "Ошибка анализа.",
+                "cleaned_context_len": 0,
+                "final_report_len": 0,
+                "structured_data": {},
+                "extracted_facts": [],
+                "merged_facts": {},
+                "error_message": str(e),
+            }
 
-    def _run_analysis_prompt(self, files_data: List[Dict[str, Any]], prompt_template: str, doc_group: str) -> List[Dict[str, Any]]:
-        documents_block, _ = self._build_documents_block(files_data)
-        prompt = prompt_template.replace("__DOCUMENTS__", documents_block)
-        
-        for attempt in range(3):
-            try:
-                response = self.ai_service._call_ai_with_retry(
-                    self.ai_service.client.models.generate_content,
-                    contents=prompt,
-                )
-                raw_text = response.text if response else ""
-                
-                # Extract JSON array
-                match = re.search(r'\[.*\]', raw_text, re.DOTALL)
-                if match:
-                    json_str = match.group(0)
-                    rows = json.loads(json_str)
-                    
-                    valid_rows = []
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            continue
-                        if not row.get("source_document") or not row.get("source_reference"):
-                            continue
-                        
-                        valid_row = {
-                            "block": str(row.get("block", "Общее")),
-                            "finding": str(row.get("finding", "")),
-                            "risk_level": str(row.get("risk_level", "Info")),
-                            "supplier_action": str(row.get("supplier_action", "")),
-                            "source_document": str(row.get("source_document", "")),
-                            "source_reference": str(row.get("source_reference", "")),
-                            "legal_basis": str(row.get("legal_basis", "")),
-                            "doc_group": doc_group
-                        }
-                        valid_rows.append(valid_row)
-                    return valid_rows
-            except Exception as e:
-                logger.warning(f"JSON parsing failed on attempt {attempt+1}: {e}")
-                
-        return []
+    def _document_priority(self, filename: str) -> Tuple[int, str]:
+        name = (filename or "").lower()
 
-    def _deduplicate_and_sort(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        seen = set()
-        unique_rows = []
-        for r in rows:
-            key = (r["block"], r["finding"], r["source_document"], r["source_reference"])
-            if key not in seen:
-                seen.add(key)
-                unique_rows.append(r)
-                
-        risk_order = {"High": 1, "Medium": 2, "Low": 3, "Info": 4}
-        unique_rows.sort(key=lambda x: (risk_order.get(x.get("risk_level"), 5), x.get("block", "")))
-        return unique_rows
+        if "заявк" in name or "инструкц" in name or "состав" in name:
+            return (1, name)
+        if "проект" in name or "контракт" in name or "договор" in name or "пгк" in name:
+            return (2, name)
+        if "извещ" in name:
+            return (3, name)
+        if "описан" in name or "объект" in name or "тех" in name or "тз" in name:
+            return (4, name)
+        if "нмцк" in name or "обоснован" in name or "смет" in name:
+            return (5, name)
+        if name.endswith(".xls") or name.endswith(".xlsx"):
+            return (6, name)
+        return (10, name)
 
     def _clean_text(self, text: str) -> str:
         if not text:
@@ -212,12 +179,14 @@ class LegalAnalysisService:
         return "\n\n".join(blocks).strip() + "\n"
 
     def _build_documents_block(self, files_data: List[Dict[str, Any]], max_total_chars: int = 180000) -> Tuple[str, Dict[str, Any]]:
+        sorted_files = sorted(files_data, key=lambda f: self._document_priority(f.get("filename", "")))
+
         included_files: List[str] = []
         skipped_files: List[Dict[str, Any]] = []
         rendered_parts: List[str] = []
         total_chars = 0
 
-        for file_data in files_data:
+        for file_data in sorted_files:
             filename = file_data.get("filename", "Unknown")
             rendered = self._render_pages(file_data)
             if not rendered.strip():
@@ -241,3 +210,149 @@ class LegalAnalysisService:
             "total_chars": total_chars,
         }
         return block, meta
+
+    def _insert_newlines_before_headings(self, text: str) -> str:
+        text = re.sub(r'(?<!\n)(##\s+\d)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(##\s+0\.)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(##\s+Краткое резюме)', r'\n\1', text)
+        text = re.sub(r'(?<!\n)(#\s+Юридическое заключение по тендеру)', r'\n\1', text)
+        return text
+
+    def _dedupe_main_heading(self, text: str) -> str:
+        heading = "# Юридическое заключение по тендеру"
+        occurrences = [m.start() for m in re.finditer(re.escape(heading), text)]
+        if len(occurrences) <= 1:
+            return text
+        first = occurrences[0]
+        tail = text[first:]
+        tail = re.sub(r'(?:\n|^)\# Юридическое заключение по тендеру(?:\n+)?', '\n', tail, count=0)
+        return heading + "\n\n" + tail.strip()
+
+    def _normalize_table_block(self, lines: List[str]) -> List[str]:
+        cleaned = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            if "|" not in line:
+                continue
+            # normalize double pipes and spacing
+            line = re.sub(r'\|\|+', '|', line)
+            if not line.startswith("|"):
+                line = "| " + line.lstrip("| ").rstrip() + " |"
+            if not line.endswith("|"):
+                line = line.rstrip(" |") + " |"
+            parts = [p.strip() for p in line.strip("|").split("|")]
+            line = "| " + " | ".join(parts) + " |"
+            cleaned.append(line)
+
+        if not cleaned:
+            return []
+
+        # Ensure second line is separator
+        if len(cleaned) == 1:
+            col_count = len([p for p in cleaned[0].strip("|").split("|")])
+            sep = "| " + " | ".join(["---"] * col_count) + " |"
+            cleaned.append(sep)
+        else:
+            second = cleaned[1]
+            if not re.match(r'^\|\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|$', second):
+                col_count = len([p for p in cleaned[0].strip("|").split("|")])
+                sep = "| " + " | ".join(["---"] * col_count) + " |"
+                cleaned.insert(1, sep)
+
+        return cleaned
+
+    def _normalize_markdown_tables(self, text: str) -> str:
+        raw_lines = text.split("\n")
+        out_lines: List[str] = []
+        table_buf: List[str] = []
+
+        def flush_table():
+            nonlocal table_buf, out_lines
+            if table_buf:
+                out_lines.extend(self._normalize_table_block(table_buf))
+                table_buf = []
+
+        for raw in raw_lines:
+            line = raw.rstrip()
+
+            if " | " in line or line.strip().startswith("|") or ("|" in line and line.count("|") >= 2):
+                # split heading glued to table header
+                if line.strip().startswith("## ") and "|" in line:
+                    heading_part, table_part = line.split("|", 1)
+                    flush_table()
+                    out_lines.append(heading_part.strip())
+                    table_buf.append("|" + table_part)
+                else:
+                    table_buf.append(line)
+                continue
+
+            flush_table()
+            out_lines.append(line)
+
+        flush_table()
+        return "\n".join(out_lines)
+
+    def _normalize_report(self, report_text: str) -> str:
+        text = (report_text or "").strip()
+        if not text:
+            return "# Юридическое заключение по тендеру\n\nОтчет не сформирован."
+
+        text = text.replace("\r\n", "\n")
+        text = self._insert_newlines_before_headings(text)
+        text = self._dedupe_main_heading(text)
+
+        if not text.lstrip().startswith("# Юридическое заключение по тендеру"):
+            text = "# Юридическое заключение по тендеру\n\n" + text.strip()
+
+        text = self._normalize_markdown_tables(text)
+        text = re.sub(r'\n{3,}', '\n\n', text).strip()
+        return text
+
+    def _extract_summary(self, markdown: str) -> str:
+        if not markdown:
+            return ""
+        match = re.search(r"##\s*Краткое резюме(.*?)(?=\n##\s*1\.|\Z)", markdown, re.DOTALL | re.IGNORECASE)
+        if not match:
+            return ""
+        content = match.group(1).strip()
+        content = re.sub(r"\|.*", "", content).strip()
+        return content[:1200]
+
+    def _validate_report(self, report: str) -> Dict[str, bool]:
+        """
+        Проверка наличия всех обязательных разделов и таблиц.
+        """
+        validation = {}
+        for header in REQUIRED_REPORT_HEADERS:
+            validation[header] = header in report
+
+        # Проверка наличия критических таблиц
+        validation["table_customer"] = "## 0. Карточка Заказчика" in report and "|" in report.split("## 0. Карточка Заказчика")[1].split("##")[0]
+        validation["table_goods"] = "## 0.1. Сводная таблица товаров" in report and "|" in report.split("## 0.1. Сводная таблица товаров")[1].split("##")[0]
+        validation["table_equivalents"] = "## 3.1. Возможность поставки эквивалентов" in report and "|" in report.split("## 3.1. Возможность поставки эквивалентов")[1].split("##")[0]
+
+        # Проверка на "Не найдено"
+        not_found_count = report.count("Не найдено в ТД")
+        validation["has_content"] = not_found_count < (len(REQUIRED_REPORT_HEADERS) * 0.8)
+
+        return validation
+
+    def _calculate_status(self, report: str, validation: Dict[str, bool]) -> str:
+        """
+        Определение статуса анализа.
+        """
+        if len(report) < 500:
+            return "error"
+
+        missing_headers = [h for h, found in validation.items() if h.startswith("##") and not found]
+        
+        # Если нет самых важных таблиц
+        if not validation.get("table_customer") or not validation.get("table_goods") or not validation.get("table_equivalents"):
+            return "partial"
+
+        if len(missing_headers) > 2 or not validation["has_content"]:
+            return "partial"
+
+        return "success"
