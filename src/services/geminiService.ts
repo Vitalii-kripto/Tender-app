@@ -6,9 +6,21 @@ import { Product, AnalysisResult, Tender, DashboardStats, ComplianceResult, Empl
 
 // Включаем принудительный демо-режим для деплоя без бэкенда.
 // Если false - пытается подключиться к API (localhost:8000).
-const IS_DEMO_MODE = false; 
+const IS_DEMO_MODE = import.meta.env.VITE_DEMO_MODE === 'true';
 
-export const API_BASE_URL = 'http://localhost:8000'; 
+export const API_BASE_URL = (
+  import.meta.env.VITE_API_URL || 'http://localhost:8000'
+).replace(/\/$/, '');
+
+const INTERNAL_API_KEY = import.meta.env.VITE_INTERNAL_API_KEY || '';
+
+const getHeaders = (extraHeaders: Record<string, string> = {}) => {
+    const headers: Record<string, string> = { ...extraHeaders };
+    if (INTERNAL_API_KEY) {
+        headers['X-API-Key'] = INTERNAL_API_KEY;
+    }
+    return headers;
+};
 
 const LOCAL_STORAGE_KEY_CRM = 'TENDER_SMART_CRM_DATA';
 const LOCAL_STORAGE_KEY_PRODUCTS = 'TENDER_SMART_PRODUCTS_DATA';
@@ -21,7 +33,9 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 export const checkBackendHealth = async (): Promise<boolean> => {
     if (IS_DEMO_MODE) return false;
     try {
-        const res = await fetch(`${API_BASE_URL}/`);
+        const res = await fetch(`${API_BASE_URL}/`, {
+            headers: getHeaders()
+        });
         return res.ok;
     } catch (e) {
         return false;
@@ -215,7 +229,9 @@ export const fetchDashboardStats = async (): Promise<DashboardStats> => {
     }
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/dashboard-stats`);
+        const response = await fetch(`${API_BASE_URL}/api/dashboard-stats`, {
+            headers: getHeaders()
+        });
         if (!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
@@ -230,7 +246,9 @@ export const getProductsFromBackend = async (): Promise<Product[]> => {
         return getLocalProducts();
     }
     try {
-        const res = await fetch(`${API_BASE_URL}/api/products`);
+        const res = await fetch(`${API_BASE_URL}/api/products`, {
+            headers: getHeaders()
+        });
         if (!res.ok) throw new Error("Backend error");
         const products = await res.json();
         if (products.length > 0) saveLocalProducts(products);
@@ -281,7 +299,9 @@ export const runBackendParser = async (): Promise<Product[]> => {
     }
 
     try {
-        const res = await fetch(`${API_BASE_URL}/api/parse-catalog`);
+        const res = await fetch(`${API_BASE_URL}/api/parse-catalog`, {
+            headers: getHeaders()
+        });
         if (!res.ok) throw new Error("Backend error");
         const products = await res.json();
         saveLocalProducts(products);
@@ -297,7 +317,10 @@ export const runBackendParser = async (): Promise<Product[]> => {
 export const cancelSearch = async (): Promise<void> => {
     if (IS_DEMO_MODE) return;
     try {
-        await fetch(`${API_BASE_URL}/api/search-tenders/cancel`, { method: 'POST' });
+        await fetch(`${API_BASE_URL}/api/search-tenders/cancel`, { 
+            method: 'POST',
+            headers: getHeaders()
+        });
     } catch (error) {
         console.error("Failed to cancel search", error);
     }
@@ -312,7 +335,7 @@ export const processSelectedTenders = async (tenders: Tender[]): Promise<void> =
     try {
         const response = await fetch(`${API_BASE_URL}/api/search-tenders/process`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(tenders)
         });
         if (!response.ok) {
@@ -377,7 +400,8 @@ export const searchTenders = async (
             publish_days_back: publishDaysBack.toString()
         });
         const response = await fetch(`${API_BASE_URL}/api/search-tenders?${params.toString()}`, {
-            signal
+            signal,
+            headers: getHeaders()
         });
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -399,7 +423,7 @@ export const skipTender = async (tender: Tender): Promise<void> => {
     try {
         await fetch(`${API_BASE_URL}/api/search-tenders/skip`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(tender)
         });
     } catch (error) {
@@ -428,7 +452,7 @@ export const startBatchAnalysisJob = async (tenderIds: string[], selectedFiles?:
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/analyze-tenders-batch`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ 
                 tender_ids: tenderIds,
                 selected_files: selectedFiles || {}
@@ -445,7 +469,9 @@ export const startBatchAnalysisJob = async (tenderIds: string[], selectedFiles?:
 
 export const getJobStatus = async (jobId: string): Promise<any> => {
     try {
-        const response = await fetch(`${API_BASE_URL}/api/ai/jobs/${jobId}`);
+        const response = await fetch(`${API_BASE_URL}/api/ai/jobs/${jobId}`, {
+            headers: getHeaders()
+        });
         if(!response.ok) throw new Error("Backend error");
         return await response.json();
     } catch (e) {
@@ -533,7 +559,7 @@ export const findProductEquivalent = async (tenderSpecs: string): Promise<any> =
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/match-product`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ specs: tenderSpecs, mode: 'database' })
         });
         if(!response.ok) throw new Error("Backend error");
@@ -570,7 +596,7 @@ export const searchProductsInternet = async (tenderSpecs: string): Promise<any> 
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/match-product`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ specs: tenderSpecs, mode: 'internet' })
         });
         if(!response.ok) throw new Error("Backend error");
@@ -588,7 +614,7 @@ export const validateProductCompliance = async (docText: string): Promise<any> =
      try {
         const response = await fetch(`${API_BASE_URL}/api/ai/validate-compliance`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ requirements: docText, proposal: "[]" })
         });
         if(!response.ok) throw new Error("Backend error");
@@ -614,7 +640,7 @@ export const extractProductsFromText = async (text: string): Promise<any[]> => {
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/extract-products`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ text })
         });
         if(!res.ok) throw new Error("Backend error");
@@ -632,7 +658,7 @@ export const enrichProductSpecs = async (productName: string): Promise<string> =
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/enrich-specs`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ product_name: productName })
         });
         if (!res.ok) throw new Error("Backend error");
@@ -680,7 +706,7 @@ export const validateComplexCompliance = async (requirements: string, proposalIt
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/validate-compliance`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ 
                 requirements: requirements,
                 proposal: JSON.stringify(proposalItems)
@@ -714,7 +740,7 @@ export const checkTenderCompliance = async (title: string, description: string, 
     try {
         const response = await fetch(`${API_BASE_URL}/api/ai/check-compliance`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ title, description, filenames: fileNames })
         });
         if(!response.ok) throw new Error("Backend error");
@@ -739,6 +765,7 @@ export const uploadTenderFile = async (file: File): Promise<{text: string, path:
         formData.append('file', file);
         const res = await fetch(`${API_BASE_URL}/api/tenders/upload`, {
             method: 'POST',
+            headers: getHeaders(),
             body: formData
         });
         if(!res.ok) throw new Error("Upload failed");
@@ -763,7 +790,7 @@ export const extractDetailsFromText = async (text: string): Promise<any> => {
     try {
         const res = await fetch(`${API_BASE_URL}/api/ai/extract-details`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ text })
         });
         if(!res.ok) throw new Error("AI Extraction failed");
@@ -782,7 +809,9 @@ export const getTendersFromBackend = async (): Promise<Tender[]> => {
         return getLocalTenders();
     }
     try {
-        const res = await fetch(`${API_BASE_URL}/api/crm/tenders`);
+        const res = await fetch(`${API_BASE_URL}/api/crm/tenders`, {
+            headers: getHeaders()
+        });
         if(!res.ok) throw new Error("Backend error");
         const data = await res.json();
         localStorage.setItem(LOCAL_STORAGE_KEY_CRM, JSON.stringify(data));

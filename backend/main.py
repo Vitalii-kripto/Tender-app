@@ -14,10 +14,15 @@ from typing import List, Dict, Any
 from docx import Document
 from docx.shared import Pt, RGBColor
 
-from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File, Body, BackgroundTasks, Request, status
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from dotenv import load_dotenv
+import os
+
+from backend.dependencies import verify_api_key
+from backend.rate_limiter import check_rate_limit
 
 if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
@@ -127,13 +132,26 @@ try:
 except Exception as e:
     logger.critical(f"Database initialization failed: {e}", exc_info=True)
 
+load_dotenv()
+
+def get_cors_origins() -> list[str]:
+    raw = os.getenv("BACKEND_CORS_ORIGINS", "").strip()
+    if raw:
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    return [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://tender-app-liard.vercel.app",
+    ]
+
 app = FastAPI(title="TenderSmart Gidroizol API", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешить все для локальной разработки
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
 
@@ -214,13 +232,13 @@ def read_root():
 
 # --- CRM ENDPOINTS (Database Sync) ---
 
-@app.get("/api/crm/tenders")
+@app.get("/api/crm/tenders", dependencies=[Depends(verify_api_key)])
 def get_crm_tenders(db: Session = Depends(get_db)):
     """Получить все тендеры из базы"""
     logger.info("Fetching all CRM tenders.")
     return db.query(TenderModel).all()
 
-@app.post("/api/crm/tenders")
+@app.post("/api/crm/tenders", dependencies=[Depends(verify_api_key)])
 def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...), db: Session = Depends(get_db)):
     """Добавить или обновить тендер в CRM"""
     logger.info(f"Add/Update tender request: {tender.get('id')}")
@@ -285,7 +303,7 @@ def add_update_tender(background_tasks: BackgroundTasks, tender: dict = Body(...
         logger.error(f"Error saving tender: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.delete("/api/crm/tenders/{tender_id}")
+@app.delete("/api/crm/tenders/{tender_id}", dependencies=[Depends(verify_api_key)])
 def delete_tender(tender_id: str, db: Session = Depends(get_db)):
     """Удалить тендер из базы"""
     logger.info(f"Deleting tender: {tender_id}")
@@ -297,14 +315,14 @@ def delete_tender(tender_id: str, db: Session = Depends(get_db)):
 
 # --- SEARCH & PARSING ---
 
-@app.post("/api/search-tenders/cancel")
+@app.post("/api/search-tenders/cancel", dependencies=[Depends(verify_api_key)])
 def cancel_search():
     """Отменить текущий поиск"""
     logger.info("Cancel search request received")
     eis_service.cancel_search()
     return {"status": "cancelled"}
 
-@app.get("/api/search-tenders")
+@app.get("/api/search-tenders", dependencies=[Depends(verify_api_key)])
 def search_tenders_endpoint(
     query: str, 
     fz44: bool = True, 
@@ -366,7 +384,7 @@ def search_tenders_endpoint(
         })
     return result
 
-@app.post("/api/search-tenders/process")
+@app.post("/api/search-tenders/process", dependencies=[Depends(verify_api_key)])
 def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...), db: Session = Depends(get_db)):
     """Обработать выбранные тендеры"""
     logger.info(f"Processing {len(tenders)} selected tenders")
@@ -432,7 +450,7 @@ def process_tenders(background_tasks: BackgroundTasks, tenders: list = Body(...)
         logger.error(f"Error processing tenders: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/search-tenders/skip")
+@app.post("/api/search-tenders/skip", dependencies=[Depends(verify_api_key)])
 def skip_tender(tender: dict = Body(...)):
     """Пропустить тендер (отметить как просмотренный)"""
     logger.info(f"Skipping tender: {tender.get('id')}")
@@ -443,7 +461,7 @@ def skip_tender(tender: dict = Body(...)):
         logger.error(f"Error skipping tender: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/products")
+@app.get("/api/products", dependencies=[Depends(verify_api_key)])
 def get_products_endpoint(db: Session = Depends(get_db)):
     """Получение сохраненных товаров из БД без запуска парсера"""
     logger.info("Fetching products from DB.")
@@ -462,7 +480,7 @@ def get_products_endpoint(db: Session = Depends(get_db)):
         })
     return result
 
-@app.get("/api/parse-catalog")
+@app.get("/api/parse-catalog", dependencies=[Depends(verify_api_key)])
 async def parse_catalog_endpoint(db: Session = Depends(get_db), _ = Depends(check_parser_service)):
     """Запуск парсера каталога Gidroizol.ru и обновление БД"""
     logger.info("Starting catalog parser manually.")
@@ -490,7 +508,7 @@ async def parse_catalog_endpoint(db: Session = Depends(get_db), _ = Depends(chec
 
 # --- AI & DOCS ENDPOINTS ---
 
-@app.get("/api/tenders/{tender_id}/files")
+@app.get("/api/tenders/{tender_id}/files", dependencies=[Depends(verify_api_key)])
 def get_tender_files(tender_id: str, _ = Depends(check_doc_service)):
     """Получить список скачанных файлов для тендера"""
     logger.info(f"Fetching files for tender {tender_id}")
@@ -509,8 +527,9 @@ def get_tender_files(tender_id: str, _ = Depends(check_doc_service)):
             })
     return files
 
-@app.post("/api/ai/analyze-tenders-batch")
-async def api_analyze_tenders_batch(background_tasks: BackgroundTasks, data: dict = Body(...), _ = Depends(check_legal_service)):
+@app.post("/api/ai/analyze-tenders-batch", dependencies=[Depends(verify_api_key)])
+async def api_analyze_tenders_batch(request: Request, background_tasks: BackgroundTasks, data: dict = Body(...), _ = Depends(check_legal_service)):
+    check_rate_limit(request)
     logger.info("Batch AI Analysis request received.")
     
     tender_ids = data.get('tender_ids', [])
@@ -531,30 +550,34 @@ async def get_job_status(job_id: str):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
-@app.post("/api/ai/extract-details")
-async def api_extract_details(data: dict = Body(...), _ = Depends(check_ai_service)):
+@app.post("/api/ai/extract-details", dependencies=[Depends(verify_api_key)])
+async def api_extract_details(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение данных о тендере из текста"""
+    check_rate_limit(request)
     logger.info("AI Extract Details request.")
     text = data.get('text', '')
     return ai_service.extract_tender_details(text)
 
-@app.post("/api/ai/extract-products")
-async def api_extract_products(data: dict = Body(...), _ = Depends(check_ai_service)):
+@app.post("/api/ai/extract-products", dependencies=[Depends(verify_api_key)])
+async def api_extract_products(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Извлечение списка товаров из сметы/КП"""
+    check_rate_limit(request)
     logger.info("AI Extract Products request.")
     text = data.get('text', '')
     return ai_service.extract_products_from_text(text)
 
-@app.post("/api/ai/enrich-specs")
-async def api_enrich_specs(data: dict = Body(...), _ = Depends(check_ai_service)):
+@app.post("/api/ai/enrich-specs", dependencies=[Depends(verify_api_key)])
+async def api_enrich_specs(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Поиск характеристик товара в интернете"""
+    check_rate_limit(request)
     logger.info("AI Enrich Specs request.")
     product_name = data.get('product_name', '')
     result = ai_service.enrich_product_specs(product_name)
     return {"specs": result}
 
-@app.post("/api/ai/match-product")
-async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db), _ = Depends(check_ai_service)):
+@app.post("/api/ai/match-product", dependencies=[Depends(verify_api_key)])
+async def api_match_product(request: Request, data: dict = Body(...), db: Session = Depends(get_db), _ = Depends(check_ai_service)):
+    check_rate_limit(request)
     specs = data.get('specs', '')
     mode = data.get('mode', 'database') # 'database' or 'internet'
     logger.info(f"AI Match Product request. Mode: {mode}, Query len: {len(specs)}")
@@ -570,21 +593,23 @@ async def api_match_product(data: dict = Body(...), db: Session = Depends(get_db
         matches = ai_service.find_product_equivalent(specs, catalog)
         return {"mode": "database", "matches": matches}
 
-@app.post("/api/ai/validate-compliance")
-async def api_validate_compliance(data: dict = Body(...), _ = Depends(check_ai_service)):
+@app.post("/api/ai/validate-compliance", dependencies=[Depends(verify_api_key)])
+async def api_validate_compliance(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Валидация ТЗ vs Материал (Complex)"""
+    check_rate_limit(request)
     logger.info("AI Compliance Validation request.")
     requirements = data.get('requirements', '')
     proposal = data.get('proposal', '[]')
     return ai_service.compare_requirements_vs_proposal(requirements, proposal)
 
-@app.post("/api/ai/check-compliance")
-async def api_check_compliance(data: dict = Body(...), _ = Depends(check_ai_service)):
+@app.post("/api/ai/check-compliance", dependencies=[Depends(verify_api_key)])
+async def api_check_compliance(request: Request, data: dict = Body(...), _ = Depends(check_ai_service)):
     """Проверка пакета документов"""
+    check_rate_limit(request)
     logger.info("AI Document Package Check request.")
     return ai_service.check_compliance(data['title'], data['description'], data['filenames'])
 
-@app.post("/api/tenders/upload")
+@app.post("/api/tenders/upload", dependencies=[Depends(verify_api_key)])
 async def upload_file(file: UploadFile = File(...), _ = Depends(check_doc_service)):
     logger.info(f"File upload request: {file.filename}")
     
@@ -616,7 +641,7 @@ from backend.markdown_parser import add_markdown_to_docx
 import zipfile
 import io
 
-@app.post("/api/ai/export-risks-word")
+@app.post("/api/ai/export-risks-word", dependencies=[Depends(verify_api_key)])
 async def api_export_risks_word(data: dict = Body(...)):
     """Экспорт результатов анализа рисков в Word .docx (или ZIP для нескольких)"""
     logger.info("Word export started")

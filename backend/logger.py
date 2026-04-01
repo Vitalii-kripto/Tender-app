@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 # Путь к общему лог-файлу
-LOG_DIR = os.path.join(os.getcwd(), 'backend', 'logs')
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'logs')
 os.makedirs(LOG_DIR, exist_ok=True)
 LOG_FILE = os.path.join(LOG_DIR, 'legal_ai.log')
 DEBUG_LOG_FILE = os.path.join(LOG_DIR, 'legal_ai_debug.jsonl')
@@ -30,6 +30,15 @@ def setup_unified_logger():
     file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8', mode='a')
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+    
+    # Хендлер для фронтенд-логов
+    frontend_log_file = os.path.join(LOG_DIR, 'frontend.log')
+    frontend_handler = logging.FileHandler(frontend_log_file, encoding='utf-8', mode='a')
+    frontend_handler.setFormatter(formatter)
+    frontend_logger = logging.getLogger("Frontend")
+    frontend_logger.setLevel(logging.INFO)
+    frontend_logger.addHandler(frontend_handler)
+    frontend_logger.propagate = False
     
     # Хендлер для консоли
     stream_handler = logging.StreamHandler(sys.stdout)
