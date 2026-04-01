@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { MOCK_CATALOG } from './ProductCatalog';
-import { findProductEquivalent, startBatchAnalysisJob, getJobStatus, getTendersFromBackend, deleteTenderFromBackend } from '../services/geminiService';
+import { findProductEquivalent, startBatchAnalysisJob, getJobStatus, getTendersFromBackend, deleteTenderFromBackend, getTenderFiles, exportRisksWord } from '../services/geminiService';
 import { AnalysisResult, Tender, LegalAnalysisResult } from '../types';
 import { FileText, Shield, ArrowRight, CheckCircle, AlertTriangle, Cpu, Trash2, FileDown, ScanEye, Loader2, Square, CheckSquare, ShieldAlert, Layout, ChevronDown, Table } from 'lucide-react';
 
@@ -51,8 +51,7 @@ const Analysis = () => {
             // Fetch files for all tenders
             tenders.forEach(async (t) => {
                 try {
-                    const response = await fetch(`/api/tenders/${t.id}/files`);
-                    const files = await response.json();
+                    const files = await getTenderFiles(t.id);
                     setTenderFiles(prev => ({ ...prev, [t.id]: files }));
                     // Manual selection: don't select all by default
                     setSelectedFiles(prev => ({ ...prev, [t.id]: new Set() }));
@@ -247,19 +246,13 @@ const Analysis = () => {
             };
         });
 
-        const response = await fetch('/api/ai/export-risks-word', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ results: resultsWithMeta })
-        });
-        if (!response.ok) throw new Error('Export failed');
-        
-        const blob = await response.blob();
+        const blob = await exportRisksWord(resultsWithMeta);
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
         
-        const isZip = response.headers.get('Content-Type') === 'application/zip';
+        // Assume docx for now, or we can check blob type
+        const isZip = blob.type === 'application/zip';
         const extension = isZip ? 'zip' : 'docx';
         
         a.download = `tender_risks_report_${new Date().toISOString().split('T')[0]}.${extension}`;
@@ -563,68 +556,10 @@ const Analysis = () => {
                                 </div>
 
                                  {/* 1.5 Structured Data */}
-                                 {result.status === 'success' && result.structured_data && Object.keys(result.structured_data).length > 0 && (
-                                     <div className="px-6 py-6 bg-slate-50 border-b border-slate-100">
-                                         <h4 className="text-sm font-bold text-slate-800 uppercase tracking-wider mb-4 flex items-center gap-2">
-                                             <Table size={16} className="text-blue-600" />
-                                             Извлеченные данные (ИИ)
-                                         </h4>
-                                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                                             {result.structured_data.customer && (
-                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
-                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Заказчик</div>
-                                                     <div className="text-slate-600"><span className="text-slate-400">Название:</span> {result.structured_data.customer.name || '—'}</div>
-                                                     <div className="text-slate-600"><span className="text-slate-400">ИНН:</span> {result.structured_data.customer.inn || '—'}</div>
-                                                     <div className="text-slate-600"><span className="text-slate-400">Контакты:</span> {result.structured_data.customer.contact_person || '—'} {result.structured_data.customer.phone || ''}</div>
-                                                 </div>
-                                             )}
-                                             {result.structured_data.nmcc && (
-                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm">
-                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">НМЦК</div>
-                                                     <div className="text-slate-900 font-mono text-lg">{formatCurrency(result.structured_data.nmcc.total)}</div>
-                                                 </div>
-                                             )}
-                                             {result.structured_data.delivery_terms && (
-                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm md:col-span-2">
-                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Сроки и условия поставки</div>
-                                                     <div className="text-slate-600 mb-1"><span className="text-slate-400">Сроки:</span> {result.structured_data.delivery_terms}</div>
-                                                     {result.structured_data.logistics && <div className="text-slate-600 mb-1"><span className="text-slate-400">Логистика:</span> {result.structured_data.logistics}</div>}
-                                                     {result.structured_data.restrictions && <div className="text-slate-600"><span className="text-slate-400">Ограничения:</span> {result.structured_data.restrictions}</div>}
-                                                 </div>
-                                             )}
-                                             {result.structured_data.items && result.structured_data.items.length > 0 && (
-                                                 <div className="bg-white p-4 rounded border border-slate-200 shadow-sm md:col-span-2">
-                                                     <div className="font-bold text-slate-700 mb-2 border-b pb-1">Позиции ({result.structured_data.items.length})</div>
-                                                     <div className="overflow-x-auto">
-                                                         <table className="w-full text-left text-xs">
-                                                             <thead>
-                                                                 <tr className="text-slate-400 border-b">
-                                                                     <th className="pb-2 font-medium">Наименование</th>
-                                                                     <th className="pb-2 font-medium">Кол-во</th>
-                                                                     <th className="pb-2 font-medium">Цена за ед.</th>
-                                                                     <th className="pb-2 font-medium">Характеристики</th>
-                                                                 </tr>
-                                                             </thead>
-                                                             <tbody className="divide-y divide-slate-100">
-                                                                 {result.structured_data.items.map((item: any, idx: number) => (
-                                                                     <tr key={idx} className="text-slate-600">
-                                                                         <td className="py-2 pr-2 font-medium text-slate-800">{item.name}</td>
-                                                                         <td className="py-2 pr-2 whitespace-nowrap">{item.quantity} {item.unit}</td>
-                                                                         <td className="py-2 pr-2 whitespace-nowrap">{item.price_per_unit ? formatCurrency(item.price_per_unit) : '—'}</td>
-                                                                         <td className="py-2 text-[10px] text-slate-500">{item.characteristics}</td>
-                                                                     </tr>
-                                                                 ))}
-                                                             </tbody>
-                                                         </table>
-                                                     </div>
-                                                 </div>
-                                             )}
-                                         </div>
-                                     </div>
-                                 )}
+                                 {/* Removed structured_data block */}
 
-                                 {/* 1. Main Legal Report (Markdown) - PRIMARY OUTPUT */}
-                                 {result.status === 'success' && result.final_report_markdown && (
+                                 {/* 1. Main Legal Report (Rows) - PRIMARY OUTPUT */}
+                                 {result.status === 'success' && result.rows && result.rows.length > 0 && (
                                      <div className="px-6 py-10 bg-white border-b border-slate-100">
                                          <div className="flex items-center justify-between mb-8">
                                              <div className="flex items-center gap-3">
@@ -634,16 +569,45 @@ const Analysis = () => {
                                                  <h4 className="text-2xl font-black text-slate-900 tracking-tight">Юридический отчет по тендеру</h4>
                                              </div>
                                          </div>
-                                         <div className="markdown-body prose prose-slate max-w-none prose-headings:text-slate-900 prose-strong:text-slate-900 prose-table:border prose-table:border-slate-200 prose-th:bg-slate-50 prose-th:px-4 prose-th:py-2 prose-td:px-4 prose-td:py-2">
-                                             <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                                 {result.final_report_markdown}
-                                             </ReactMarkdown>
+                                         
+                                         {result.summary_notes && (
+                                             <div className="mb-6 p-4 bg-slate-50 rounded-lg border border-slate-200">
+                                                 <h5 className="font-bold text-slate-800 mb-2">Краткое резюме</h5>
+                                                 <p className="text-sm text-slate-600 whitespace-pre-wrap">{result.summary_notes}</p>
+                                             </div>
+                                         )}
+
+                                         <div className="overflow-x-auto">
+                                             <table className="w-full text-left text-sm border-collapse">
+                                                 <thead>
+                                                     <tr className="bg-slate-50 border-b border-slate-200 text-slate-700">
+                                                         <th className="p-3 font-bold">Категория</th>
+                                                         <th className="p-3 font-bold">Уровень риска</th>
+                                                         <th className="p-3 font-bold">Описание (Факт)</th>
+                                                         <th className="p-3 font-bold">Рекомендация</th>
+                                                     </tr>
+                                                 </thead>
+                                                 <tbody className="divide-y divide-slate-100">
+                                                     {result.rows.map((row, idx) => (
+                                                         <tr key={idx} className="hover:bg-slate-50/50 transition-colors">
+                                                             <td className="p-3 font-medium text-slate-800 align-top">{row.category}</td>
+                                                             <td className="p-3 align-top">
+                                                                 <span className={`px-2 py-1 rounded text-xs font-bold ${row.risk_level.toLowerCase() === 'высокий' ? 'bg-red-100 text-red-700' : row.risk_level.toLowerCase() === 'средний' ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                                                     {row.risk_level}
+                                                                 </span>
+                                                             </td>
+                                                             <td className="p-3 text-slate-600 align-top">{row.finding}</td>
+                                                             <td className="p-3 text-slate-600 align-top">{row.recommendation}</td>
+                                                         </tr>
+                                                     ))}
+                                                 </tbody>
+                                             </table>
                                          </div>
                                      </div>
                                  )}
 
                                  {/* Fallback for empty results */}
-                                 {result.status === 'success' && !result.final_report_markdown && (
+                                 {result.status === 'success' && (!result.rows || result.rows.length === 0) && (
                                     <div className="p-10 text-center text-slate-400 bg-white">
                                         <Shield size={48} className="mx-auto mb-4 opacity-20" />
                                         <p className="text-sm font-medium">Документация выглядит стандартной. Критических условий не найдено.</p>
@@ -658,7 +622,7 @@ const Analysis = () => {
                                              <h4 className="text-lg font-bold text-red-900">Ошибка анализа</h4>
                                          </div>
                                          <div className="text-red-700 text-sm whitespace-pre-wrap">
-                                             {result.error_message || result.final_report_markdown || "Произошла неизвестная ошибка при анализе."}
+                                             {result.error_message || result.summary_notes || "Произошла неизвестная ошибка при анализе."}
                                          </div>
                                      </div>
                                  )}

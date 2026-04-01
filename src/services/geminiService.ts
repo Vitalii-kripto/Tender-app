@@ -12,13 +12,8 @@ export const API_BASE_URL = (
   import.meta.env.VITE_API_URL || 'http://localhost:8000'
 ).replace(/\/$/, '');
 
-const INTERNAL_API_KEY = import.meta.env.VITE_INTERNAL_API_KEY || '';
-
 const getHeaders = (extraHeaders: Record<string, string> = {}) => {
     const headers: Record<string, string> = { ...extraHeaders };
-    if (INTERNAL_API_KEY) {
-        headers['X-API-Key'] = INTERNAL_API_KEY;
-    }
     return headers;
 };
 
@@ -847,4 +842,28 @@ export const deleteTenderFromBackend = async (id: string) => {
             console.warn("Backend sync failed");
         }
     }
+};
+
+export const getTenderFiles = async (tenderId: string): Promise<any[]> => {
+    if (IS_DEMO_MODE) {
+        return [];
+    }
+    const res = await fetch(`${API_BASE_URL}/api/tenders/${tenderId}/files`, {
+        headers: getHeaders()
+    });
+    if (!res.ok) throw new Error("Failed to fetch files");
+    return res.json();
+};
+
+export const exportRisksWord = async (resultsWithMeta: any[]): Promise<Blob> => {
+    if (IS_DEMO_MODE) {
+        throw new Error("Export is not available in demo mode");
+    }
+    const res = await fetch(`${API_BASE_URL}/api/ai/export-risks-word`, {
+        method: 'POST',
+        headers: getHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ results: resultsWithMeta })
+    });
+    if (!res.ok) throw new Error("Export failed");
+    return res.blob();
 };

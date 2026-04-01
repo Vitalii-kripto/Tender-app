@@ -56,7 +56,15 @@ export type FileTechnicalStatus = 'file_not_read' | 'ocr_required' | 'unsupporte
 export interface LegalAnalysisResult {
   id: string;
   status: 'success' | 'error' | 'partial';
-  final_report_markdown?: string;
+  summary_notes?: string;
+  rows?: {
+    category: string;
+    risk_level: string;
+    finding: string;
+    recommendation: string;
+  }[];
+  has_contract?: boolean;
+  unread_files_count?: number;
   error_message?: string;
   file_statuses: { filename: string, status: FileTechnicalStatus, message: string }[];
   docText?: string;
@@ -64,7 +72,6 @@ export interface LegalAnalysisResult {
   stage?: string;
   progress?: number;
   selected_files_count?: number;
-  structured_data?: any;
 }
 
 export type AnalysisStage = 'Подготовка документов' | 'Извлечение текста' | 'Классификация' | 'Анализ договора' | 'Анализ остальной документации' | 'Формирование отчета' | 'Готово' | 'Ошибка';
